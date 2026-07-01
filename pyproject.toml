@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mikro-clear"
+version = "0.1.0"
+description = "Local cleanup workspace for the Mikrocata TZSP0 service"
+requires-python = ">=3.11"
+dependencies = [
+    "librouteros==4.0.1",
+    "pyinotify==0.9.6",
+    "requests==2.34.2",
+    "ujson==5.12.1",
+    "maxminddb==3.1.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
