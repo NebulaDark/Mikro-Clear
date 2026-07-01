@@ -1,6 +1,7 @@
 import unittest
 
 from mikrocata.alert_logic import (
+    deduplicate_alerts_by_target,
     legacy_decide_alert_target,
     legacy_deduplicate_by_src_ip,
     target_aware_deduplicate,
@@ -31,7 +32,7 @@ class AlertTargetDecisionTests(unittest.TestCase):
         self.assertEqual(decision.peer_ip, "192.168.10.15")
         self.assertEqual(decision.wanted_port, 443)
 
-    def test_whitelisted_source_to_external_dest_blocks_dest_current_behavior(self):
+    def test_whitelisted_source_to_external_dest_blocks_dest_and_uses_dest_port(self):
         decision = legacy_decide_alert_target(
             event("192.168.10.15", "9.9.9.9", src_port=53123, dest_port=443),
             WHITELIST,
@@ -40,16 +41,6 @@ class AlertTargetDecisionTests(unittest.TestCase):
         self.assertIsNotNone(decision)
         self.assertEqual(decision.wanted_ip, "9.9.9.9")
         self.assertEqual(decision.peer_ip, "192.168.10.15")
-        self.assertEqual(decision.wanted_port, 53123)
-
-    @unittest.expectedFailure
-    def test_whitelisted_source_to_external_dest_should_use_dest_port(self):
-        decision = legacy_decide_alert_target(
-            event("192.168.10.15", "9.9.9.9", src_port=53123, dest_port=443),
-            WHITELIST,
-        )
-
-        self.assertIsNotNone(decision)
         self.assertEqual(decision.wanted_port, 443)
 
     def test_whitelisted_source_to_whitelisted_dest_is_skipped(self):
@@ -83,6 +74,16 @@ class DeduplicationTests(unittest.TestCase):
 
         self.assertEqual(len(deduped), 2)
         self.assertEqual([item["dest_ip"] for item in deduped], ["9.9.9.9", "8.8.8.8"])
+
+    def test_deduplicate_alerts_by_target_is_the_canonical_dedup(self):
+        events = [
+            event("192.168.10.15", "9.9.9.9"),
+            event("192.168.10.15", "8.8.8.8"),
+        ]
+
+        deduped = deduplicate_alerts_by_target(events, WHITELIST)
+
+        self.assertEqual(len(deduped), 2)
 
 
 if __name__ == "__main__":

@@ -931,9 +931,12 @@ def add_to_tik(alerts: Optional[List[Dict[str, Any]]]) -> None:
 
     unique: Dict[str, Dict[str, Any]] = {}
     for event in valid_events:
-        unique[str(event["src_ip"])] = event
+        src = str(event["src_ip"])
+        dst = str(event["dest_ip"])
+        target_ip = dst if is_ip_in_whitelist(src, WHITELIST_IPS) else src
+        unique[target_ip] = event
 
-    debug_log(f"Processing {len(unique)} unique source IPs from {len(valid_events)} valid alerts")
+    debug_log(f"Processing {len(unique)} unique target IPs from {len(valid_events)} valid alerts")
 
     def process_batch() -> None:
         address_list, address_list_v6, _resources = client.paths()
@@ -1001,7 +1004,7 @@ def process_single_alert(event: Dict[str, Any], address_list: Any, address_list_
             debug_log(f"Skipping SID={sid}: src and dst are whitelisted")
             return
         wanted_ip = dst
-        wanted_port = event.get("src_port")
+        wanted_port = event.get("dest_port")
         peer_ip = src
     else:
         wanted_ip = src

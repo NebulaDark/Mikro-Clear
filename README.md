@@ -25,11 +25,9 @@ python -m unittest discover -s tests
 python -m py_compile src/mikrocata/legacy.py src/mikrocata/alert_logic.py
 ```
 
-## Current Known Logic Risks
+## Local Logic Fixes
 
 - When source IP is whitelisted and the destination is selected as the block
-  target, the legacy script uses `src_port`; the target-facing port is usually
-  `dest_port`.
-- Legacy deduplication is keyed by `src_ip` before the real block target is
-  calculated, so multiple alerts from one whitelisted source to different
-  destination targets can collapse into one event.
+  target, local logic now uses `dest_port`.
+- Alert deduplication is now keyed by the calculated block target, not only by
+  `src_ip`, so one whitelisted source can report multiple destination targets.

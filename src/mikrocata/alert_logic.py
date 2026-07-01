@@ -73,7 +73,7 @@ def legacy_decide_alert_target(
             return None
         return AlertDecision(
             wanted_ip=dst,
-            wanted_port=event.get("src_port"),
+            wanted_port=event.get("dest_port"),
             peer_ip=src,
             is_ipv6=is_v6,
         )
@@ -110,3 +110,12 @@ def target_aware_deduplicate(
             continue
         unique[decision.wanted_ip] = event
     return list(unique.values())
+
+
+def deduplicate_alerts_by_target(
+    events: Iterable[Mapping[str, Any]],
+    whitelist: Iterable[str],
+    *,
+    enable_ipv6: bool = False,
+) -> list[Mapping[str, Any]]:
+    return target_aware_deduplicate(events, whitelist, enable_ipv6=enable_ipv6)
