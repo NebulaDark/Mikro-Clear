@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+import difflib
 import os
+from pathlib import Path
 import shlex
 import subprocess
+from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("mikroclear-selks")
@@ -12,11 +15,16 @@ SSH_COMMAND = shlex.split(
         "ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new",
     )
 )
+REPO_ROOT = Path(__file__).resolve().parents[2]
+LOCAL_SCRIPT = REPO_ROOT / "src" / "mikrocata" / "legacy.py"
+REMOTE_SCRIPT = "/usr/local/bin/mikrocataTZSP0.py"
+CANDIDATE_SCRIPT = "/tmp/mikrocataTZSP0.py.codex-candidate"
 
 
-def run_ssh(command: str, timeout: int = 30) -> str:
+def run_ssh(command: str, timeout: int = 30, stdin: str | None = None) -> str:
     result = subprocess.run(
         [*SSH_COMMAND, SELKS_HOST, command],
+        input=stdin,
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -59,7 +67,7 @@ def tail_mikrocata_logs(lines: int = 100) -> str:
 def check_mikrocata_syntax() -> str:
     return run_ssh(
         "/opt/mikrocata-venv/bin/python -c "
-        "\"path='/usr/local/bin/mikrocataTZSP0.py'; "
+        f"\"path='{REMOTE_SCRIPT}'; "
         "compile(open(path, encoding='utf-8').read(), path, 'exec'); "
         "print('OK')\"",
         30,
@@ -79,9 +87,55 @@ def read_mikrocata_env() -> str:
 def tail_suricata_eve(lines: int = 20) -> str:
     lines = max(5, min(int(lines), 100))
     return run_ssh(
-        f"sudo tail -n {lines} "
+        f"sudo -n tail -n {lines} "
         "/opt/SELKS/docker/containers-data/suricata/logs/eve.json",
         30,
+    )
+
+
+@mcp.tool()
+def compare_production_script() -> dict[str, Any]:
+    local_text = LOCAL_SCRIPT.read_text(encoding="utf-8")
+    remote_text = run_ssh(f"cat {REMOTE_SCRIPT}", 30)
+    diff = "\n".join(
+        difflib.unified_diff(
+            remote_text.splitlines(),
+            local_text.splitlines(),
+            fromfile=REMOTE_SCRIPT,
+            tofile=str(LOCAL_SCRIPT),
+            lineterm="",
+        )
+    )
+    return {"matches": local_text.strip() == remote_text.strip(), "diff": diff}
+
+
+@mcp.tool()
+def upload_candidate_script() -> str:
+    local_text = LOCAL_SCRIPT.read_text(encoding="utf-8")
+    return run_ssh(
+        f"cat > {CANDIDATE_SCRIPT} && "
+        f"/opt/mikrocata-venv/bin/python -c \"path='{CANDIDATE_SCRIPT}'; "
+        "compile(open(path, encoding='utf-8').read(), path, 'exec'); print('OK')\" && "
+        f"stat -c '%U:%G %a %s %y %n' {CANDIDATE_SCRIPT}",
+        30,
+        stdin=local_text,
+    )
+
+
+@mcp.tool()
+def deploy_candidate_script(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to deploy candidate without confirm=True."
+    return run_ssh(
+        f"backup={REMOTE_SCRIPT}.bak-$(date +%Y%m%d-%H%M%S) && "
+        f"sudo -n cp {REMOTE_SCRIPT} \"$backup\" && "
+        f"sudo -n install -o root -g root -m 755 {CANDIDATE_SCRIPT} {REMOTE_SCRIPT} && "
+        "/opt/mikrocata-venv/bin/python -c "
+        f"\"path='{REMOTE_SCRIPT}'; compile(open(path, encoding='utf-8').read(), path, 'exec'); print('OK')\" && "
+        "sudo -n systemctl restart mikrocataTZSP0.service && "
+        "systemctl status mikrocataTZSP0.service --no-pager --lines=20 && "
+        "printf '\\nBACKUP=%s\\n' \"$backup\"",
+        60,
     )
 
 

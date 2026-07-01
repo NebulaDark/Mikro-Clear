@@ -57,3 +57,47 @@ class McpServerSshTests(TestCase):
 
         self.assertIn("compile(open(", run_ssh.call_args.args[0])
         self.assertNotIn("py_compile", run_ssh.call_args.args[0])
+
+    def test_compare_production_reports_match(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = server.LOCAL_SCRIPT.read_text(encoding="utf-8")
+            result = server.compare_production_script()
+
+        self.assertEqual(result["matches"], True)
+        self.assertEqual(result["diff"], "")
+        self.assertEqual(run_ssh.call_args.args[0], f"cat {server.REMOTE_SCRIPT}")
+
+    def test_upload_candidate_streams_local_script_to_tmp(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "OK"
+            result = server.upload_candidate_script()
+
+        self.assertEqual(result, "OK")
+        self.assertIn("cat > /tmp/mikrocataTZSP0.py.codex-candidate", run_ssh.call_args.args[0])
+        self.assertEqual(run_ssh.call_args.kwargs["stdin"], server.LOCAL_SCRIPT.read_text(encoding="utf-8"))
+
+    def test_deploy_candidate_requires_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.deploy_candidate_script()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_deploy_candidate_backs_up_installs_and_verifies(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "deployed"
+            output = server.deploy_candidate_script(confirm=True)
+
+        self.assertEqual(output, "deployed")
+        command = run_ssh.call_args.args[0]
+        self.assertIn("sudo -n cp /usr/local/bin/mikrocataTZSP0.py", command)
+        self.assertIn("sudo -n install -o root -g root -m 755", command)
+        self.assertIn("compile(open(", command)
