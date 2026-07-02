@@ -54,7 +54,7 @@
 - Consumes: deployed `mikroclear.service`.
 - Produces: confidence that the rebrand did not break runtime behavior.
 
-- [ ] Check service state on SELKS.
+- [x] Check service state on SELKS.
 
 Run:
 
@@ -69,7 +69,7 @@ active
 enabled
 ```
 
-- [ ] Check old service remains stopped.
+- [x] Check old service remains stopped.
 
 Run:
 
@@ -84,7 +84,7 @@ inactive
 disabled
 ```
 
-- [ ] Scan logs for fresh errors.
+- [x] Scan logs for fresh errors.
 
 Run:
 
@@ -94,7 +94,16 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo -n 
 
 Expected: no output.
 
-- [ ] Commit any documentation updates discovered during verification.
+- [x] Commit any documentation updates discovered during verification.
+
+Verified on 2026-07-02:
+
+```text
+mikroclear.service: active/enabled
+mikrocataTZSP0.service: inactive/disabled
+journal: no fresh error/traceback/nameerror/failed lines in last 500 entries
+telegram unblock observed: 147.45.112.175 from Suricata - SID:2023753
+```
 
 ---
 
@@ -394,4 +403,3 @@ git --git-dir=.git-local --work-tree=. commit -m "Add Mikro-Clear runbook"
 - [ ] Check `systemctl status mikroclear.service --no-pager --lines=25`.
 - [ ] Check journal for `error|traceback|nameerror|failed`.
 - [ ] Commit after verification.
-
