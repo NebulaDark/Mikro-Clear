@@ -42,6 +42,43 @@ sudo visudo -cf /etc/sudoers.d/mikrocata-mcp-selks
 sudo -l -U mcp-selks
 ```
 
+## MCP Deploy Workflow
+
+Registered MCP server:
+
+```text
+mikroclear-selks
+```
+
+Read-only tools:
+
+```text
+status_mikrocata
+tail_mikrocata_logs
+check_mikrocata_syntax
+compare_production_script
+verify_systemd_unit
+```
+
+Deploy flow for the production script:
+
+```text
+compare_production_script -> upload_candidate_script -> deploy_candidate_script(confirm=True)
+```
+
+Deploy flow for the systemd unit:
+
+```text
+upload_unit_candidate -> deploy_unit_candidate(confirm=True)
+```
+
+Standalone service operations:
+
+```text
+daemon_reload(confirm=True)
+restart_mikrocata(confirm=True)
+```
+
 ## Local Logic Fixes
 
 - When source IP is whitelisted and the destination is selected as the block

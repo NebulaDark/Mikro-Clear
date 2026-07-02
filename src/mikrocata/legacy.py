@@ -41,6 +41,52 @@ from librouteros import connect
 from librouteros.query import Key
 
 try:
+    from mikrocata.events import (
+        should_process_event as decide_should_process_event,
+        validate_event as validate_suricata_event,
+    )
+except Exception:  # pragma: no cover - production single-file fallback
+    class _EventFilterDecision:
+        def __init__(self, should_process: bool, message: str = "", log_method: str = "debug") -> None:
+            self.should_process = should_process
+            self.message = message
+            self.log_method = log_method
+
+    def validate_suricata_event(event: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(event, dict):
+            return None
+        alert = event.get("alert")
+        if not isinstance(alert, dict) or "signature_id" not in alert:
+            return None
+        if not is_valid_ip(event.get("src_ip")) or not is_valid_ip(event.get("dest_ip")):
+            return None
+        return event
+
+    def decide_should_process_event(
+        event: Dict[str, Any],
+        *,
+        severities: Iterable[str],
+        listen_interfaces: Iterable[str],
+        ignore_predicate: Any,
+        enable_ipv6: bool,
+    ) -> Any:
+        alert = event["alert"]
+        sid = str(alert.get("signature_id", "N/A"))
+        severity = str(alert.get("severity", ""))
+        if severity not in tuple(str(item) for item in severities):
+            return _EventFilterDecision(False, f"Skipping SID={sid}: severity={severity}")
+        in_iface = str(event.get("in_iface", ""))
+        allowed_interfaces = tuple(str(item) for item in listen_interfaces)
+        if allowed_interfaces and in_iface not in allowed_interfaces:
+            return _EventFilterDecision(False, f"Skipping SID={sid}: interface={in_iface}, allowed={allowed_interfaces}")
+        if ignore_predicate(event):
+            return _EventFilterDecision(False, f"Skipping alert SID={sid} - in ignore list", "log")
+        src = str(event["src_ip"])
+        if ":" in src and not enable_ipv6:
+            return _EventFilterDecision(False, f"Skipping IPv6 alert because IPv6 disabled: {src}")
+        return _EventFilterDecision(True)
+
+try:
     import librouteros.login as routeros_login  # type: ignore
 except Exception:  # pragma: no cover
     routeros_login = None
@@ -889,6 +935,10 @@ def read_json(fpath: str) -> List[Dict[str, Any]]:
 
 
 def validate_event(event: Any) -> Optional[Dict[str, Any]]:
+    validated = validate_suricata_event(event)
+    if validated is not None:
+        return validated
+
     if not isinstance(event, dict):
         debug_log(f"Skipping non-dict event: {type(event)}")
         return None
@@ -908,7 +958,7 @@ def validate_event(event: Any) -> Optional[Dict[str, Any]]:
         debug_log(f"Skipping event with invalid src/dest IP: {src_ip} -> {dest_ip}")
         return None
 
-    return event
+    return None
 
 
 def add_to_tik(alerts: Optional[List[Dict[str, Any]]]) -> None:
@@ -975,29 +1025,24 @@ def add_to_tik(alerts: Optional[List[Dict[str, Any]]]) -> None:
 def process_single_alert(event: Dict[str, Any], address_list: Any, address_list_v6: Any) -> None:
     alert = event["alert"]
     sid = str(alert.get("signature_id", "N/A"))
-    severity = str(alert.get("severity", ""))
-    in_iface = str(event.get("in_iface", ""))
-
-    if severity not in SEVERITY:
-        debug_log(f"Skipping SID={sid}: severity={severity}")
-        return
-
-    if LISTEN_INTERFACES and in_iface not in LISTEN_INTERFACES:
-        debug_log(f"Skipping SID={sid}: interface={in_iface}, allowed={LISTEN_INTERFACES}")
-        return
-
-    if in_ignore_list(ignore_list, event):
-        log(f"Skipping alert SID={sid} - in ignore list")
+    filter_decision = decide_should_process_event(
+        event,
+        severities=SEVERITY,
+        listen_interfaces=LISTEN_INTERFACES,
+        ignore_predicate=lambda item: in_ignore_list(ignore_list, dict(item)),
+        enable_ipv6=ENABLE_IPV6,
+    )
+    if not filter_decision.should_process:
+        if filter_decision.log_method == "log":
+            log(filter_decision.message)
+        else:
+            debug_log(filter_decision.message)
         return
 
     src = str(event["src_ip"])
     dst = str(event["dest_ip"])
     is_v6 = ":" in src
     curr_list = address_list_v6 if ENABLE_IPV6 and is_v6 and address_list_v6 is not None else address_list
-
-    if is_v6 and not ENABLE_IPV6:
-        debug_log(f"Skipping IPv6 alert because IPv6 disabled: {src}")
-        return
 
     if is_ip_in_whitelist(src, WHITELIST_IPS):
         if is_ip_in_whitelist(dst, WHITELIST_IPS):

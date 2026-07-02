@@ -17,8 +17,11 @@ SSH_COMMAND = shlex.split(
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_SCRIPT = REPO_ROOT / "src" / "mikrocata" / "legacy.py"
+LOCAL_UNIT = REPO_ROOT / "systemd" / "mikrocataTZSP0.service"
 REMOTE_SCRIPT = "/usr/local/bin/mikrocataTZSP0.py"
 CANDIDATE_SCRIPT = "/tmp/mikrocataTZSP0.py.codex-candidate"
+REMOTE_UNIT = "/etc/systemd/system/mikrocataTZSP0.service"
+CANDIDATE_UNIT = "/tmp/mikrocataTZSP0-codex.service"
 
 
 def run_ssh(command: str, timeout: int = 30, stdin: str | None = None) -> str:
@@ -135,6 +138,42 @@ def deploy_candidate_script(confirm: bool = False) -> str:
         "sudo -n systemctl restart mikrocataTZSP0.service && "
         "systemctl status mikrocataTZSP0.service --no-pager --lines=20 && "
         "printf '\\nBACKUP=%s\\n' \"$backup\"",
+        60,
+    )
+
+
+@mcp.tool()
+def upload_unit_candidate() -> str:
+    unit_text = LOCAL_UNIT.read_text(encoding="utf-8")
+    return run_ssh(
+        f"cat > {CANDIDATE_UNIT} && /usr/bin/systemd-analyze verify {CANDIDATE_UNIT}",
+        30,
+        stdin=unit_text,
+    )
+
+
+@mcp.tool()
+def verify_systemd_unit() -> str:
+    return run_ssh(f"sudo -n /usr/bin/systemd-analyze verify {REMOTE_UNIT}", 30)
+
+
+@mcp.tool()
+def daemon_reload(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to run daemon-reload without confirm=True."
+    return run_ssh("sudo -n /usr/bin/systemctl daemon-reload", 20)
+
+
+@mcp.tool()
+def deploy_unit_candidate(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to deploy unit candidate without confirm=True."
+    return run_ssh(
+        f"sudo -n /usr/bin/install -o root -g root -m 644 {CANDIDATE_UNIT} {REMOTE_UNIT} && "
+        "sudo -n /usr/bin/systemctl daemon-reload && "
+        f"sudo -n /usr/bin/systemd-analyze verify {REMOTE_UNIT} && "
+        "sudo -n /usr/bin/systemctl restart mikrocataTZSP0.service && "
+        "sudo -n /usr/bin/systemctl status mikrocataTZSP0.service --no-pager --lines=20",
         60,
     )
 

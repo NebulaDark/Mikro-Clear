@@ -101,3 +101,57 @@ class McpServerSshTests(TestCase):
         self.assertIn("sudo -n cp /usr/local/bin/mikrocataTZSP0.py", command)
         self.assertIn("sudo -n install -o root -g root -m 755", command)
         self.assertIn("compile(open(", command)
+
+    def test_upload_unit_candidate_streams_local_unit_to_tmp(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "unit-ok"
+            result = server.upload_unit_candidate()
+
+        self.assertEqual(result, "unit-ok")
+        self.assertIn("cat > /tmp/mikrocataTZSP0-codex.service", run_ssh.call_args.args[0])
+        self.assertEqual(run_ssh.call_args.kwargs["stdin"], server.LOCAL_UNIT.read_text(encoding="utf-8"))
+
+    def test_verify_systemd_unit_uses_sudo_systemd_analyze(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            server.verify_systemd_unit()
+
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "sudo -n /usr/bin/systemd-analyze verify /etc/systemd/system/mikrocataTZSP0.service",
+        )
+
+    def test_daemon_reload_requires_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.daemon_reload()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_deploy_unit_candidate_requires_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.deploy_unit_candidate()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_deploy_unit_candidate_installs_reloads_restarts_and_verifies(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "unit-deployed"
+            output = server.deploy_unit_candidate(confirm=True)
+
+        self.assertEqual(output, "unit-deployed")
+        command = run_ssh.call_args.args[0]
+        self.assertIn("sudo -n /usr/bin/install -o root -g root -m 644", command)
+        self.assertIn("sudo -n /usr/bin/systemctl daemon-reload", command)
+        self.assertIn("sudo -n /usr/bin/systemctl restart mikrocataTZSP0.service", command)
+        self.assertIn("sudo -n /usr/bin/systemd-analyze verify", command)
