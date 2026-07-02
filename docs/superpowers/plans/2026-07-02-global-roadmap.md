@@ -123,16 +123,16 @@ telegram unblock observed: 147.45.112.175 from Suricata - SID:2023753
 - Produces: `env_int(name: str, default: int) -> int`
 - Produces: `env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]`
 
-- [ ] Write tests proving `MIKROCLEAR_*` overrides `MIKROCATA_*`.
-- [ ] Move env helper functions from `legacy.py` to `config.py`.
-- [ ] Update `legacy.py` imports.
-- [ ] Run:
+- [x] Write tests proving `MIKROCLEAR_*` overrides `MIKROCATA_*`.
+- [x] Move env helper functions from `legacy.py` to `config.py`.
+- [x] Update `legacy.py` imports.
+- [x] Run:
 
 ```bash
 .venv/bin/python -m unittest tests.test_config tests.test_rebrand
 ```
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git --git-dir=.git-local --work-tree=. commit -m "Extract Mikro-Clear configuration helpers"
