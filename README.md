@@ -85,3 +85,18 @@ restart_mikrocata(confirm=True)
   target, local logic now uses `dest_port`.
 - Alert deduplication is now keyed by the calculated block target, not only by
   `src_ip`, so one whitelisted source can report multiple destination targets.
+
+## Telegram Unblock
+
+When Telegram notifications are enabled, `BLOCKED` and `UPDATED` alert messages
+include an inline `Unblock <ip>` button. The button consumes a short-lived token
+from the local state file and removes the current IP from the MikroTik
+address-list. It does not add a permanent whitelist or ignore rule.
+
+Relevant settings:
+
+```text
+MIKROCATA_TELEGRAM_UNBLOCK_ENABLE=true
+MIKROCATA_TELEGRAM_UNBLOCK_TTL_SECONDS=86400
+MIKROCATA_TELEGRAM_UPDATES_INTERVAL_SECONDS=5
+```

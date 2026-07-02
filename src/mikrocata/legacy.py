@@ -25,6 +25,7 @@ import socket
 import ssl
 import sys
 import traceback
+from pathlib import Path
 from datetime import datetime as dt
 from time import sleep, time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -85,6 +86,85 @@ except Exception:  # pragma: no cover - production single-file fallback
         if ":" in src and not enable_ipv6:
             return _EventFilterDecision(False, f"Skipping IPv6 alert because IPv6 disabled: {src}")
         return _EventFilterDecision(True)
+
+try:
+    from mikrocata.telegram_unblock import (
+        build_unblock_keyboard,
+        consume_unblock_token,
+        create_unblock_token,
+        parse_unblock_callback,
+    )
+except Exception:  # pragma: no cover - production single-file fallback
+    import secrets
+
+    _UNBLOCK_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
+
+    def _read_unblock_state(path: Path) -> Dict[str, Dict[str, Any]]:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+        except Exception:
+            pass
+        return {}
+
+    def _write_unblock_state(path: Path, state: Dict[str, Dict[str, Any]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+    def create_unblock_token(
+        path: Path,
+        *,
+        wanted_ip: str,
+        list_name: str,
+        sid: str,
+        now: int,
+        ttl_seconds: int,
+        token_factory: Any = None,
+    ) -> str:
+        token = (token_factory or (lambda: secrets.token_urlsafe(12)))()
+        state = _read_unblock_state(path)
+        state[token] = {
+            "wanted_ip": wanted_ip,
+            "list_name": list_name,
+            "sid": sid,
+            "expires_at": int(now) + max(1, int(ttl_seconds)),
+        }
+        _write_unblock_state(path, state)
+        return token
+
+    def consume_unblock_token(path: Path, token: str, *, now: int) -> Optional[Dict[str, Any]]:
+        if not _UNBLOCK_TOKEN_RE.match(token):
+            return None
+        state = _read_unblock_state(path)
+        action = state.pop(token, None)
+        changed = action is not None
+        for key, value in list(state.items()):
+            if int(value.get("expires_at", 0)) <= int(now):
+                state.pop(key, None)
+                changed = True
+        if changed:
+            _write_unblock_state(path, state)
+        if not action or int(action.get("expires_at", 0)) <= int(now):
+            return None
+        return action
+
+    def parse_unblock_callback(data: Any) -> Optional[str]:
+        if not isinstance(data, str) or not data.startswith("unblock:"):
+            return None
+        token = data.partition(":")[2]
+        return token if _UNBLOCK_TOKEN_RE.match(token) else None
+
+    def build_unblock_keyboard(wanted_ip: str, token: str) -> Dict[str, Any]:
+        return {
+            "inline_keyboard": [
+                [{"text": f"Unblock {wanted_ip}", "callback_data": f"unblock:{token}"}],
+                [
+                    {"text": "AbuseIPDB", "url": f"https://www.abuseipdb.com/check/{wanted_ip}"},
+                    {"text": "VirusTotal", "url": f"https://www.virustotal.com/gui/ip-address/{wanted_ip}"},
+                ],
+            ]
+        }
 
 try:
     import librouteros.login as routeros_login  # type: ignore
@@ -155,6 +235,9 @@ TELEGRAM_CHATID = env_str("MIKROCATA_TELEGRAM_CHATID", "")
 TELEGRAM_TIMEOUT = env_int("MIKROCATA_TELEGRAM_TIMEOUT", 10)
 TELEGRAM_COOLDOWN_SECONDS = env_int("MIKROCATA_TELEGRAM_COOLDOWN_SECONDS", 2)
 TELEGRAM_SYSTEM_COOLDOWN_SECONDS = env_int("MIKROCATA_TELEGRAM_SYSTEM_COOLDOWN_SECONDS", 300)
+TELEGRAM_UNBLOCK_ENABLE = env_bool("MIKROCATA_TELEGRAM_UNBLOCK_ENABLE", True)
+TELEGRAM_UNBLOCK_TTL_SECONDS = env_int("MIKROCATA_TELEGRAM_UNBLOCK_TTL_SECONDS", 24 * 3600)
+TELEGRAM_UPDATES_INTERVAL_SECONDS = env_int("MIKROCATA_TELEGRAM_UPDATES_INTERVAL_SECONDS", 5)
 
 WAN_IP = env_str("MIKROCATA_WAN_IP", "")
 LOCAL_IP_PREFIX = env_str("MIKROCATA_LOCAL_IP_PREFIX", "192.168.0.0/16")
@@ -207,6 +290,9 @@ IGNORE_LIST_LOCATION = os.path.abspath(
 TELEGRAM_LOCK_FILE = os.path.abspath(
     env_str("MIKROCATA_TELEGRAM_LOCK_FILE", os.path.join(STATE_DIR, "telegram-rate-limit.lock"))
 )
+TELEGRAM_UNBLOCK_STATE_FILE = os.path.abspath(
+    env_str("MIKROCATA_TELEGRAM_UNBLOCK_STATE_FILE", os.path.join(STATE_DIR, "telegram-unblock-actions.json"))
+)
 SAVE_LISTS = list(env_csv("MIKROCATA_SAVE_LISTS", (BLOCK_LIST_NAME,)))
 SAVE_INTERVAL = env_int("MIKROCATA_SAVE_INTERVAL", 300)
 
@@ -224,6 +310,8 @@ last_inode: Optional[int] = None
 ignore_list: List[str] = []
 last_save_time = 0
 last_telegram_sent = 0.0
+last_telegram_updates_check = 0.0
+telegram_update_offset = 0
 shutdown_requested = False
 router_client: Optional["RouterOSClient"] = None
 
@@ -380,8 +468,26 @@ def sendTelegram(
         }
 
         if wanted_ip and not is_system and isinstance(event, dict):
+            token = None
+            if TELEGRAM_UNBLOCK_ENABLE and action_type in {"BLOCKED", "UPDATED"}:
+                alert = event.get("alert", {})
+                sid = str(alert.get("signature_id", "N/A")) if isinstance(alert, dict) else "N/A"
+                try:
+                    token = create_unblock_token(
+                        Path(TELEGRAM_UNBLOCK_STATE_FILE),
+                        wanted_ip=str(wanted_ip),
+                        list_name=BLOCK_LIST_NAME,
+                        sid=sid,
+                        now=now,
+                        ttl_seconds=TELEGRAM_UNBLOCK_TTL_SECONDS,
+                    )
+                except Exception as exc:
+                    log(f"Could not create Telegram unblock token for {wanted_ip}: {exc}")
+
             payload["reply_markup"] = ujson.dumps(
-                {
+                build_unblock_keyboard(str(wanted_ip), token)
+                if token
+                else {
                     "inline_keyboard": [
                         [
                             {"text": "AbuseIPDB", "url": f"https://www.abuseipdb.com/check/{wanted_ip}"},
@@ -675,6 +781,104 @@ def send_system_notification(message: str, notification_type: str = "SYSTEM") ->
 #mikrocata #system
 """.strip()
     return sendTelegram(message=formatted_message, is_system=True)
+
+
+def answer_telegram_callback(callback_id: str, text: str, alert: bool = False) -> None:
+    if not TELEGRAM_TOKEN or not callback_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery",
+            data={"callback_query_id": callback_id, "text": text, "show_alert": "true" if alert else "false"},
+            timeout=TELEGRAM_TIMEOUT,
+        )
+    except Exception as exc:
+        log(f"Error answering Telegram callback: {exc}")
+
+
+def remove_address_from_list(address_list: Any, wanted_ip: str, list_name: str) -> bool:
+    _address = Key("address")
+    _id = Key(".id")
+    _list = Key("list")
+    rows = list(address_list.select(_id, _list, _address).where(_address == wanted_ip, _list == list_name))
+    removed = False
+    for row in rows:
+        address_list.remove(row[".id"])
+        removed = True
+    return removed
+
+
+def handle_unblock_action(action: Dict[str, Any]) -> str:
+    wanted_ip = str(action.get("wanted_ip", ""))
+    list_name = str(action.get("list_name") or BLOCK_LIST_NAME)
+    if not is_valid_ip(wanted_ip):
+        return "Invalid unblock target"
+    if is_ip_in_whitelist(wanted_ip, WHITELIST_IPS):
+        return f"Refusing to unblock whitelisted target {wanted_ip}"
+
+    client = get_router_client()
+
+    def remove_batch() -> bool:
+        address_list, address_list_v6, _resources = client.paths()
+        target_list = address_list_v6 if ":" in wanted_ip and address_list_v6 is not None else address_list
+        return remove_address_from_list(target_list, wanted_ip, list_name)
+
+    removed = client.run_with_reconnect("telegram unblock", remove_batch)
+    if removed:
+        log(f"TELEGRAM UNBLOCKED: {wanted_ip} from {list_name} - SID:{action.get('sid', 'N/A')}")
+        return f"Unblocked {wanted_ip}"
+    log(f"TELEGRAM UNBLOCK NOOP: {wanted_ip} not found in {list_name}")
+    return f"{wanted_ip} was not found in {list_name}"
+
+
+def process_telegram_updates() -> None:
+    global telegram_update_offset
+
+    if not ENABLE_TELEGRAM or not TELEGRAM_UNBLOCK_ENABLE or not TELEGRAM_TOKEN or not TELEGRAM_CHATID:
+        return
+
+    try:
+        response = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+            params={"offset": telegram_update_offset, "timeout": 0, "allowed_updates": ujson.dumps(["callback_query"])},
+            timeout=TELEGRAM_TIMEOUT,
+        )
+        if response.status_code != 200:
+            debug_log(f"Telegram getUpdates failed: {response.status_code} {response.text[:120]}")
+            return
+
+        body = response.json()
+        if not body.get("ok"):
+            debug_log(f"Telegram getUpdates not ok: {body}")
+            return
+
+        for update in body.get("result", []):
+            update_id = int(update.get("update_id", 0))
+            telegram_update_offset = max(telegram_update_offset, update_id + 1)
+            callback = update.get("callback_query") or {}
+            callback_id = str(callback.get("id", ""))
+            message = callback.get("message") or {}
+            chat = message.get("chat") or {}
+            chat_id = str(chat.get("id", ""))
+            if chat_id != str(TELEGRAM_CHATID):
+                answer_telegram_callback(callback_id, "Unauthorized chat", True)
+                log(f"Rejected Telegram callback from unauthorized chat {chat_id}")
+                continue
+
+            token = parse_unblock_callback(callback.get("data"))
+            if not token:
+                continue
+
+            action = consume_unblock_token(Path(TELEGRAM_UNBLOCK_STATE_FILE), token, now=int(time()))
+            if not action:
+                answer_telegram_callback(callback_id, "Unblock request expired or already used", True)
+                continue
+
+            result = handle_unblock_action(action)
+            answer_telegram_callback(callback_id, result)
+            send_system_notification(result, "UNBLOCK")
+    except Exception as exc:
+        log(f"Error processing Telegram updates: {type(exc).__name__}: {exc}")
 
 
 def make_ssl_context() -> ssl.SSLContext:
@@ -1277,12 +1481,17 @@ def main() -> int:
     log(f"Whitelist: {WHITELIST_IPS}")
 
     last_idle_heartbeat = 0.0
+    global last_telegram_updates_check
 
     while not shutdown_requested:
         try:
             notifier.process_events()
             if notifier.check_events(timeout=1000):
                 notifier.read_events()
+
+            if time() - last_telegram_updates_check >= TELEGRAM_UPDATES_INTERVAL_SECONDS:
+                last_telegram_updates_check = time()
+                process_telegram_updates()
 
             if time() - last_idle_heartbeat >= ROUTER_HEARTBEAT_SECONDS:
                 last_idle_heartbeat = time()
