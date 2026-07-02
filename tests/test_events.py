@@ -1,6 +1,6 @@
 import unittest
 
-from mikrocata.events import (
+from mikroclear.events import (
     should_process_event,
     validate_event,
 )

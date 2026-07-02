@@ -3,7 +3,7 @@ import time
 import unittest
 from pathlib import Path
 
-from mikrocata.telegram_unblock import (
+from mikroclear.telegram_unblock import (
     build_unblock_keyboard,
     consume_unblock_token,
     create_unblock_token,

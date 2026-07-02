@@ -1,5 +1,5 @@
 [Unit]
-Description=Mikrocata TZSP0 - Suricata to MikroTik AutoBlock
+Description=Mikro-Clear - Suricata to MikroTik AutoBlock
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -7,8 +7,9 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/mikrocata/mikrocataTZSP0.env
-ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikrocataTZSP0.py
+EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env
+EnvironmentFile=-/etc/mikroclear/mikroclear.env
+ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
 Restart=on-failure
 RestartSec=30
 User=root

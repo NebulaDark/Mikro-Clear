@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Mikrocata TZSP0 v3.1.0-STABLE
+Mikro-Clear v3.1.0-STABLE
 Suricata eve.json -> MikroTik RouterOS API-SSL -> address-list -> Telegram
 
 Main v3.1 fixes:
@@ -10,7 +10,7 @@ Main v3.1 fixes:
 - api.path() objects are created fresh for each operation batch;
 - SSL BAD_LENGTH / record overflow / ConnectionClosed handled with reconnect;
 - optional heartbeat before RouterOS operations;
-- no hardcoded secrets; all configuration via /etc/mikrocata/mikrocataTZSP0.env;
+- no hardcoded secrets; all configuration via environment file;
 - safe eve.json tailing with log rotation handling;
 - whitelist, ignore-list, Telegram flood-control, save/restore lists preserved.
 """
@@ -42,7 +42,7 @@ from librouteros import connect
 from librouteros.query import Key
 
 try:
-    from mikrocata.events import (
+    from mikroclear.events import (
         should_process_event as decide_should_process_event,
         validate_event as validate_suricata_event,
     )
@@ -88,7 +88,7 @@ except Exception:  # pragma: no cover - production single-file fallback
         return _EventFilterDecision(True)
 
 try:
-    from mikrocata.telegram_unblock import (
+    from mikroclear.telegram_unblock import (
         build_unblock_keyboard,
         consume_unblock_token,
         create_unblock_token,
@@ -179,19 +179,37 @@ VERSION = "3.1.1-TZSP0-ASSET-RESOLVER"
 # ------------------------------------------------------------------------------
 
 
+def env_name_candidates(name: str) -> Tuple[str, ...]:
+    if name.startswith("MIKROCATA_"):
+        return ("MIKROCLEAR_" + name.removeprefix("MIKROCATA_"), name)
+    return (name,)
+
+
 def env_str(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+    for candidate in env_name_candidates(name):
+        value = os.getenv(candidate)
+        if value is not None:
+            return value.strip()
+    return default.strip()
 
 
 def env_bool(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
+    value = None
+    for candidate in env_name_candidates(name):
+        value = os.getenv(candidate)
+        if value is not None:
+            break
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
+    value = None
+    for candidate in env_name_candidates(name):
+        value = os.getenv(candidate)
+        if value is not None:
+            break
     if value is None or value.strip() == "":
         return default
     try:
@@ -201,7 +219,11 @@ def env_int(name: str, default: int) -> int:
 
 
 def env_csv(name: str, default: Sequence[str]) -> Tuple[str, ...]:
-    value = os.getenv(name)
+    value = None
+    for candidate in env_name_candidates(name):
+        value = os.getenv(candidate)
+        if value is not None:
+            break
     if value is None or value.strip() == "":
         return tuple(default)
 
@@ -274,7 +296,7 @@ FILEPATH = os.path.abspath(
         os.path.join(SELKS_CONTAINER_DATA_SURICATA_LOG, "eve.json"),
     )
 )
-STATE_DIR = os.path.abspath(env_str("MIKROCATA_STATE_DIR", "/var/lib/mikrocata"))
+STATE_DIR = os.path.abspath(env_str("MIKROCATA_STATE_DIR", "/var/lib/mikroclear"))
 SAVE_LISTS_LOCATION = os.path.abspath(
     env_str("MIKROCATA_SAVE_LISTS_LOCATION", os.path.join(STATE_DIR, "savelists-tzsp0.json"))
 )
@@ -317,13 +339,13 @@ router_client: Optional["RouterOSClient"] = None
 
 
 def log(message: str) -> None:
-    print(f"[Mikrocata] {message}", flush=True)
+    print(f"[Mikro-Clear] {message}", flush=True)
 
 
 def debug_log(message: str) -> None:
     if DEBUG_MODE:
         timestamp = dt.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{timestamp} Mikrocata-DEBUG] {message}", flush=True)
+        print(f"[{timestamp} Mikro-Clear-DEBUG] {message}", flush=True)
 
 
 def on_signal(signum: int, frame: Any) -> None:
@@ -455,7 +477,7 @@ def sendTelegram(
             formatted_message = format_telegram_message_safe(event, wanted_ip, src_ip, wanted_port, action_type)
         else:
             formatted_message = (
-                f"<b>Mikrocata Alert Data Issue</b>\n"
+                f"<b>Mikro-Clear Alert Data Issue</b>\n"
                 f"IP: <code>{escape_html_safe(wanted_ip)}</code>\n"
                 f"Action: <code>{escape_html_safe(action_type)}</code>"
             )
@@ -747,7 +769,7 @@ def format_telegram_message_safe(
     signature = sanitize_text(alert.get("signature", "N/A"), 150) or "N/A"
 
     return f"""
-<b>Mikrocata Alert - {escape_html_safe(action_type)}</b>
+<b>Mikro-Clear Alert - {escape_html_safe(action_type)}</b>
 
 <b>Target IP:</b> <code>{escape_html_safe(wanted_ip or 'N/A')}</code>
 <b>Action:</b> <code>{escape_html_safe(action_type)}</code>
@@ -766,19 +788,19 @@ def format_telegram_message_safe(
 - Category: <code>{escape_html_safe(alert.get('category', 'N/A'))}</code>
 - Signature: <i>{escape_html_safe(signature)}</i>
 
-#mikrocata #security #alert
+#mikroclear #security #alert
 """.strip()
 
 
 def send_system_notification(message: str, notification_type: str = "SYSTEM") -> bool:
     formatted_message = f"""
-<b>Mikrocata System Notification</b>
+<b>Mikro-Clear System Notification</b>
 
 <b>Type:</b> <code>{escape_html_safe(notification_type)}</code>
 <b>Time:</b> <code>{dt.now().strftime('%d.%m.%Y %H:%M:%S')}</code>
 <b>Message:</b> <i>{escape_html_safe(message)}</i>
 
-#mikrocata #system
+#mikroclear #system
 """.strip()
     return sendTelegram(message=formatted_message, is_system=True)
 
@@ -945,7 +967,7 @@ class RouterOSClient:
         actual_port = PORT or (8729 if USE_SSL else 8728)
 
         if not USERNAME or not PASSWORD or not ROUTER_IP:
-            log("RouterOS credentials are incomplete. Check MIKROCATA_ROUTER_USERNAME/PASSWORD/IP.")
+            log("RouterOS credentials are incomplete. Check MIKROCLEAR_ROUTER_USERNAME/PASSWORD/IP.")
             while not shutdown_requested:
                 sleep(ROUTER_CONNECT_RETRY_SECONDS)
             return
@@ -1267,6 +1289,7 @@ def process_single_alert(event: Dict[str, Any], address_list: Any, address_list_
     timestamp = format_event_timestamp(event.get("timestamp"))
     signature = sanitize_text(alert.get("signature", ""), 180)
     gid = alert.get("gid", 1)
+    severity = str(alert.get("severity", "N/A"))
     proto = event.get("proto", "")
     comment = f"[{gid}:{sid}] {signature} ::: Port: {wanted_port}/{proto} ::: timestamp: {timestamp}"
 
@@ -1436,7 +1459,7 @@ def in_ignore_list(ignr_list: Iterable[str], event: Dict[str, Any]) -> bool:
 
 
 def print_startup_config() -> None:
-    log(f"Starting Mikrocata2SELKS v{VERSION}")
+    log(f"Starting Mikro-Clear v{VERSION}")
     log(f"Python: {sys.version.split()[0]}")
     log(f"eve.json: {FILEPATH}")
     log(f"RouterOS API: {ROUTER_IP}:{PORT} {'SSL' if USE_SSL else 'plain'}")
@@ -1460,7 +1483,7 @@ def main() -> int:
 
     ensure_dirs()
     print_startup_config()
-    send_system_notification(f"Mikrocata v{VERSION} started", "START")
+    send_system_notification(f"Mikro-Clear v{VERSION} started", "START")
 
     seek_to_end(FILEPATH)
 
@@ -1515,7 +1538,7 @@ def main() -> int:
     except Exception:
         pass
 
-    send_system_notification(f"Mikrocata v{VERSION} stopped", "STOP")
+    send_system_notification(f"Mikro-Clear v{VERSION} stopped", "STOP")
     log("Stopped")
     return 0
 

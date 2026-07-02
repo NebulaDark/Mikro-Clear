@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mikro-clear"
 version = "0.1.0"
-description = "Local cleanup workspace for the Mikrocata TZSP0 service"
+description = "Local cleanup workspace for the Mikro-Clear service"
 requires-python = ">=3.11"
 dependencies = [
     "librouteros==4.0.1",

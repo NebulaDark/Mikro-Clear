@@ -2,7 +2,7 @@ from pathlib import Path
 from unittest import TestCase
 
 
-UNIT_PATH = Path(__file__).resolve().parents[1] / "systemd" / "mikrocataTZSP0.service"
+UNIT_PATH = Path(__file__).resolve().parents[1] / "systemd" / "mikroclear.service"
 
 
 def section_lines(section_name: str) -> list[str]:

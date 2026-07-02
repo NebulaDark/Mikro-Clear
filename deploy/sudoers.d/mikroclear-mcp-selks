@@ -1,6 +1,18 @@
 mcp-selks ALL=(root) NOPASSWD: \
+    /usr/bin/systemctl status mikroclear.service --no-pager, \
+    /usr/bin/systemctl status mikroclear.service --no-pager --lines=*, \
+    /usr/bin/systemctl enable mikroclear.service, \
+    /usr/bin/systemctl restart mikroclear.service, \
+    /usr/bin/journalctl -u mikroclear.service -n * --no-pager, \
+    /usr/bin/cp /usr/local/bin/mikroclear.py /usr/local/bin/mikroclear.py.bak-*, \
+    /usr/bin/install -o root -g root -m 755 /tmp/mikroclear.py.codex-candidate /usr/local/bin/mikroclear.py, \
+    /usr/bin/install -o root -g root -m 644 /tmp/mikroclear-codex.service /etc/systemd/system/mikroclear.service, \
+    /usr/bin/systemd-analyze verify /etc/systemd/system/mikroclear.service, \
+    /usr/bin/sed -E s/* /etc/mikroclear/mikroclear.env, \
     /usr/bin/systemctl status mikrocataTZSP0.service --no-pager, \
     /usr/bin/systemctl status mikrocataTZSP0.service --no-pager --lines=*, \
+    /usr/bin/systemctl stop mikrocataTZSP0.service, \
+    /usr/bin/systemctl disable mikrocataTZSP0.service, \
     /usr/bin/systemctl restart mikrocataTZSP0.service, \
     /usr/bin/systemctl daemon-reload, \
     /usr/bin/journalctl -u mikrocataTZSP0.service -n * --no-pager, \

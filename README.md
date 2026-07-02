@@ -1,17 +1,17 @@
 # Mikro-Clear
 
-Local baseline and cleanup workspace for the Mikrocata TZSP0 service.
+Local baseline and cleanup workspace for the Mikro-Clear service.
 
 The production script currently runs on `selks` as:
 
 ```text
-/usr/local/bin/mikrocataTZSP0.py
+/usr/local/bin/mikroclear.py
 ```
 
 The copied baseline is stored at:
 
 ```text
-src/mikrocata/legacy.py
+src/mikroclear/legacy.py
 ```
 
 This repository is intended to make changes testable before touching the running
@@ -22,7 +22,7 @@ peer IP, port selection, and event deduplication.
 
 ```bash
 python -m unittest discover -s tests
-python -m py_compile src/mikrocata/legacy.py src/mikrocata/alert_logic.py
+python -m py_compile src/mikroclear/legacy.py src/mikroclear/alert_logic.py
 ```
 
 ## Remote Sudo Setup
@@ -31,14 +31,14 @@ MCP deploy tools require a one-time sudoers install on `selks`. The candidate
 policy is stored at:
 
 ```text
-deploy/sudoers.d/mikrocata-mcp-selks
+deploy/sudoers.d/mikroclear-mcp-selks
 ```
 
 Validate and install it on `selks` as a sudo-capable user:
 
 ```bash
-sudo install -o root -g root -m 440 /tmp/mikrocata-mcp-selks.sudoers /etc/sudoers.d/mikrocata-mcp-selks
-sudo visudo -cf /etc/sudoers.d/mikrocata-mcp-selks
+sudo install -o root -g root -m 440 /tmp/mikroclear-mcp-selks.sudoers /etc/sudoers.d/mikroclear-mcp-selks
+sudo visudo -cf /etc/sudoers.d/mikroclear-mcp-selks
 sudo -l -U mcp-selks
 ```
 
@@ -53,12 +53,14 @@ mikroclear-selks
 Read-only tools:
 
 ```text
-status_mikrocata
-tail_mikrocata_logs
-check_mikrocata_syntax
+status_mikroclear
+tail_mikroclear_logs
+check_mikroclear_syntax
 compare_production_script
 verify_systemd_unit
 ```
+
+Legacy `*_mikrocata` MCP tool names remain as compatibility aliases.
 
 Deploy flow for the production script:
 
@@ -72,11 +74,15 @@ Deploy flow for the systemd unit:
 upload_unit_candidate -> deploy_unit_candidate(confirm=True)
 ```
 
+The unit deploy migrates from `mikrocataTZSP0.service` to `mikroclear.service`
+by stopping and disabling the legacy unit, enabling the new unit, and then
+starting the new service.
+
 Standalone service operations:
 
 ```text
 daemon_reload(confirm=True)
-restart_mikrocata(confirm=True)
+restart_mikroclear(confirm=True)
 ```
 
 ## Local Logic Fixes
@@ -96,7 +102,7 @@ address-list. It does not add a permanent whitelist or ignore rule.
 Relevant settings:
 
 ```text
-MIKROCATA_TELEGRAM_UNBLOCK_ENABLE=true
-MIKROCATA_TELEGRAM_UNBLOCK_TTL_SECONDS=86400
-MIKROCATA_TELEGRAM_UPDATES_INTERVAL_SECONDS=5
+MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true
+MIKROCLEAR_TELEGRAM_UNBLOCK_TTL_SECONDS=86400
+MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS=5
 ```

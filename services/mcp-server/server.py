@@ -8,20 +8,24 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("mikroclear-selks")
-SELKS_HOST = os.getenv("MIKROCATA_MCP_SSH_HOST", "selks")
+SERVICE_NAME = "mikroclear.service"
+LEGACY_SERVICE_NAME = "mikrocataTZSP0.service"
+SELKS_HOST = os.getenv("MIKROCLEAR_MCP_SSH_HOST") or os.getenv("MIKROCATA_MCP_SSH_HOST", "selks")
 SSH_COMMAND = shlex.split(
-    os.getenv(
+    os.getenv("MIKROCLEAR_MCP_SSH_COMMAND")
+    or os.getenv(
         "MIKROCATA_MCP_SSH_COMMAND",
         "ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new",
     )
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_SCRIPT = REPO_ROOT / "src" / "mikrocata" / "legacy.py"
-LOCAL_UNIT = REPO_ROOT / "systemd" / "mikrocataTZSP0.service"
-REMOTE_SCRIPT = "/usr/local/bin/mikrocataTZSP0.py"
-CANDIDATE_SCRIPT = "/tmp/mikrocataTZSP0.py.codex-candidate"
-REMOTE_UNIT = "/etc/systemd/system/mikrocataTZSP0.service"
-CANDIDATE_UNIT = "/tmp/mikrocataTZSP0-codex.service"
+LOCAL_SCRIPT = REPO_ROOT / "src" / "mikroclear" / "legacy.py"
+LOCAL_UNIT = REPO_ROOT / "systemd" / "mikroclear.service"
+REMOTE_SCRIPT = "/usr/local/bin/mikroclear.py"
+LEGACY_REMOTE_SCRIPT = "/usr/local/bin/mikrocataTZSP0.py"
+CANDIDATE_SCRIPT = "/tmp/mikroclear.py.codex-candidate"
+REMOTE_UNIT = "/etc/systemd/system/mikroclear.service"
+CANDIDATE_UNIT = "/tmp/mikroclear-codex.service"
 
 
 def run_ssh(command: str, timeout: int = 30, stdin: str | None = None) -> str:
@@ -45,29 +49,44 @@ def run_ssh(command: str, timeout: int = 30, stdin: str | None = None) -> str:
 
 
 @mcp.tool()
-def status_mikrocata() -> str:
-    return run_ssh("systemctl status mikrocataTZSP0.service --no-pager", 20)
+def status_mikroclear() -> str:
+    return run_ssh(f"systemctl status {SERVICE_NAME} --no-pager", 20)
 
 
 @mcp.tool()
-def restart_mikrocata(confirm: bool = False) -> str:
+def status_mikrocata() -> str:
+    return status_mikroclear()
+
+
+@mcp.tool()
+def restart_mikroclear(confirm: bool = False) -> str:
     if not confirm:
         return "Refusing to restart service without confirm=True."
     return run_ssh(
-        "sudo -n systemctl restart mikrocataTZSP0.service && "
-        "sudo -n systemctl status mikrocataTZSP0.service --no-pager",
+        f"sudo -n systemctl restart {SERVICE_NAME} && "
+        f"sudo -n systemctl status {SERVICE_NAME} --no-pager",
         40,
     )
 
 
 @mcp.tool()
-def tail_mikrocata_logs(lines: int = 100) -> str:
-    lines = max(10, min(int(lines), 500))
-    return run_ssh(f"sudo -n journalctl -u mikrocataTZSP0.service -n {lines} --no-pager", 30)
+def restart_mikrocata(confirm: bool = False) -> str:
+    return restart_mikroclear(confirm)
 
 
 @mcp.tool()
-def check_mikrocata_syntax() -> str:
+def tail_mikroclear_logs(lines: int = 100) -> str:
+    lines = max(10, min(int(lines), 500))
+    return run_ssh(f"sudo -n journalctl -u {SERVICE_NAME} -n {lines} --no-pager", 30)
+
+
+@mcp.tool()
+def tail_mikrocata_logs(lines: int = 100) -> str:
+    return tail_mikroclear_logs(lines)
+
+
+@mcp.tool()
+def check_mikroclear_syntax() -> str:
     return run_ssh(
         "/opt/mikrocata-venv/bin/python -c "
         f"\"path='{REMOTE_SCRIPT}'; "
@@ -78,12 +97,25 @@ def check_mikrocata_syntax() -> str:
 
 
 @mcp.tool()
-def read_mikrocata_env() -> str:
+def check_mikrocata_syntax() -> str:
+    return check_mikroclear_syntax()
+
+
+@mcp.tool()
+def read_mikroclear_env() -> str:
     return run_ssh(
-        r"sudo -n sed -E 's/(TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|COOKIE)=.*/\1=***MASKED***/Ig' "
-        r"/etc/mikrocata/mikrocataTZSP0.env",
+        r"if [ -f /etc/mikroclear/mikroclear.env ]; then "
+        r"sudo -n sed -E 's/(TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|COOKIE)=.*/\1=***MASKED***/Ig' /etc/mikroclear/mikroclear.env; "
+        r"else "
+        r"sudo -n sed -E 's/(TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|COOKIE)=.*/\1=***MASKED***/Ig' /etc/mikrocata/mikrocataTZSP0.env; "
+        r"fi",
         20,
     )
+
+
+@mcp.tool()
+def read_mikrocata_env() -> str:
+    return read_mikroclear_env()
 
 
 @mcp.tool()
@@ -131,13 +163,18 @@ def deploy_candidate_script(confirm: bool = False) -> str:
         return "Refusing to deploy candidate without confirm=True."
     return run_ssh(
         f"backup={REMOTE_SCRIPT}.bak-$(date +%Y%m%d-%H%M%S) && "
-        f"sudo -n cp {REMOTE_SCRIPT} \"$backup\" && "
+        f"legacy_backup={LEGACY_REMOTE_SCRIPT}.bak-mikroclear-$(date +%Y%m%d-%H%M%S) && "
+        f"if [ -f {REMOTE_SCRIPT} ]; then "
+        f"sudo -n cp {REMOTE_SCRIPT} \"$backup\"; "
+        f"elif [ -f {LEGACY_REMOTE_SCRIPT} ]; then "
+        f"sudo -n cp {LEGACY_REMOTE_SCRIPT} \"$legacy_backup\"; "
+        "fi && "
         f"sudo -n install -o root -g root -m 755 {CANDIDATE_SCRIPT} {REMOTE_SCRIPT} && "
         "/opt/mikrocata-venv/bin/python -c "
         f"\"path='{REMOTE_SCRIPT}'; compile(open(path, encoding='utf-8').read(), path, 'exec'); print('OK')\" && "
-        "sudo -n systemctl restart mikrocataTZSP0.service && "
-        "systemctl status mikrocataTZSP0.service --no-pager --lines=20 && "
-        "printf '\\nBACKUP=%s\\n' \"$backup\"",
+        f"sudo -n systemctl restart {SERVICE_NAME} && "
+        f"systemctl status {SERVICE_NAME} --no-pager --lines=20 && "
+        "printf '\\nBACKUP=%s\\nLEGACY_BACKUP=%s\\n' \"$backup\" \"$legacy_backup\"",
         60,
     )
 
@@ -172,10 +209,18 @@ def deploy_unit_candidate(confirm: bool = False) -> str:
         f"sudo -n /usr/bin/install -o root -g root -m 644 {CANDIDATE_UNIT} {REMOTE_UNIT} && "
         "sudo -n /usr/bin/systemctl daemon-reload && "
         f"sudo -n /usr/bin/systemd-analyze verify {REMOTE_UNIT} && "
-        "sudo -n /usr/bin/systemctl restart mikrocataTZSP0.service && "
-        "sudo -n /usr/bin/systemctl status mikrocataTZSP0.service --no-pager --lines=20",
+        f"(sudo -n /usr/bin/systemctl stop {LEGACY_SERVICE_NAME} || true) && "
+        f"(sudo -n /usr/bin/systemctl disable {LEGACY_SERVICE_NAME} || true) && "
+        f"sudo -n /usr/bin/systemctl enable {SERVICE_NAME} && "
+        f"sudo -n /usr/bin/systemctl restart {SERVICE_NAME} && "
+        f"sudo -n /usr/bin/systemctl status {SERVICE_NAME} --no-pager --lines=20",
         60,
     )
+
+
+@mcp.tool()
+def status_legacy_mikrocata() -> str:
+    return run_ssh(f"systemctl status {LEGACY_SERVICE_NAME} --no-pager", 20)
 
 
 if __name__ == "__main__":

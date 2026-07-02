@@ -1,6 +1,6 @@
 import unittest
 
-from mikrocata.alert_logic import (
+from mikroclear.alert_logic import (
     deduplicate_alerts_by_target,
     legacy_decide_alert_target,
     legacy_deduplicate_by_src_ip,
