@@ -178,16 +178,16 @@ git --git-dir=.git-local --work-tree=. commit -m "Extract Telegram notification 
 - Produces: `remove_from_address_list(api, list_name: str, address: str) -> int`
 - Produces: `add_to_address_list(address_list, list_name: str, address: str, comment: str, timeout: str) -> None`
 
-- [ ] Move reconnect wrapper and address-list helpers from `legacy.py`.
-- [ ] Keep behavior identical for heartbeat and reconnect logs.
-- [ ] Add tests with fake RouterOS resources.
-- [ ] Run:
+- [x] Move reconnect wrapper and address-list helpers from `legacy.py`.
+- [x] Keep behavior identical for heartbeat and reconnect logs.
+- [x] Add tests with fake RouterOS resources.
+- [x] Run:
 
 ```bash
 .venv/bin/python -m unittest tests.test_routeros_client tests.test_telegram_unblock
 ```
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git --git-dir=.git-local --work-tree=. commit -m "Extract RouterOS operations"

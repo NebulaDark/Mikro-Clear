@@ -207,6 +207,62 @@ except Exception:  # pragma: no cover - production single-file fallback
         )
 
 try:
+    from mikroclear.routeros_client import (
+        RouterOsClientConfig,
+        RouterOsConnectionManager,
+        add_to_address_list,
+        remove_from_address_list,
+    )
+except Exception:  # pragma: no cover - production single-file fallback
+    class RouterOsClientConfig:
+        def __init__(self, reconnect_sleep_seconds: int = 2) -> None:
+            self.reconnect_sleep_seconds = reconnect_sleep_seconds
+
+    class RouterOsConnectionManager:
+        def __init__(
+            self,
+            config: Any,
+            *,
+            heartbeat: Any,
+            reconnect: Any,
+            log: Any,
+            sleep: Any,
+            transient_errors: Any = None,
+        ) -> None:
+            self._heartbeat = heartbeat
+            self._reconnect = reconnect
+            self._log = log
+            self._transient_errors = transient_errors or (
+                ssl.SSLError,
+                librouteros.exceptions.ConnectionClosed,
+                socket.timeout,
+                TimeoutError,
+            )
+
+        def run_with_reconnect(self, operation_name: str, func: Any) -> Any:
+            try:
+                self._heartbeat(False)
+                return func()
+            except self._transient_errors as exc:
+                self._log(f"RouterOS API error during {operation_name}: {type(exc).__name__}: {exc}")
+                self._reconnect(f"{operation_name} failed")
+                return func()
+
+    def remove_from_address_list(address_list: Any, list_name: str, address: str) -> int:
+        _address = Key("address")
+        _id = Key(".id")
+        _list = Key("list")
+        rows = list(address_list.select(_id, _list, _address).where(_address == address, _list == list_name))
+        removed = 0
+        for row in rows:
+            address_list.remove(row[".id"])
+            removed += 1
+        return removed
+
+    def add_to_address_list(address_list: Any, list_name: str, address: str, comment: str, timeout: str) -> None:
+        address_list.add(list=list_name, address=address, comment=comment, timeout=timeout)
+
+try:
     from mikroclear.events import (
         should_process_event as decide_should_process_event,
         validate_event as validate_suricata_event,
@@ -882,15 +938,7 @@ def answer_telegram_callback(callback_id: str, text: str, alert: bool = False) -
 
 
 def remove_address_from_list(address_list: Any, wanted_ip: str, list_name: str) -> bool:
-    _address = Key("address")
-    _id = Key(".id")
-    _list = Key("list")
-    rows = list(address_list.select(_id, _list, _address).where(_address == wanted_ip, _list == list_name))
-    removed = False
-    for row in rows:
-        address_list.remove(row[".id"])
-        removed = True
-    return removed
+    return remove_from_address_list(address_list, list_name, wanted_ip) > 0
 
 
 def handle_unblock_action(action: Dict[str, Any]) -> str:
@@ -1112,13 +1160,15 @@ class RouterOSClient:
         return address_list, address_list_v6, resources
 
     def run_with_reconnect(self, operation_name: str, func: Any) -> Any:
-        try:
-            self.heartbeat()
-            return func()
-        except (ssl.SSLError, librouteros.exceptions.ConnectionClosed, socket.timeout, TimeoutError) as exc:
-            log(f"RouterOS API error during {operation_name}: {type(exc).__name__}: {exc}")
-            self.reconnect(f"{operation_name} failed")
-            return func()
+        manager = RouterOsConnectionManager(
+            RouterOsClientConfig(reconnect_sleep_seconds=ROUTER_RECONNECT_SLEEP_SECONDS),
+            heartbeat=self.heartbeat,
+            reconnect=self.reconnect,
+            log=log,
+            sleep=sleep,
+            transient_errors=(ssl.SSLError, librouteros.exceptions.ConnectionClosed, socket.timeout, TimeoutError),
+        )
+        return manager.run_with_reconnect(operation_name, func)
 
 
 def get_router_client() -> RouterOSClient:
@@ -1363,7 +1413,7 @@ def process_single_alert(event: Dict[str, Any], address_list: Any, address_list_
 
     try:
         debug_log(f"Adding to MikroTik list={BLOCK_LIST_NAME}, address={wanted_ip}, timeout={TIMEOUT}")
-        curr_list.add(list=BLOCK_LIST_NAME, address=wanted_ip, comment=comment, timeout=TIMEOUT)
+        add_to_address_list(curr_list, BLOCK_LIST_NAME, wanted_ip, comment, TIMEOUT)
         log(f"BLOCKED: {wanted_ip} - SID:{sid} - Severity:{severity}")
         sendTelegram(event=event, wanted_ip=wanted_ip, src_ip=peer_ip, wanted_port=wanted_port, action_type="BLOCKED")
     except librouteros.exceptions.TrapError as exc:
@@ -1383,7 +1433,7 @@ def update_existing_address(curr_list: Any, wanted_ip: str, comment: str, event:
     for row in rows:
         curr_list.remove(row[".id"])
 
-    curr_list.add(list=BLOCK_LIST_NAME, address=wanted_ip, comment=comment, timeout=TIMEOUT)
+    add_to_address_list(curr_list, BLOCK_LIST_NAME, wanted_ip, comment, TIMEOUT)
     sid = event.get("alert", {}).get("signature_id", "N/A")
     log(f"UPDATED: {wanted_ip} - SID:{sid}")
     sendTelegram(event=event, wanted_ip=wanted_ip, src_ip=peer_ip, wanted_port=wanted_port, action_type="UPDATED")
