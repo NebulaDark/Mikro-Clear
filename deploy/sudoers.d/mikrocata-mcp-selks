@@ -1,0 +1,12 @@
+mcp-selks ALL=(root) NOPASSWD: \
+    /usr/bin/systemctl status mikrocataTZSP0.service --no-pager, \
+    /usr/bin/systemctl status mikrocataTZSP0.service --no-pager --lines=*, \
+    /usr/bin/systemctl restart mikrocataTZSP0.service, \
+    /usr/bin/systemctl daemon-reload, \
+    /usr/bin/journalctl -u mikrocataTZSP0.service -n * --no-pager, \
+    /usr/bin/cp /usr/local/bin/mikrocataTZSP0.py /usr/local/bin/mikrocataTZSP0.py.bak-*, \
+    /usr/bin/install -o root -g root -m 755 /tmp/mikrocataTZSP0.py.codex-candidate /usr/local/bin/mikrocataTZSP0.py, \
+    /usr/bin/install -o root -g root -m 644 /tmp/mikrocataTZSP0-codex.service /etc/systemd/system/mikrocataTZSP0.service, \
+    /usr/bin/systemd-analyze verify /etc/systemd/system/mikrocataTZSP0.service, \
+    /usr/bin/sed -E s/* /etc/mikrocata/mikrocataTZSP0.env, \
+    /usr/bin/tail -n * /opt/SELKS/docker/containers-data/suricata/logs/eve.json

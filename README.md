@@ -25,6 +25,23 @@ python -m unittest discover -s tests
 python -m py_compile src/mikrocata/legacy.py src/mikrocata/alert_logic.py
 ```
 
+## Remote Sudo Setup
+
+MCP deploy tools require a one-time sudoers install on `selks`. The candidate
+policy is stored at:
+
+```text
+deploy/sudoers.d/mikrocata-mcp-selks
+```
+
+Validate and install it on `selks` as a sudo-capable user:
+
+```bash
+sudo install -o root -g root -m 440 /tmp/mikrocata-mcp-selks.sudoers /etc/sudoers.d/mikrocata-mcp-selks
+sudo visudo -cf /etc/sudoers.d/mikrocata-mcp-selks
+sudo -l -U mcp-selks
+```
+
 ## Local Logic Fixes
 
 - When source IP is whitelisted and the destination is selected as the block
