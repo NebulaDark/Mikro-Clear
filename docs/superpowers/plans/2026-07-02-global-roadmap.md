@@ -150,16 +150,16 @@ git --git-dir=.git-local --work-tree=. commit -m "Extract Mikro-Clear configurat
 - Produces: `format_system_message(message: str, event_type: str) -> str`
 - Produces: `send_telegram_message(token, chat_id, text, reply_markup=None, timeout=10) -> bool`
 
-- [ ] Move Telegram message formatting out of `legacy.py`.
-- [ ] Keep existing Telegram unblock module unchanged unless imports need updating.
-- [ ] Verify notification text says `Mikro-Clear` and `#mikroclear`.
-- [ ] Run:
+- [x] Move Telegram message formatting out of `legacy.py`.
+- [x] Keep existing Telegram unblock module unchanged unless imports need updating.
+- [x] Verify notification text says `Mikro-Clear` and `#mikroclear`.
+- [x] Run:
 
 ```bash
 .venv/bin/python -m unittest tests.test_telegram_notify tests.test_telegram_unblock tests.test_rebrand
 ```
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git --git-dir=.git-local --work-tree=. commit -m "Extract Telegram notification handling"

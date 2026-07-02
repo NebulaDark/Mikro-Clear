@@ -93,6 +93,120 @@ except Exception:  # pragma: no cover - production single-file fallback
         )
 
 try:
+    from mikroclear.telegram_notify import (
+        TelegramSendResult,
+        format_alert_message,
+        format_system_message,
+        send_telegram_message,
+    )
+except Exception:  # pragma: no cover - production single-file fallback
+    class TelegramSendResult:
+        def __init__(
+            self,
+            ok: bool,
+            status_code: int = 0,
+            response_text: str = "",
+            retry_after: int = 0,
+        ) -> None:
+            self.ok = ok
+            self.status_code = status_code
+            self.response_text = response_text
+            self.retry_after = retry_after
+
+    def format_alert_message(
+        event: Dict[str, Any],
+        wanted_ip: Any,
+        peer_ip: Any,
+        wanted_port: Any,
+        action_type: str,
+        peer_formatter: Any = None,
+    ) -> str:
+        alert = event.get("alert", {})
+        if not isinstance(alert, dict):
+            alert = {}
+
+        timestamp = event.get("timestamp", "N/A")
+        protocol = event.get("proto", "N/A")
+        in_iface = event.get("in_iface", "N/A")
+
+        try:
+            event_time = dt.strptime(str(timestamp), "%Y-%m-%dT%H:%M:%S.%f%z")
+            formatted_time = event_time.strftime("%d.%m.%Y %H:%M:%S")
+        except Exception:
+            formatted_time = "N/A"
+
+        signature = sanitize_text(alert.get("signature", "N/A"), 150) or "N/A"
+        format_peer = peer_formatter or (lambda ip_text: f"<code>{escape_html_safe(ip_text or 'N/A')}</code>")
+
+        return f"""
+<b>Mikro-Clear Alert - {escape_html_safe(action_type)}</b>
+
+<b>Target IP:</b> <code>{escape_html_safe(wanted_ip or 'N/A')}</code>
+<b>Action:</b> <code>{escape_html_safe(action_type)}</code>
+<b>Severity:</b> <code>{escape_html_safe(alert.get('severity', 'N/A'))}</code>
+<b>Time:</b> <code>{escape_html_safe(formatted_time)}</code>
+
+<b>Network:</b>
+- Source/peer: {format_peer(peer_ip)}
+- Protocol: <code>{escape_html_safe(protocol)}</code>
+- Port: <code>{escape_html_safe(wanted_port or 'N/A')}</code>
+- Interface: <code>{escape_html_safe(in_iface)}</code>
+
+<b>Alert:</b>
+- SID: <code>{escape_html_safe(alert.get('signature_id', 'N/A'))}</code>
+- GID: <code>{escape_html_safe(alert.get('gid', 'N/A'))}</code>
+- Category: <code>{escape_html_safe(alert.get('category', 'N/A'))}</code>
+- Signature: <i>{escape_html_safe(signature)}</i>
+
+#mikroclear #security #alert
+""".strip()
+
+    def format_system_message(message: str, notification_type: str = "SYSTEM") -> str:
+        return f"""
+<b>Mikro-Clear System Notification</b>
+
+<b>Type:</b> <code>{escape_html_safe(notification_type)}</code>
+<b>Time:</b> <code>{dt.now().strftime('%d.%m.%Y %H:%M:%S')}</code>
+<b>Message:</b> <i>{escape_html_safe(message)}</i>
+
+#mikroclear #system
+""".strip()
+
+    def send_telegram_message(
+        token: str,
+        chat_id: str,
+        text: str,
+        reply_markup: Any = None,
+        timeout: int = 10,
+    ) -> TelegramSendResult:
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup if isinstance(reply_markup, str) else ujson.dumps(reply_markup)
+
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=payload,
+            timeout=timeout,
+        )
+        retry_after = 0
+        if response.status_code == 429:
+            try:
+                retry_after = int(response.json().get("parameters", {}).get("retry_after", 0))
+            except Exception:
+                retry_after = 0
+        return TelegramSendResult(
+            ok=response.status_code == 200,
+            status_code=response.status_code,
+            response_text=response.text,
+            retry_after=retry_after,
+        )
+
+try:
     from mikroclear.events import (
         should_process_event as decide_should_process_event,
         validate_event as validate_suricata_event,
@@ -477,12 +591,7 @@ def sendTelegram(
                 f"Action: <code>{escape_html_safe(action_type)}</code>"
             )
 
-        payload: Dict[str, Any] = {
-            "chat_id": TELEGRAM_CHATID,
-            "text": formatted_message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
+        reply_markup = None
 
         if wanted_ip and not is_system and isinstance(event, dict):
             token = None
@@ -501,7 +610,7 @@ def sendTelegram(
                 except Exception as exc:
                     log(f"Could not create Telegram unblock token for {wanted_ip}: {exc}")
 
-            payload["reply_markup"] = ujson.dumps(
+            reply_markup = (
                 build_unblock_keyboard(str(wanted_ip), token)
                 if token
                 else {
@@ -514,25 +623,22 @@ def sendTelegram(
                 }
             )
 
-        response = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data=payload,
+        result = send_telegram_message(
+            TELEGRAM_TOKEN,
+            TELEGRAM_CHATID,
+            formatted_message,
+            reply_markup=reply_markup,
             timeout=TELEGRAM_TIMEOUT,
         )
         last_telegram_sent = time()
 
-        if response.status_code == 200:
+        if result.ok:
             debug_log("Telegram message sent successfully")
             return True
 
-        log(f"Failed to send Telegram message: {response.text}")
-        if response.status_code == 429:
-            retry_after = TELEGRAM_SYSTEM_COOLDOWN_SECONDS
-            try:
-                body = response.json()
-                retry_after = int(body.get("parameters", {}).get("retry_after", retry_after))
-            except Exception:
-                pass
+        log(f"Failed to send Telegram message: {result.response_text}")
+        if result.status_code == 429:
+            retry_after = result.retry_after or TELEGRAM_SYSTEM_COOLDOWN_SECONDS
             set_telegram_lock(retry_after)
             log(f"Telegram flood control active, suppressing Telegram for {retry_after}s")
         return False
@@ -747,56 +853,18 @@ def format_telegram_message_safe(
     wanted_port: Optional[Any],
     action_type: str,
 ) -> str:
-    alert = event.get("alert", {})
-    if not isinstance(alert, dict):
-        alert = {}
-
-    timestamp = event.get("timestamp", "N/A")
-    protocol = event.get("proto", "N/A")
-    in_iface = event.get("in_iface", "N/A")
-
-    try:
-        event_time = dt.strptime(str(timestamp), "%Y-%m-%dT%H:%M:%S.%f%z")
-        formatted_time = event_time.strftime("%d.%m.%Y %H:%M:%S")
-    except Exception:
-        formatted_time = "N/A"
-
-    signature = sanitize_text(alert.get("signature", "N/A"), 150) or "N/A"
-
-    return f"""
-<b>Mikro-Clear Alert - {escape_html_safe(action_type)}</b>
-
-<b>Target IP:</b> <code>{escape_html_safe(wanted_ip or 'N/A')}</code>
-<b>Action:</b> <code>{escape_html_safe(action_type)}</code>
-<b>Severity:</b> <code>{escape_html_safe(alert.get('severity', 'N/A'))}</code>
-<b>Time:</b> <code>{escape_html_safe(formatted_time)}</code>
-
-<b>Network:</b>
-- Source/peer: {format_peer_with_asset(src_ip)}
-- Protocol: <code>{escape_html_safe(protocol)}</code>
-- Port: <code>{escape_html_safe(wanted_port or 'N/A')}</code>
-- Interface: <code>{escape_html_safe(in_iface)}</code>
-
-<b>Alert:</b>
-- SID: <code>{escape_html_safe(alert.get('signature_id', 'N/A'))}</code>
-- GID: <code>{escape_html_safe(alert.get('gid', 'N/A'))}</code>
-- Category: <code>{escape_html_safe(alert.get('category', 'N/A'))}</code>
-- Signature: <i>{escape_html_safe(signature)}</i>
-
-#mikroclear #security #alert
-""".strip()
+    return format_alert_message(
+        event,
+        wanted_ip,
+        src_ip,
+        wanted_port,
+        action_type,
+        peer_formatter=format_peer_with_asset,
+    )
 
 
 def send_system_notification(message: str, notification_type: str = "SYSTEM") -> bool:
-    formatted_message = f"""
-<b>Mikro-Clear System Notification</b>
-
-<b>Type:</b> <code>{escape_html_safe(notification_type)}</code>
-<b>Time:</b> <code>{dt.now().strftime('%d.%m.%Y %H:%M:%S')}</code>
-<b>Message:</b> <i>{escape_html_safe(message)}</i>
-
-#mikroclear #system
-""".strip()
+    formatted_message = format_system_message(message, notification_type)
     return sendTelegram(message=formatted_message, is_system=True)
 
 
