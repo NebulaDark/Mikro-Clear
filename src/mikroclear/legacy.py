@@ -111,6 +111,45 @@ except Exception:  # pragma: no cover - production single-file fallback
         return mask_telegram_bot_token(value)
 
 try:
+    from mikroclear.telegram_polling import TelegramPollingBackoff
+except Exception:  # pragma: no cover - production single-file fallback
+    class TelegramPollingBackoff:
+        def __init__(
+            self,
+            base_seconds: int = 30,
+            max_seconds: int = 300,
+            log_every_seconds: int = 120,
+        ) -> None:
+            self.base_seconds = base_seconds
+            self.max_seconds = max_seconds
+            self.log_every_seconds = log_every_seconds
+            self.failure_count = 0
+            self.next_poll_at = 0.0
+            self.last_logged_at = 0.0
+            self.last_error_key = ""
+
+        def should_poll(self, now: float) -> bool:
+            return now >= self.next_poll_at
+
+        def record_success(self, now: float) -> None:
+            self.failure_count = 0
+            self.next_poll_at = now
+            self.last_logged_at = 0.0
+            self.last_error_key = ""
+
+        def record_failure(self, now: float, error_key: str) -> Tuple[bool, int]:
+            delay = min(self.max_seconds, self.base_seconds * (2 ** self.failure_count))
+            self.failure_count += 1
+            self.next_poll_at = now + delay
+
+            should_log = error_key != self.last_error_key or now - self.last_logged_at >= self.log_every_seconds
+            if should_log:
+                self.last_logged_at = now
+                self.last_error_key = error_key
+
+            return should_log, delay
+
+try:
     from mikroclear.telegram_notify import (
         TelegramSendResult,
         format_alert_message,
@@ -517,6 +556,11 @@ last_save_time = 0
 last_telegram_sent = 0.0
 last_telegram_updates_check = 0.0
 telegram_update_offset = 0
+telegram_polling_backoff = TelegramPollingBackoff(
+    base_seconds=max(TELEGRAM_UPDATES_INTERVAL_SECONDS, 30),
+    max_seconds=300,
+    log_every_seconds=120,
+)
 shutdown_requested = False
 router_client: Optional["RouterOSClient"] = None
 
@@ -955,6 +999,12 @@ def answer_telegram_callback(callback_id: str, text: str, alert: bool = False) -
         log(f"Error answering Telegram callback: {sanitize_exception_text(exc, TELEGRAM_TOKEN)}")
 
 
+def record_telegram_polling_failure(error_text: str) -> None:
+    should_log, delay = telegram_polling_backoff.record_failure(time(), error_text)
+    if should_log:
+        log(f"Error processing Telegram updates; retry in {delay}s: {error_text}")
+
+
 def remove_address_from_list(address_list: Any, wanted_ip: str, list_name: str) -> bool:
     return remove_from_address_list(address_list, list_name, wanted_ip) > 0
 
@@ -988,6 +1038,10 @@ def process_telegram_updates() -> None:
     if not ENABLE_TELEGRAM or not TELEGRAM_UNBLOCK_ENABLE or not TELEGRAM_TOKEN or not TELEGRAM_CHATID:
         return
 
+    now = time()
+    if not telegram_polling_backoff.should_poll(now):
+        return
+
     try:
         response = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
@@ -995,41 +1049,48 @@ def process_telegram_updates() -> None:
             timeout=TELEGRAM_TIMEOUT,
         )
         if response.status_code != 200:
-            debug_log(f"Telegram getUpdates failed: {response.status_code} {response.text[:120]}")
+            error_text = mask_known_secret(
+                f"HTTP {response.status_code}: {response.text[:120]}",
+                TELEGRAM_TOKEN,
+            )
+            record_telegram_polling_failure(error_text)
             return
 
         body = response.json()
         if not body.get("ok"):
-            debug_log(f"Telegram getUpdates not ok: {body}")
+            error_text = mask_known_secret(f"not ok: {str(body)[:120]}", TELEGRAM_TOKEN)
+            record_telegram_polling_failure(error_text)
             return
-
-        for update in body.get("result", []):
-            update_id = int(update.get("update_id", 0))
-            telegram_update_offset = max(telegram_update_offset, update_id + 1)
-            callback = update.get("callback_query") or {}
-            callback_id = str(callback.get("id", ""))
-            message = callback.get("message") or {}
-            chat = message.get("chat") or {}
-            chat_id = str(chat.get("id", ""))
-            if chat_id != str(TELEGRAM_CHATID):
-                answer_telegram_callback(callback_id, "Unauthorized chat", True)
-                log(f"Rejected Telegram callback from unauthorized chat {chat_id}")
-                continue
-
-            token = parse_unblock_callback(callback.get("data"))
-            if not token:
-                continue
-
-            action = consume_unblock_token(Path(TELEGRAM_UNBLOCK_STATE_FILE), token, now=int(time()))
-            if not action:
-                answer_telegram_callback(callback_id, "Unblock request expired or already used", True)
-                continue
-
-            result = handle_unblock_action(action)
-            answer_telegram_callback(callback_id, result)
-            send_system_notification(result, "UNBLOCK")
+        telegram_polling_backoff.record_success(time())
     except Exception as exc:
-        log(f"Error processing Telegram updates: {sanitize_exception_text(exc, TELEGRAM_TOKEN)}")
+        record_telegram_polling_failure(sanitize_exception_text(exc, TELEGRAM_TOKEN))
+        return
+
+    for update in body.get("result", []):
+        update_id = int(update.get("update_id", 0))
+        telegram_update_offset = max(telegram_update_offset, update_id + 1)
+        callback = update.get("callback_query") or {}
+        callback_id = str(callback.get("id", ""))
+        message = callback.get("message") or {}
+        chat = message.get("chat") or {}
+        chat_id = str(chat.get("id", ""))
+        if chat_id != str(TELEGRAM_CHATID):
+            answer_telegram_callback(callback_id, "Unauthorized chat", True)
+            log(f"Rejected Telegram callback from unauthorized chat {chat_id}")
+            continue
+
+        token = parse_unblock_callback(callback.get("data"))
+        if not token:
+            continue
+
+        action = consume_unblock_token(Path(TELEGRAM_UNBLOCK_STATE_FILE), token, now=int(time()))
+        if not action:
+            answer_telegram_callback(callback_id, "Unblock request expired or already used", True)
+            continue
+
+        result = handle_unblock_action(action)
+        answer_telegram_callback(callback_id, result)
+        send_system_notification(result, "UNBLOCK")
 
 
 def make_ssl_context() -> ssl.SSLContext:

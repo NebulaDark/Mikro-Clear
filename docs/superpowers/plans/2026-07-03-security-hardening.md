@@ -203,7 +203,7 @@ git --git-dir=.git-local --work-tree=. commit -m "Mask secrets in Telegram logs"
 - Produces: `record_success(now: float) -> None`
 - Produces: `record_failure(now: float, error_key: str) -> tuple[bool, int]`
 
-- [ ] **Step 1: Write failing backoff tests**
+- [x] **Step 1: Write failing backoff tests**
 
 Add to `tests/test_telegram_polling.py`:
 
@@ -238,7 +238,7 @@ Run:
 
 Expected: fail because module does not exist.
 
-- [ ] **Step 2: Implement module**
+- [x] **Step 2: Implement module**
 
 Create `src/mikroclear/telegram_polling.py`:
 
@@ -276,7 +276,7 @@ class TelegramPollingBackoff:
         return should_log, delay
 ```
 
-- [ ] **Step 3: Wire into `process_telegram_updates`**
+- [x] **Step 3: Wire into `process_telegram_updates`**
 
 Add globals in `legacy.py`:
 
@@ -311,7 +311,7 @@ if should_log:
     log(f"Error processing Telegram updates; retry in {delay}s: {safe_error}")
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 ```bash
 .venv/bin/python -m unittest tests.test_telegram_polling tests.test_telegram_unblock tests.test_rebrand
@@ -319,7 +319,18 @@ if should_log:
 
 Expected: OK.
 
-- [ ] **Step 5: Deploy and verify lower noise**
+- [x] **Step 5: Deploy and verify lower noise**
+
+Verified on SELKS 2026-07-03 after deploying `/usr/local/bin/mikroclear.py.bak-20260703-105634`:
+
+```text
+CANDIDATE_PY_OK
+INSTALLED_PY_OK
+mikroclear.service: active/enabled
+mikrocataTZSP0.service: inactive/disabled
+systemctl status window after restart: raw token patterns=0, Traceback/NameError=0, retry logs=3
+note: sudo journalctl is not currently available to the deploy user outside allowed commands; post-deploy log evidence came from sudo systemctl status --lines=80
+```
 
 After deploy, watch logs for 10 minutes:
 
