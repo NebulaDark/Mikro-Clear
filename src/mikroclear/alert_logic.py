@@ -46,9 +46,6 @@ def is_ip_in_whitelist(ip_to_check: Any, whitelist: Iterable[str]) -> bool:
                     return True
             except ValueError:
                 continue
-        elif not any(ch not in "0123456789abcdefABCDEF:." for ch in item):
-            if ip_to_check.startswith(item):
-                return True
 
     return False
 

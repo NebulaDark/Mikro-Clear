@@ -2,6 +2,7 @@ import unittest
 
 from mikroclear.alert_logic import (
     deduplicate_alerts_by_target,
+    is_ip_in_whitelist,
     legacy_decide_alert_target,
     legacy_deduplicate_by_src_ip,
     target_aware_deduplicate,
@@ -21,6 +22,21 @@ def event(src_ip, dest_ip, src_port=1111, dest_port=2222):
 
 
 class AlertTargetDecisionTests(unittest.TestCase):
+    def test_exact_whitelist_ip_does_not_match_string_prefix(self):
+        self.assertTrue(is_ip_in_whitelist("10.0.0.1", ("10.0.0.1",)))
+        self.assertFalse(is_ip_in_whitelist("10.0.0.10", ("10.0.0.1",)))
+        self.assertTrue(is_ip_in_whitelist("10.0.0.10", ("10.0.0.0/24",)))
+
+    def test_prefix_only_source_match_does_not_flip_block_target(self):
+        decision = legacy_decide_alert_target(
+            event("10.0.0.10", "203.0.113.50", dest_port=443),
+            ("10.0.0.1",),
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.wanted_ip, "10.0.0.10")
+        self.assertEqual(decision.peer_ip, "203.0.113.50")
+
     def test_external_source_is_block_target_and_uses_dest_port(self):
         decision = legacy_decide_alert_target(
             event("8.8.8.8", "192.168.10.15", src_port=53123, dest_port=443),

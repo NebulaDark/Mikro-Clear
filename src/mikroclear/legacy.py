@@ -668,8 +668,6 @@ def is_ip_in_whitelist(ip_to_check: Any, whitelist: Iterable[str]) -> bool:
             except ValueError:
                 log(f"Warning: invalid CIDR in whitelist: {item}")
             continue
-        if not re.search(r"[^0-9a-fA-F:.]", item) and ip_to_check.startswith(item):
-            return True
     return False
 
 
