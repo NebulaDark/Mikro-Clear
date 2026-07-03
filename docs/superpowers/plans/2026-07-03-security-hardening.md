@@ -31,6 +31,16 @@
 
 ### Evidence Collected
 
+- Codex Security plugin is installed and active:
+
+```text
+plugin: codex-security
+version: 0.1.10
+manifest: /home/mgm/.codex/plugins/cache/openai-curated-remote/codex-security/0.1.10/.codex-plugin/plugin.json
+active MCP namespace: mcp__codex_security
+skills: security-scan, security-diff-scan, deep-security-scan, threat-model, validation, fix-finding, track-findings
+```
+
 - `mikroclear.service` is active/running for 12h+.
 - `journalctl` showed repeated Telegram `ConnectionError` and `ReadTimeout`.
 - Telegram request exceptions included `/bot<TOKEN>/getUpdates` in journal output before masking.
