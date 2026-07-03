@@ -404,7 +404,7 @@ systemctl status window after restart: raw token patterns=0, Traceback/NameError
 note: sudo journalctl still requires a password for the mcp-selks SSH user, so full journal re-read must be done from an operator sudo session.
 ```
 
-- [ ] **Step 4: Decide journal retention**
+- [x] **Step 4: Decide journal retention**
 
 If policy allows removing logs containing the old token:
 
@@ -414,6 +414,23 @@ sudo journalctl --vacuum-time=1s
 ```
 
 If logs must be retained, record that the old token was revoked and no longer grants access.
+
+Operator selected Option B on 2026-07-03 and reported running:
+
+```bash
+sudo journalctl --rotate
+sudo journalctl --vacuum-time=1s
+```
+
+Post-cleanup verification from the deploy SSH user:
+
+```text
+mikroclear.service: active/enabled
+mikrocataTZSP0.service: inactive/disabled
+systemctl status notice: journal has been rotated since unit was started
+systemctl status window after cleanup: raw token patterns=0, Traceback/NameError=0
+note: sudo journalctl still requires a password for the mcp-selks SSH user, so full post-vacuum journal re-read was not available from this session.
+```
 
 - [x] **Step 5: Commit runbook update**
 
