@@ -320,6 +320,43 @@ except Exception:  # pragma: no cover - production single-file fallback
         address_list.add(list=list_name, address=address, comment=comment, timeout=timeout)
 
 try:
+    from mikroclear.routeros_tls import build_routeros_ssl_context, make_routeros_ssl_wrapper
+except Exception:  # pragma: no cover - production single-file fallback
+    def build_routeros_ssl_context(
+        *,
+        cafile: str,
+        allow_self_signed: bool,
+        context_factory: Any = None,
+    ) -> ssl.SSLContext:
+        context_factory = context_factory or (lambda: ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+        ctx = context_factory()
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+
+        if allow_self_signed:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        else:
+            ctx.load_verify_locations(cafile=cafile)
+            ctx.check_hostname = True
+            ctx.verify_mode = ssl.CERT_REQUIRED
+
+        try:
+            ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+        except Exception:
+            pass
+
+        ctx.options |= ssl.OP_NO_COMPRESSION
+        return ctx
+
+    def make_routeros_ssl_wrapper(ctx: Any, server_hostname: str) -> Any:
+        def ssl_wrapper(sock: Any, **kwargs: Any) -> Any:
+            kwargs.setdefault("server_hostname", server_hostname)
+            return ctx.wrap_socket(sock, **kwargs)
+
+        return ssl_wrapper
+
+try:
     from mikroclear.events import (
         should_process_event as decide_should_process_event,
         validate_event as validate_suricata_event,
@@ -472,6 +509,7 @@ VERSION = "3.1.1-TZSP0-ASSET-RESOLVER"
 USERNAME = env_str("MIKROCATA_ROUTER_USERNAME", "mikrocata2selks")
 PASSWORD = env_str("MIKROCATA_ROUTER_PASSWORD", "")
 ROUTER_IP = env_str("MIKROCATA_ROUTER_IP", "192.168.10.1")
+ROUTER_TLS_SERVER_NAME = env_str("MIKROCATA_ROUTER_TLS_SERVER_NAME", ROUTER_IP)
 USE_SSL = env_bool("MIKROCATA_USE_SSL", True)
 PORT = env_int("MIKROCATA_ROUTER_PORT", 8729 if USE_SSL else 8728)
 ALLOW_SELF_SIGNED_CERTS = env_bool("MIKROCATA_ALLOW_SELF_SIGNED_CERTS", False)
@@ -1117,27 +1155,9 @@ def process_telegram_updates() -> None:
 
 
 def make_ssl_context() -> ssl.SSLContext:
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-
-    if ALLOW_SELF_SIGNED_CERTS:
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    else:
-        if not os.path.isfile(CA_FILE):
-            raise FileNotFoundError(f"CA file not found: {CA_FILE}")
-        ctx.load_verify_locations(cafile=CA_FILE)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_REQUIRED
-
-    try:
-        ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
-    except Exception:
-        pass
-
-    ctx.options |= ssl.OP_NO_COMPRESSION
-    return ctx
+    if not ALLOW_SELF_SIGNED_CERTS and not os.path.isfile(CA_FILE):
+        raise FileNotFoundError(f"CA file not found: {CA_FILE}")
+    return build_routeros_ssl_context(cafile=CA_FILE, allow_self_signed=ALLOW_SELF_SIGNED_CERTS)
 
 
 class RouterOSClient:
@@ -1172,7 +1192,7 @@ class RouterOSClient:
 
         if USE_SSL:
             ctx = make_ssl_context()
-            kwargs["ssl_wrapper"] = ctx.wrap_socket
+            kwargs["ssl_wrapper"] = make_routeros_ssl_wrapper(ctx, ROUTER_TLS_SERVER_NAME or ROUTER_IP)
 
         return connect(**kwargs)
 

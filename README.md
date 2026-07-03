@@ -69,6 +69,14 @@ Keep the legacy file only as a fallback during migration. The active
 MIKROCLEAR_STATE_DIR=/var/lib/mikroclear
 ```
 
+RouterOS API-SSL should verify endpoint identity. The RouterOS certificate used
+by the current SELKS deployment contains `IP Address:192.168.10.1` and
+`DNS:r1.21port.ru`, so the default TLS server name can stay:
+
+```text
+MIKROCLEAR_ROUTER_TLS_SERVER_NAME=192.168.10.1
+```
+
 ## Remote Sudo Setup
 
 MCP deploy tools require a one-time sudoers install on `selks`. The candidate

@@ -159,3 +159,32 @@ sudo systemctl restart mikroclear.service
 sudo systemctl status mikroclear.service --no-pager --lines=30
 sudo journalctl -u mikroclear.service -n 100 --no-pager | grep -Ei 'permission denied|failed|traceback' || true
 ```
+
+## RouterOS TLS Endpoint Identity
+
+The current RouterOS API-SSL certificate observed from SELKS contains:
+
+```text
+subject=CN = 192.168.10.1
+X509v3 Subject Alternative Name:
+    IP Address:192.168.10.1, DNS:r1.21port.ru
+```
+
+Keep the configured TLS server name aligned with one SAN entry:
+
+```text
+MIKROCLEAR_ROUTER_TLS_SERVER_NAME=192.168.10.1
+```
+
+Before changing RouterOS certificates, verify the new certificate:
+
+```bash
+printf '' \
+  | openssl s_client -connect 192.168.10.1:8729 -servername 192.168.10.1 -showcerts 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -ext subjectAltName -fingerprint -sha256
+```
+
+The certificate must chain to `MIKROCLEAR_CA_FILE` and include either the
+configured IP address or DNS name in SAN. Do not set
+`MIKROCLEAR_ALLOW_SELF_SIGNED_CERTS=true` except as an explicit temporary
+break-glass rollback.
