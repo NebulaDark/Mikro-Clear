@@ -69,7 +69,7 @@ class McpServerSshTests(TestCase):
         self.assertEqual(result["diff"], "")
         self.assertEqual(run_ssh.call_args.args[0], f"cat {server.REMOTE_SCRIPT}")
 
-    def test_upload_candidate_streams_local_script_to_tmp(self):
+    def test_upload_candidate_streams_local_script_to_private_staging_dir(self):
         server = load_server()
 
         with patch.object(server, "run_ssh") as run_ssh:
@@ -77,7 +77,12 @@ class McpServerSshTests(TestCase):
             result = server.upload_candidate_script()
 
         self.assertEqual(result, "OK")
-        self.assertIn("cat > /tmp/mikroclear.py.codex-candidate", run_ssh.call_args.args[0])
+        self.assertEqual(server.CANDIDATE_DIR, "/var/tmp/mikroclear-deploy")
+        self.assertEqual(server.CANDIDATE_SCRIPT, "/var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate")
+        self.assertIn("/usr/bin/install -d -m 700 /var/tmp/mikroclear-deploy", run_ssh.call_args.args[0])
+        self.assertIn("cat > /var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate", run_ssh.call_args.args[0])
+        self.assertIn("chmod 600 /var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate", run_ssh.call_args.args[0])
+        self.assertNotIn("cat > /tmp/", run_ssh.call_args.args[0])
         self.assertEqual(run_ssh.call_args.kwargs["stdin"], server.LOCAL_SCRIPT.read_text(encoding="utf-8"))
 
     def test_deploy_candidate_requires_confirmation(self):
@@ -105,7 +110,7 @@ class McpServerSshTests(TestCase):
         self.assertIn("sudo -n install -o root -g root -m 755", command)
         self.assertIn("compile(open(", command)
 
-    def test_upload_unit_candidate_streams_local_unit_to_tmp(self):
+    def test_upload_unit_candidate_streams_local_unit_to_private_staging_dir(self):
         server = load_server()
 
         with patch.object(server, "run_ssh") as run_ssh:
@@ -113,8 +118,42 @@ class McpServerSshTests(TestCase):
             result = server.upload_unit_candidate()
 
         self.assertEqual(result, "unit-ok")
-        self.assertIn("cat > /tmp/mikroclear-codex.service", run_ssh.call_args.args[0])
+        self.assertEqual(server.CANDIDATE_UNIT, "/var/tmp/mikroclear-deploy/mikroclear-codex.service")
+        self.assertIn("/usr/bin/install -d -m 700 /var/tmp/mikroclear-deploy", run_ssh.call_args.args[0])
+        self.assertIn("cat > /var/tmp/mikroclear-deploy/mikroclear-codex.service", run_ssh.call_args.args[0])
+        self.assertIn("chmod 600 /var/tmp/mikroclear-deploy/mikroclear-codex.service", run_ssh.call_args.args[0])
+        self.assertNotIn("cat > /tmp/", run_ssh.call_args.args[0])
         self.assertEqual(run_ssh.call_args.kwargs["stdin"], server.LOCAL_UNIT.read_text(encoding="utf-8"))
+
+    def test_log_tail_uses_fixed_sudoers_sizes(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            server.tail_mikroclear_logs(42)
+            command_100 = run_ssh.call_args.args[0]
+            server.tail_mikroclear_logs(250)
+            command_300 = run_ssh.call_args.args[0]
+            server.tail_mikroclear_logs(999)
+            command_500 = run_ssh.call_args.args[0]
+
+        self.assertEqual(command_100, "sudo -n journalctl -u mikroclear.service -n 100 --no-pager")
+        self.assertEqual(command_300, "sudo -n journalctl -u mikroclear.service -n 300 --no-pager")
+        self.assertEqual(command_500, "sudo -n journalctl -u mikroclear.service -n 500 --no-pager")
+
+    def test_suricata_tail_uses_fixed_sudoers_sizes(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            server.tail_suricata_eve(7)
+            command_20 = run_ssh.call_args.args[0]
+            server.tail_suricata_eve(40)
+            command_50 = run_ssh.call_args.args[0]
+            server.tail_suricata_eve(99)
+            command_100 = run_ssh.call_args.args[0]
+
+        self.assertIn("sudo -n tail -n 20 ", command_20)
+        self.assertIn("sudo -n tail -n 50 ", command_50)
+        self.assertIn("sudo -n tail -n 100 ", command_100)
 
     def test_verify_systemd_unit_uses_sudo_systemd_analyze(self):
         server = load_server()

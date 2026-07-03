@@ -23,9 +23,20 @@ LOCAL_SCRIPT = REPO_ROOT / "src" / "mikroclear" / "legacy.py"
 LOCAL_UNIT = REPO_ROOT / "systemd" / "mikroclear.service"
 REMOTE_SCRIPT = "/usr/local/bin/mikroclear.py"
 LEGACY_REMOTE_SCRIPT = "/usr/local/bin/mikrocataTZSP0.py"
-CANDIDATE_SCRIPT = "/tmp/mikroclear.py.codex-candidate"
+CANDIDATE_DIR = "/var/tmp/mikroclear-deploy"
+CANDIDATE_SCRIPT = f"{CANDIDATE_DIR}/mikroclear.py.codex-candidate"
 REMOTE_UNIT = "/etc/systemd/system/mikroclear.service"
-CANDIDATE_UNIT = "/tmp/mikroclear-codex.service"
+CANDIDATE_UNIT = f"{CANDIDATE_DIR}/mikroclear-codex.service"
+MASK_ENV_HELPER = "/usr/local/sbin/mikroclear-mask-env"
+SURICATA_EVE_JSON = "/opt/SELKS/docker/containers-data/suricata/logs/eve.json"
+
+
+def _fixed_size(value: int, allowed: tuple[int, ...]) -> int:
+    requested = int(value)
+    for size in allowed:
+        if requested <= size:
+            return size
+    return allowed[-1]
 
 
 def run_ssh(command: str, timeout: int = 30, stdin: str | None = None) -> str:
@@ -63,8 +74,8 @@ def restart_mikroclear(confirm: bool = False) -> str:
     if not confirm:
         return "Refusing to restart service without confirm=True."
     return run_ssh(
-        f"sudo -n systemctl restart {SERVICE_NAME} && "
-        f"sudo -n systemctl status {SERVICE_NAME} --no-pager",
+        f"sudo -n /usr/bin/systemctl restart {SERVICE_NAME} && "
+        f"sudo -n /usr/bin/systemctl status {SERVICE_NAME} --no-pager",
         40,
     )
 
@@ -76,7 +87,7 @@ def restart_mikrocata(confirm: bool = False) -> str:
 
 @mcp.tool()
 def tail_mikroclear_logs(lines: int = 100) -> str:
-    lines = max(10, min(int(lines), 500))
+    lines = _fixed_size(lines, (100, 300, 500))
     return run_ssh(f"sudo -n journalctl -u {SERVICE_NAME} -n {lines} --no-pager", 30)
 
 
@@ -105,9 +116,9 @@ def check_mikrocata_syntax() -> str:
 def read_mikroclear_env() -> str:
     return run_ssh(
         r"if [ -f /etc/mikroclear/mikroclear.env ]; then "
-        r"sudo -n sed -E 's/(TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|COOKIE)=.*/\1=***MASKED***/Ig' /etc/mikroclear/mikroclear.env; "
+        rf"sudo -n {MASK_ENV_HELPER} /etc/mikroclear/mikroclear.env; "
         r"else "
-        r"sudo -n sed -E 's/(TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|COOKIE)=.*/\1=***MASKED***/Ig' /etc/mikrocata/mikrocataTZSP0.env; "
+        rf"sudo -n {MASK_ENV_HELPER} /etc/mikrocata/mikrocataTZSP0.env; "
         r"fi",
         20,
     )
@@ -120,10 +131,9 @@ def read_mikrocata_env() -> str:
 
 @mcp.tool()
 def tail_suricata_eve(lines: int = 20) -> str:
-    lines = max(5, min(int(lines), 100))
+    lines = _fixed_size(lines, (20, 50, 100))
     return run_ssh(
-        f"sudo -n tail -n {lines} "
-        "/opt/SELKS/docker/containers-data/suricata/logs/eve.json",
+        f"sudo -n tail -n {lines} {SURICATA_EVE_JSON}",
         30,
     )
 
@@ -148,7 +158,9 @@ def compare_production_script() -> dict[str, Any]:
 def upload_candidate_script() -> str:
     local_text = LOCAL_SCRIPT.read_text(encoding="utf-8")
     return run_ssh(
+        f"/usr/bin/install -d -m 700 {CANDIDATE_DIR} && "
         f"cat > {CANDIDATE_SCRIPT} && "
+        f"chmod 600 {CANDIDATE_SCRIPT} && "
         f"/opt/mikrocata-venv/bin/python -c \"path='{CANDIDATE_SCRIPT}'; "
         "compile(open(path, encoding='utf-8').read(), path, 'exec'); print('OK')\" && "
         f"stat -c '%U:%G %a %s %y %n' {CANDIDATE_SCRIPT}",
@@ -183,7 +195,11 @@ def deploy_candidate_script(confirm: bool = False) -> str:
 def upload_unit_candidate() -> str:
     unit_text = LOCAL_UNIT.read_text(encoding="utf-8")
     return run_ssh(
-        f"cat > {CANDIDATE_UNIT} && /usr/bin/systemd-analyze verify {CANDIDATE_UNIT}",
+        f"/usr/bin/install -d -m 700 {CANDIDATE_DIR} && "
+        f"cat > {CANDIDATE_UNIT} && "
+        f"chmod 600 {CANDIDATE_UNIT} && "
+        f"stat -c '%U:%G %a %s %y %n' {CANDIDATE_UNIT} && "
+        f"/usr/bin/systemd-analyze verify {CANDIDATE_UNIT}",
         30,
         stdin=unit_text,
     )

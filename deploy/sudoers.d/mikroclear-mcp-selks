@@ -1,24 +1,20 @@
 mcp-selks ALL=(root) NOPASSWD: \
     /usr/bin/systemctl status mikroclear.service --no-pager, \
-    /usr/bin/systemctl status mikroclear.service --no-pager --lines=*, \
+    /usr/bin/systemctl status mikroclear.service --no-pager --lines=20, \
     /usr/bin/systemctl enable mikroclear.service, \
     /usr/bin/systemctl restart mikroclear.service, \
-    /usr/bin/journalctl -u mikroclear.service -n * --no-pager, \
+    /usr/bin/journalctl -u mikroclear.service -n 100 --no-pager, \
+    /usr/bin/journalctl -u mikroclear.service -n 300 --no-pager, \
+    /usr/bin/journalctl -u mikroclear.service -n 500 --no-pager, \
     /usr/bin/cp /usr/local/bin/mikroclear.py /usr/local/bin/mikroclear.py.bak-*, \
-    /usr/bin/install -o root -g root -m 755 /tmp/mikroclear.py.codex-candidate /usr/local/bin/mikroclear.py, \
-    /usr/bin/install -o root -g root -m 644 /tmp/mikroclear-codex.service /etc/systemd/system/mikroclear.service, \
+    /usr/bin/install -o root -g root -m 755 /var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate /usr/local/bin/mikroclear.py, \
+    /usr/bin/install -o root -g root -m 644 /var/tmp/mikroclear-deploy/mikroclear-codex.service /etc/systemd/system/mikroclear.service, \
     /usr/bin/systemd-analyze verify /etc/systemd/system/mikroclear.service, \
-    /usr/bin/sed -E s/* /etc/mikroclear/mikroclear.env, \
-    /usr/bin/systemctl status mikrocataTZSP0.service --no-pager, \
-    /usr/bin/systemctl status mikrocataTZSP0.service --no-pager --lines=*, \
+    /usr/local/sbin/mikroclear-mask-env /etc/mikroclear/mikroclear.env, \
+    /usr/local/sbin/mikroclear-mask-env /etc/mikrocata/mikrocataTZSP0.env, \
     /usr/bin/systemctl stop mikrocataTZSP0.service, \
     /usr/bin/systemctl disable mikrocataTZSP0.service, \
-    /usr/bin/systemctl restart mikrocataTZSP0.service, \
     /usr/bin/systemctl daemon-reload, \
-    /usr/bin/journalctl -u mikrocataTZSP0.service -n * --no-pager, \
-    /usr/bin/cp /usr/local/bin/mikrocataTZSP0.py /usr/local/bin/mikrocataTZSP0.py.bak-*, \
-    /usr/bin/install -o root -g root -m 755 /tmp/mikrocataTZSP0.py.codex-candidate /usr/local/bin/mikrocataTZSP0.py, \
-    /usr/bin/install -o root -g root -m 644 /tmp/mikrocataTZSP0-codex.service /etc/systemd/system/mikrocataTZSP0.service, \
-    /usr/bin/systemd-analyze verify /etc/systemd/system/mikrocataTZSP0.service, \
-    /usr/bin/sed -E s/* /etc/mikrocata/mikrocataTZSP0.env, \
-    /usr/bin/tail -n * /opt/SELKS/docker/containers-data/suricata/logs/eve.json
+    /usr/bin/tail -n 20 /opt/SELKS/docker/containers-data/suricata/logs/eve.json, \
+    /usr/bin/tail -n 50 /opt/SELKS/docker/containers-data/suricata/logs/eve.json, \
+    /usr/bin/tail -n 100 /opt/SELKS/docker/containers-data/suricata/logs/eve.json

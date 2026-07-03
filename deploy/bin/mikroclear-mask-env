@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+import re
+import sys
+from pathlib import Path
+
+
+ALLOWED_PATHS = {
+    "/etc/mikroclear/mikroclear.env",
+    "/etc/mikrocata/mikrocataTZSP0.env",
+}
+SECRET_RE = re.compile(r"^([^#=\s]*(?:TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|COOKIE)[^#=\s]*)=(.*)$", re.IGNORECASE)
+
+
+def mask_line(line: str) -> str:
+    match = SECRET_RE.match(line.rstrip("\n"))
+    if not match:
+        return line
+    return f"{match.group(1)}=***MASKED***\n"
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2 or argv[1] not in ALLOWED_PATHS:
+        print("usage: mikroclear-mask-env <allowed-env-path>", file=sys.stderr)
+        return 2
+
+    path = Path(argv[1])
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            sys.stdout.write(mask_line(line))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

@@ -75,9 +75,16 @@ deploy/sudoers.d/mikroclear-mcp-selks
 Validate and install it on `selks` as a sudo-capable user:
 
 ```bash
+sudo install -o root -g root -m 755 /tmp/mikroclear-mask-env /usr/local/sbin/mikroclear-mask-env
 sudo install -o root -g root -m 440 /tmp/mikroclear-mcp-selks.sudoers /etc/sudoers.d/mikroclear-mcp-selks
 sudo visudo -cf /etc/sudoers.d/mikroclear-mcp-selks
 sudo -l -U mcp-selks
+```
+
+The helper source is stored at:
+
+```text
+deploy/bin/mikroclear-mask-env
 ```
 
 ## MCP Deploy Workflow
