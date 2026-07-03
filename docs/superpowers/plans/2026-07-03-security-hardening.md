@@ -340,12 +340,14 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo -n 
 
 Expected: repeated Telegram outage logs appear with backoff delay, not every loop.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add src/mikroclear/telegram_polling.py src/mikroclear/legacy.py tests/test_telegram_polling.py
 git --git-dir=.git-local --work-tree=. commit -m "Add Telegram polling backoff"
 ```
+
+Committed as `26d7b22 Add Telegram polling backoff`.
 
 ---
 
@@ -368,6 +370,8 @@ BotFather -> /mybots -> select bot -> API Token -> Revoke current token -> Gener
 ```
 
 Do not paste the token in chat or terminal output.
+
+Documentation prepared in `docs/runbook.md`; operator rotation remains pending.
 
 - [ ] **Step 2: Update SELKS env without exposing token**
 
@@ -402,7 +406,7 @@ sudo journalctl --vacuum-time=1s
 
 If logs must be retained, record that the old token was revoked and no longer grants access.
 
-- [ ] **Step 5: Commit runbook update**
+- [x] **Step 5: Commit runbook update**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add docs/runbook.md README.md

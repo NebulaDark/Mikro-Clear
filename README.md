@@ -25,6 +25,22 @@ python -m unittest discover -s tests
 python -m py_compile src/mikroclear/legacy.py src/mikroclear/alert_logic.py
 ```
 
+## Operations
+
+The SELKS operations runbook is stored at:
+
+```text
+docs/runbook.md
+```
+
+Use the Telegram token rotation procedure in the runbook after any suspected
+Bot API token exposure. Do not paste live tokens into chat, logs, commits, or
+issue trackers. Mask Telegram Bot API URLs before sharing service output:
+
+```bash
+sed -E 's#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g'
+```
+
 ## Remote Sudo Setup
 
 MCP deploy tools require a one-time sudoers install on `selks`. The candidate
