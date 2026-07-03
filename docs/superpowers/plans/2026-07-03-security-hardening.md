@@ -495,7 +495,7 @@ git --git-dir=.git-local --work-tree=. commit -m "Document Telegram token rotati
 - Produces: state directory mode `0700`
 - Produces: token state file mode `0600`
 
-- [ ] **Step 1: Write failing permission tests**
+- [x] **Step 1: Write failing permission tests**
 
 Add to `tests/test_runtime_permissions.py`:
 
@@ -517,7 +517,7 @@ class RuntimePermissionTests(TestCase):
             self.assertEqual(oct(path.stat().st_mode & 0o777), "0o600")
 ```
 
-- [ ] **Step 2: Implement permission helper**
+- [x] **Step 2: Implement permission helper**
 
 In `src/mikroclear/telegram_unblock.py`:
 
@@ -534,11 +534,26 @@ Call this before loading/writing token state.
 
 - [ ] **Step 3: Apply remote chmod immediately after deploy**
 
+Status 2026-07-03: local code is implemented and committed as `e77bb10 Restrict runtime state permissions`.
+Code was deployed to `/usr/local/bin/mikroclear.py` with backup
+`/usr/local/bin/mikroclear.py.bak-20260703-231945`. After restart,
+`/var/lib/mikrocata` changed from `755` to `700`. File-level mode verification
+inside that directory still requires sudo because the deploy SSH user can no
+longer traverse it.
+
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo chmod 700 /var/lib/mikrocata && sudo chmod 600 /var/lib/mikrocata/telegram-unblock-actions.json /var/lib/mikrocata/savelists-tzsp0.json'
 ```
 
 - [ ] **Step 4: Verify remote modes**
+
+Status 2026-07-03: deploy user verified directory mode only:
+
+```text
+700 root:root /var/lib/mikrocata
+```
+
+Expected file modes still need an operator sudo session.
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'stat -c "%a %U:%G %n" /var/lib/mikrocata /var/lib/mikrocata/telegram-unblock-actions.json /var/lib/mikrocata/savelists-tzsp0.json'
@@ -552,7 +567,7 @@ Expected:
 600 root:root /var/lib/mikrocata/savelists-tzsp0.json
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add src/mikroclear/telegram_unblock.py src/mikroclear/legacy.py tests/test_telegram_unblock.py tests/test_runtime_permissions.py
@@ -577,6 +592,9 @@ git --git-dir=.git-local --work-tree=. commit -m "Restrict runtime state permiss
 
 - [ ] **Step 1: Create SELKS target directories**
 
+Status 2026-07-03: local unit/docs/tests are implemented and committed as `42a0d20 Document Mikro-Clear env and state paths`.
+SELKS directory creation and env migration remain operator sudo actions because the deploy SSH user returned `sudo: a password is required`.
+
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo install -d -o root -g root -m 700 /etc/mikroclear /var/lib/mikroclear'
 ```
@@ -592,7 +610,7 @@ sudo sed -i 's#^MIKROCLEAR_STATE_DIR=.*#MIKROCLEAR_STATE_DIR="/var/lib/mikroclea
 sudo chmod 600 /etc/mikroclear/mikroclear.env
 ```
 
-- [ ] **Step 3: Preserve legacy env fallback in unit temporarily**
+- [x] **Step 3: Preserve legacy env fallback in unit temporarily**
 
 Keep both lines in `systemd/mikroclear.service` until one stable restart with new env:
 
@@ -603,11 +621,14 @@ EnvironmentFile=-/etc/mikroclear/mikroclear.env
 
 - [ ] **Step 4: Restart and verify config source**
 
+Status 2026-07-03: not deployed. `/etc/mikroclear` and `/var/lib/mikroclear`
+are still absent on SELKS, so env/state migration remains an operator action.
+
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo systemctl restart mikroclear.service && sudo systemctl status mikroclear.service --no-pager --lines=25'
 ```
 
-- [ ] **Step 5: Commit docs/tests**
+- [x] **Step 5: Commit docs/tests**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add systemd/mikroclear.service config/mikroclear.env.example README.md docs/runbook.md tests/test_systemd_unit.py tests/test_config.py
@@ -625,7 +646,7 @@ git --git-dir=.git-local --work-tree=. commit -m "Migrate Mikro-Clear env and st
 **Interfaces:**
 - Produces: stricter sandbox while preserving eve.json read access and state writes.
 
-- [ ] **Step 1: Add systemd unit tests**
+- [x] **Step 1: Add systemd unit tests**
 
 Assert unit contains:
 
@@ -640,7 +661,7 @@ ReadWritePaths=/var/lib/mikroclear /var/lib/mikrocata
 ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear /etc/mikrocata
 ```
 
-- [ ] **Step 2: Update unit**
+- [x] **Step 2: Update unit**
 
 Add:
 
@@ -657,7 +678,15 @@ ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear /e
 
 Do not change `User=root` in this task; sandbox first, user separation later.
 
-- [ ] **Step 3: Verify unit on SELKS before deploy**
+- [x] **Step 3: Verify unit on SELKS before deploy**
+
+Verified on SELKS 2026-07-03 with:
+
+```text
+/usr/bin/systemd-analyze verify /tmp/mikroclear-codex.service
+```
+
+Result: exit 0, no diagnostic output.
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks '/usr/bin/systemd-analyze verify /tmp/mikroclear-codex.service'
@@ -665,12 +694,16 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks '/usr/bin
 
 - [ ] **Step 4: Deploy unit and verify runtime**
 
+Status 2026-07-03: hardened unit is committed as `ecdb7ba Harden Mikro-Clear systemd sandbox`.
+Production unit deployment is intentionally pending until `/var/lib/mikroclear`
+exists. Current SELKS unit is active but still lacks the new sandbox directives.
+
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo -n systemctl status mikroclear.service --no-pager --lines=30'
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo -n journalctl -u mikroclear.service -n 100 --no-pager | grep -Ei "permission denied|protect|read-only|failed|traceback" || true'
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add systemd/mikroclear.service tests/test_systemd_unit.py
@@ -695,7 +728,7 @@ git --git-dir=.git-local --work-tree=. commit -m "Harden Mikro-Clear systemd san
 - Produces: candidate files `/var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate` and `/var/tmp/mikroclear-deploy/mikroclear-codex.service`
 - Produces: no sudoers wildcard that can absorb attacker-controlled commands, file operands, or extra journal selectors.
 
-- [ ] **Step 1: Update tests to expect secure candidate directory**
+- [x] **Step 1: Update tests to expect secure candidate directory**
 
 Expected constants:
 
@@ -705,7 +738,7 @@ CANDIDATE_SCRIPT = "/var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate"
 CANDIDATE_UNIT = "/var/tmp/mikroclear-deploy/mikroclear-codex.service"
 ```
 
-- [ ] **Step 2: Update MCP upload commands**
+- [x] **Step 2: Update MCP upload commands**
 
 Before writing candidates:
 
@@ -721,7 +754,7 @@ chmod 600 /var/tmp/mikroclear-deploy/mikroclear-codex.service
 stat -c '%U:%G %a %n' /var/tmp/mikroclear-deploy /var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate /var/tmp/mikroclear-deploy/mikroclear-codex.service
 ```
 
-- [ ] **Step 3: Replace env reads with a safe helper**
+- [x] **Step 3: Replace env reads with a safe helper**
 
 Remove the wildcard rules:
 
@@ -736,7 +769,7 @@ Replace them with a root-owned helper or exact command that has no attacker-cont
 sudo -n -l /usr/bin/sed -E 's/.*/id/e' /etc/mikrocata/mikrocataTZSP0.env
 ```
 
-- [ ] **Step 4: Update sudoers install and log/read rules**
+- [x] **Step 4: Update sudoers install and log/read rules**
 
 Remove legacy install/restart entries after rollback window:
 
@@ -760,13 +793,23 @@ sudo -n -l /usr/bin/tail -n '+1' /etc/shadow /opt/SELKS/docker/containers-data/s
 sudo -n -l /usr/bin/journalctl -u mikroclear.service -n '10 -u ssh.service' --no-pager
 ```
 
-- [ ] **Step 5: Validate sudoers**
+- [x] **Step 5: Validate sudoers**
+
+Validated on SELKS 2026-07-03:
+
+```text
+/tmp/mikroclear-mcp-selks.sudoers: parsed OK
+```
+
+Status: helper and sudoers candidates were uploaded to `/tmp/mikroclear-mask-env` and
+`/tmp/mikroclear-mcp-selks.sudoers`. Installing them under `/usr/local/sbin` and
+`/etc/sudoers.d` remains an operator sudo action.
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks '/usr/sbin/visudo -cf /tmp/mikroclear-mcp-selks.sudoers'
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add services/mcp-server/server.py deploy/sudoers.d/mikroclear-mcp-selks tests/test_mcp_server.py tests/test_sudoers.py README.md
@@ -785,7 +828,14 @@ git --git-dir=.git-local --work-tree=. commit -m "Narrow MCP deploy sudoers poli
 **Interfaces:**
 - Produces: decision record for root vs dedicated service user.
 
-- [ ] **Step 1: Check eve.json access requirements**
+- [x] **Step 1: Check eve.json access requirements**
+
+Remote evidence collected on SELKS 2026-07-03:
+
+```text
+755 UNKNOWN:UNKNOWN /opt/SELKS/docker/containers-data/suricata/logs
+644 UNKNOWN:UNKNOWN /opt/SELKS/docker/containers-data/suricata/logs/eve.json
+```
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'stat -c "%a %U:%G %n" /opt/SELKS/docker/containers-data/suricata/logs /opt/SELKS/docker/containers-data/suricata/logs/eve.json'
@@ -813,7 +863,12 @@ systemctl status mikroclear.service --no-pager --lines=30
 journalctl -u mikroclear.service -n 100 --no-pager | grep -Ei "permission denied|failed|traceback" || true
 ```
 
-- [ ] **Step 5: Commit or document root exception**
+- [x] **Step 5: Commit or document root exception**
+
+Status 2026-07-03: documented in `docs/runbook.md` and committed as
+`fa65155 Document Mikro-Clear service user decision`. A dedicated `mikroclear`
+service user is feasible, but `User=root` stays in production until an operator
+creates the account, assigns state ownership, and proves certificate/log access.
 
 If root remains required, document why and keep systemd sandbox from Task 6.
 
@@ -828,7 +883,7 @@ If root remains required, document why and keep systemd sandbox from Task 6.
 **Interfaces:**
 - Produces: repeatable operator checklist.
 
-- [ ] **Step 1: Document weekly checks**
+- [x] **Step 1: Document weekly checks**
 
 Include:
 
@@ -838,15 +893,15 @@ journalctl -u mikroclear.service -n 500 --no-pager | sed -E 's#/bot[0-9]+:[A-Za-
 stat -c '%a %U:%G %n' /etc/mikroclear/mikroclear.env /var/lib/mikroclear
 ```
 
-- [ ] **Step 2: Document token rotation**
+- [x] **Step 2: Document token rotation**
 
 Include BotFather rotation, env update, restart, and journal retention decision.
 
-- [ ] **Step 3: Document deploy verification**
+- [x] **Step 3: Document deploy verification**
 
 Include local tests, remote compile, systemd status, masked journal scan, rollback backup path.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add docs/security-runbook.md README.md
@@ -869,7 +924,7 @@ git --git-dir=.git-local --work-tree=. commit -m "Add Mikro-Clear security runbo
 - Produces: CIDR entries remain supported.
 - Produces: implicit prefix matching removed or replaced with explicit documented prefix syntax.
 
-- [ ] **Step 1: Add regression tests**
+- [x] **Step 1: Add regression tests**
 
 Test cases:
 
@@ -881,21 +936,26 @@ self.assertTrue(is_ip_in_whitelist("10.0.0.10", ("10.0.0.0/24",)))
 
 Also assert `legacy_decide_alert_target()` does not select the opposite endpoint when `src_ip` only prefix-matches a whitelist entry.
 
-- [ ] **Step 2: Remove implicit `startswith` matching**
+- [x] **Step 2: Remove implicit `startswith` matching**
 
 Keep only exact IP and CIDR/network matching unless an explicit operator-owned prefix syntax is introduced.
 
-- [ ] **Step 3: Update legacy single-file path**
+- [x] **Step 3: Update legacy single-file path**
 
 Mirror the fixed whitelist logic in `src/mikroclear/legacy.py` before deploy.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 ```bash
 .venv/bin/python -m unittest tests.test_alert_logic
 ```
 
-- [ ] **Step 5: Deploy and commit**
+- [x] **Step 5: Deploy and commit**
+
+Status 2026-07-03: code/tests are committed as `55450ce Fix exact whitelist matching`.
+Production code was deployed to `/usr/local/bin/mikroclear.py` on 2026-07-03
+with backup `/usr/local/bin/mikroclear.py.bak-20260703-231945`; service restart
+and status check passed.
 
 Deploy after tests and commit:
 
@@ -921,25 +981,39 @@ git --git-dir=.git-local --work-tree=. commit -m "Fix exact whitelist matching"
 - Produces: RouterOS API-SSL validates endpoint identity or uses explicit certificate pinning.
 - Produces: documented migration for MikroTik certificates with IP/DNS SAN.
 
-- [ ] **Step 1: Confirm deployed certificate shape**
+- [x] **Step 1: Confirm deployed certificate shape**
+
+SELKS check 2026-07-03 showed RouterOS API-SSL certificate identity is usable:
+
+```text
+subject=CN = 192.168.10.1
+X509v3 Subject Alternative Name:
+    IP Address:192.168.10.1, DNS:r1.21port.ru
+sha256 Fingerprint=2F:80:01:9A:00:23:1C:95:B5:7F:64:AB:F7:59:69:D0:CB:1B:E1:4B:A4:00:E7:53:19:AB:37:32:AA:B4:8E:C9
+```
 
 On SELKS/MikroTik, record whether the RouterOS API-SSL certificate contains the configured RouterOS IP or DNS name in SAN.
 
-- [ ] **Step 2: Add TLS behavior tests**
+- [x] **Step 2: Add TLS behavior tests**
 
 Assert the CA-verifying mode does not silently disable endpoint identity checks. If the library cannot pass `server_hostname`, test the certificate pinning fallback instead.
 
-- [ ] **Step 3: Implement identity validation**
+- [x] **Step 3: Implement identity validation**
 
 Preferred: add `MIKROCLEAR_ROUTER_TLS_SERVER_NAME` and pass a wrapper that calls `ctx.wrap_socket(sock, server_hostname=...)` with `ctx.check_hostname = True`.
 
 Fallback: add `MIKROCLEAR_ROUTER_TLS_PIN_SHA256` and verify the peer certificate fingerprint before sending RouterOS credentials.
 
-- [ ] **Step 4: Document certificate migration**
+- [x] **Step 4: Document certificate migration**
 
 Document MikroTik certificate generation/import requirements and rollback steps.
 
-- [ ] **Step 5: Deploy and commit**
+- [x] **Step 5: Deploy and commit**
+
+Status 2026-07-03: code/docs/tests are committed as `3f2cc33 Enforce RouterOS TLS endpoint identity`.
+Production code was deployed to `/usr/local/bin/mikroclear.py` on 2026-07-03
+with backup `/usr/local/bin/mikroclear.py.bak-20260703-231945`; RouterOS API
+connected successfully after restart.
 
 ```bash
 git --git-dir=.git-local --work-tree=. add src/mikroclear/legacy.py config/mikroclear.env.example README.md docs/runbook.md tests/test_routeros_tls.py
@@ -948,39 +1022,105 @@ git --git-dir=.git-local --work-tree=. commit -m "Enforce RouterOS TLS endpoint 
 
 ---
 
+## Current SELKS Deployment Status: 2026-07-03 23:20 MSK
+
+Code deployed:
+
+```text
+992364758d0bd12acbb3a9ed424218e08f8f42f2e05a5799017ac485635574b9  /usr/local/bin/mikroclear.py
+1118d62c3f4e135bd25e281b8bf0931ad56210b9534717ea6c51a81f97b045de  /usr/local/bin/mikroclear.py.bak-20260703-231945
+```
+
+Runtime status after restart:
+
+```text
+mikroclear.service active (running)
+raw Telegram token pattern count in last 120 journal lines: 0
+traceback/nameerror/permission-denied count in last 120 journal lines: 0
+```
+
+Still pending on SELKS:
+
+- Install `/usr/local/sbin/mikroclear-mask-env`.
+- Install narrowed `/etc/sudoers.d/mikroclear-mcp-selks`.
+- Create `/etc/mikroclear` and `/var/lib/mikroclear`, migrate env/state, then deploy the hardened systemd unit.
+- Decide and apply the dedicated `mikroclear` service user.
+
+---
+
 ## Standard Security Verification Before Completion
 
-- [ ] Local tests:
+- [x] Local tests:
+
+2026-07-03 result:
+
+```text
+Ran 70 tests in 0.445s
+OK
+```
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
 ```
 
-- [ ] Local compile:
+- [x] Local compile:
+
+2026-07-03 result: exit 0, no output.
 
 ```bash
 .venv/bin/python -m py_compile src/mikroclear/*.py services/mcp-server/server.py
 ```
 
-- [ ] Local secret-pattern scan with masking:
+- [x] Local secret-pattern scan with masking:
+
+2026-07-03 result: matches were test fake tokens, env placeholders, and
+`mikroclear-mask-env` names/commands only; no live secret was printed.
 
 ```bash
 rg -n "bot[0-9]+:|sk-[A-Za-z0-9_-]+|BEGIN (RSA|OPENSSH|PRIVATE) KEY|TOKEN=.+|PASSWORD=.+" . | sed -E 's#bot[0-9]+:[A-Za-z0-9_-]+#bot***MASKED***#g; s#(TOKEN|PASSWORD)=.*#\\1=***MASKED***#g'
 ```
 
-- [ ] Remote service status:
+- [x] Remote service status:
+
+2026-07-03 result:
+
+```text
+mikroclear.service: active/enabled
+mikrocataTZSP0.service: inactive/disabled
+```
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'systemctl is-active mikroclear.service; systemctl is-enabled mikroclear.service'
 ```
 
-- [ ] Remote masked journal scan:
+- [x] Remote masked journal scan:
+
+2026-07-03 result:
+
+```text
+raw Telegram token pattern count in last 200 journal lines: 0
+traceback/nameerror/permission-denied count in last 200 journal lines: 0
+```
+
+Operational note: Telegram polling still logs intermittent
+`ReadTimeout` / `Network is unreachable` errors, but token masking is active.
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo -n journalctl -u mikroclear.service -n 500 --no-pager | sed -E "s#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g" | grep -Ei "error|traceback|failed|bot[0-9]+:" || true'
 ```
 
-- [ ] Remote permissions check:
+- [x] Remote permissions check:
+
+2026-07-03 result:
+
+```text
+700 root:root /var/lib/mikrocata
+```
+
+`/etc/mikroclear`, `/etc/mikroclear/mikroclear.env`, `/var/lib/mikroclear`,
+and `/var/lib/mikroclear/telegram-unblock-actions.json` are still absent.
+File-level checks inside `/var/lib/mikrocata` require operator sudo access
+because the directory is no longer traversable by the deploy SSH user.
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'stat -c "%a %U:%G %n" /etc/mikroclear /etc/mikroclear/mikroclear.env /var/lib/mikroclear /var/lib/mikroclear/telegram-unblock-actions.json 2>/dev/null || true'
