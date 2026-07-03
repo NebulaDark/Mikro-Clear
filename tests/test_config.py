@@ -1,8 +1,12 @@
 import os
+from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
 from mikroclear.config import env_bool, env_csv, env_int, env_name_candidates, env_str
+
+
+ENV_EXAMPLE = Path(__file__).resolve().parents[1] / "config" / "mikroclear.env.example"
 
 
 class ConfigEnvTests(TestCase):
@@ -51,3 +55,10 @@ class ConfigEnvTests(TestCase):
 
         with patch.dict(os.environ, {"MIKROCLEAR_WHITELIST_IPS": ""}, clear=True):
             self.assertEqual(env_csv("MIKROCATA_WHITELIST_IPS", ("default",)), ("default",))
+
+    def test_env_example_uses_mikroclear_names_and_state_dir(self):
+        text = ENV_EXAMPLE.read_text(encoding="utf-8")
+
+        self.assertIn("MIKROCLEAR_STATE_DIR=/var/lib/mikroclear", text)
+        self.assertIn("MIKROCLEAR_TELEGRAM_TOKEN=", text)
+        self.assertNotIn("MIKROCATA_", text)

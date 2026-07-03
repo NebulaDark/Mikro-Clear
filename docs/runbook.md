@@ -26,18 +26,17 @@ for the time needed to update SELKS.
 Run this on SELKS as a sudo-capable operator:
 
 ```bash
-sudoedit /etc/mikrocata/mikrocataTZSP0.env
+sudoedit /etc/mikroclear/mikroclear.env
 ```
 
 Replace only the token value:
 
 ```text
-MIKROCATA_TELEGRAM_TOKEN="<new-token>"
+MIKROCLEAR_TELEGRAM_TOKEN="<new-token>"
 ```
 
-The current service accepts both legacy `MIKROCATA_*` and new `MIKROCLEAR_*`
-environment names. Keep the existing file format until the environment rename
-task is completed.
+The service still reads `/etc/mikrocata/mikrocataTZSP0.env` as a temporary
+fallback, but `/etc/mikroclear/mikroclear.env` is the primary file.
 
 ### 3. Restart And Verify
 
@@ -94,4 +93,32 @@ Before sharing any Mikro-Clear service logs, run them through token masking:
 
 ```bash
 sed -E 's#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g'
+```
+
+## Env And State Migration
+
+Use this once per SELKS host while migrating from legacy Mikrocata paths:
+
+```bash
+sudo install -d -o root -g root -m 700 /etc/mikroclear /var/lib/mikroclear
+sudo cp -a /etc/mikrocata/mikrocataTZSP0.env /etc/mikroclear/mikroclear.env
+sudo sed -i 's/^MIKROCATA_/MIKROCLEAR_/' /etc/mikroclear/mikroclear.env
+sudo sed -i 's#^MIKROCLEAR_STATE_DIR=.*#MIKROCLEAR_STATE_DIR="/var/lib/mikroclear"#' /etc/mikroclear/mikroclear.env
+sudo chmod 600 /etc/mikroclear/mikroclear.env
+```
+
+Restart and verify:
+
+```bash
+sudo systemctl restart mikroclear.service
+sudo systemctl status mikroclear.service --no-pager --lines=25
+stat -c '%a %U:%G %n' /etc/mikroclear /etc/mikroclear/mikroclear.env /var/lib/mikroclear
+```
+
+Expected modes:
+
+```text
+700 root:root /etc/mikroclear
+600 root:root /etc/mikroclear/mikroclear.env
+700 root:root /var/lib/mikroclear
 ```

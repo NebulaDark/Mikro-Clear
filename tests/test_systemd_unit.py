@@ -27,3 +27,12 @@ class SystemdUnitTests(TestCase):
         self.assertIn("StartLimitBurst=5", unit_lines)
         self.assertNotIn("StartLimitIntervalSec=300", service_lines)
         self.assertNotIn("StartLimitBurst=5", service_lines)
+
+    def test_mikroclear_env_overrides_legacy_env_temporarily(self):
+        service_lines = section_lines("Service")
+        legacy = "EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env"
+        current = "EnvironmentFile=-/etc/mikroclear/mikroclear.env"
+
+        self.assertIn(legacy, service_lines)
+        self.assertIn(current, service_lines)
+        self.assertLess(service_lines.index(legacy), service_lines.index(current))

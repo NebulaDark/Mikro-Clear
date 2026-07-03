@@ -41,6 +41,28 @@ issue trackers. Mask Telegram Bot API URLs before sharing service output:
 sed -E 's#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g'
 ```
 
+## Configuration Paths
+
+Primary Mikro-Clear configuration on SELKS:
+
+```text
+/etc/mikroclear/mikroclear.env
+/var/lib/mikroclear
+```
+
+The service temporarily also reads the legacy file:
+
+```text
+/etc/mikrocata/mikrocataTZSP0.env
+```
+
+Keep the legacy file only as a fallback during migration. The active
+`/etc/mikroclear/mikroclear.env` file should use `MIKROCLEAR_*` names and set:
+
+```text
+MIKROCLEAR_STATE_DIR=/var/lib/mikroclear
+```
+
 ## Remote Sudo Setup
 
 MCP deploy tools require a one-time sudoers install on `selks`. The candidate
