@@ -361,7 +361,7 @@ Committed as `26d7b22 Add Telegram polling backoff`.
 - Consumes: fixed masked logging from Task 1.
 - Produces: documented operator flow for rotating the token and handling existing journal exposure.
 
-- [ ] **Step 1: Rotate token in BotFather**
+- [x] **Step 1: Rotate token in BotFather**
 
 Operator action:
 
@@ -371,9 +371,9 @@ BotFather -> /mybots -> select bot -> API Token -> Revoke current token -> Gener
 
 Do not paste the token in chat or terminal output.
 
-Documentation prepared in `docs/runbook.md`; operator rotation remains pending.
+Documentation prepared in `docs/runbook.md`; operator reported rotation completed on 2026-07-03.
 
-- [ ] **Step 2: Update SELKS env without exposing token**
+- [x] **Step 2: Update SELKS env without exposing token**
 
 Run on SELKS as sudo-capable operator:
 
@@ -387,12 +387,21 @@ Replace only:
 MIKROCATA_TELEGRAM_TOKEN="<new-token>"
 ```
 
-- [ ] **Step 3: Restart and verify**
+- [x] **Step 3: Restart and verify**
 
 ```bash
 sudo systemctl restart mikroclear.service
 sudo systemctl status mikroclear.service --no-pager --lines=25
 sudo journalctl -u mikroclear.service -n 100 --no-pager | sed -E 's#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g'
+```
+
+Verified on SELKS 2026-07-03 after operator restart:
+
+```text
+mikroclear.service: active/enabled since Fri 2026-07-03 13:47:18 MSK
+mikrocataTZSP0.service: inactive/disabled
+systemctl status window after restart: raw token patterns=0, Traceback/NameError=0
+note: sudo journalctl still requires a password for the mcp-selks SSH user, so full journal re-read must be done from an operator sudo session.
 ```
 
 - [ ] **Step 4: Decide journal retention**
