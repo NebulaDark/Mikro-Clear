@@ -58,6 +58,35 @@ skills: security-scan, security-diff-scan, deep-security-scan, threat-model, val
 - `/etc/mikroclear` and `/var/lib/mikroclear` are not yet present on SELKS.
 - Local secret-pattern scan found no committed live token; only a false positive on `SUB-SKILL`.
 
+### Standard Codex Security Scan: 2026-07-03
+
+Report path:
+
+```text
+/tmp/codex-security-scans/Mikro-Clear/8cf9d09_20260703-141650/report.md
+```
+
+Canonical artifacts:
+
+```text
+/tmp/codex-security-scans/Mikro-Clear/8cf9d09_20260703-141650/scan-manifest.json
+/tmp/codex-security-scans/Mikro-Clear/8cf9d09_20260703-141650/findings.json
+/tmp/codex-security-scans/Mikro-Clear/8cf9d09_20260703-141650/coverage.json
+```
+
+Scan result: 8 reportable findings, 4 high and 4 medium. Every candidate has discovery, validation, and attack-path receipts.
+
+| ID | Severity | Finding | Plan Placement |
+| --- | --- | --- | --- |
+| MKC-SEC-SCAN-004 | High | sudoers `sed` wildcard can execute commands as root | Task 7 |
+| MKC-SEC-SCAN-005 | High | fixed `/tmp` script candidate can become root-executed service code | Task 7 |
+| MKC-SEC-SCAN-006 | High | fixed `/tmp` systemd unit candidate can replace the root service unit | Task 7 |
+| MKC-SEC-SCAN-007 | High | sudoers `tail -n *` can read attacker-selected root-only files | Task 7 |
+| MKC-SEC-SCAN-001 | Medium | exact whitelist IP entries are also treated as prefixes | Task 10 |
+| MKC-SEC-SCAN-002 | Medium | Telegram unblock token state is written with default-readable permissions | Task 4 |
+| MKC-SEC-SCAN-003 | Medium | RouterOS API TLS disables endpoint hostname verification | Task 11 |
+| MKC-SEC-SCAN-008 | Medium | sudoers `journalctl -n *` can broaden log selectors | Task 7 |
+
 ---
 
 ## Task 1: Mask Secrets In All Telegram Logs
@@ -453,6 +482,8 @@ git --git-dir=.git-local --work-tree=. commit -m "Document Telegram token rotati
 
 ## Task 4: Lock Down Runtime State File Permissions
 
+**Covers:** `MKC-SEC-005`, `MKC-SEC-SCAN-002`.
+
 **Files:**
 - Modify: `src/mikroclear/telegram_unblock.py`
 - Modify: `src/mikroclear/legacy.py`
@@ -650,6 +681,8 @@ git --git-dir=.git-local --work-tree=. commit -m "Harden Mikro-Clear systemd san
 
 ## Task 7: Narrow MCP sudoers And Move Candidates Out Of `/tmp`
 
+**Covers:** `MKC-SEC-004`, `MKC-SEC-SCAN-004`, `MKC-SEC-SCAN-005`, `MKC-SEC-SCAN-006`, `MKC-SEC-SCAN-007`, `MKC-SEC-SCAN-008`.
+
 **Files:**
 - Modify: `services/mcp-server/server.py`
 - Modify: `deploy/sudoers.d/mikroclear-mcp-selks`
@@ -660,6 +693,7 @@ git --git-dir=.git-local --work-tree=. commit -m "Harden Mikro-Clear systemd san
 **Interfaces:**
 - Produces: candidate directory `/var/tmp/mikroclear-deploy`
 - Produces: candidate files `/var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate` and `/var/tmp/mikroclear-deploy/mikroclear-codex.service`
+- Produces: no sudoers wildcard that can absorb attacker-controlled commands, file operands, or extra journal selectors.
 
 - [ ] **Step 1: Update tests to expect secure candidate directory**
 
@@ -684,9 +718,25 @@ After upload:
 ```bash
 chmod 600 /var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate
 chmod 600 /var/tmp/mikroclear-deploy/mikroclear-codex.service
+stat -c '%U:%G %a %n' /var/tmp/mikroclear-deploy /var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate /var/tmp/mikroclear-deploy/mikroclear-codex.service
 ```
 
-- [ ] **Step 3: Update sudoers**
+- [ ] **Step 3: Replace env reads with a safe helper**
+
+Remove the wildcard rules:
+
+```text
+/usr/bin/sed -E s/* /etc/mikroclear/mikroclear.env
+/usr/bin/sed -E s/* /etc/mikrocata/mikrocataTZSP0.env
+```
+
+Replace them with a root-owned helper or exact command that has no attacker-controlled sed expression. Verification must deny:
+
+```bash
+sudo -n -l /usr/bin/sed -E 's/.*/id/e' /etc/mikrocata/mikrocataTZSP0.env
+```
+
+- [ ] **Step 4: Update sudoers install and log/read rules**
 
 Remove legacy install/restart entries after rollback window:
 
@@ -703,13 +753,20 @@ Narrow logs to fixed sizes:
 /usr/bin/journalctl -u mikroclear.service -n 500 --no-pager
 ```
 
-- [ ] **Step 4: Validate sudoers**
+Remove `tail -n *` and replace it with fixed-size variants or a helper that accepts only a bounded integer and fixed `eve.json` path. Verification must deny:
+
+```bash
+sudo -n -l /usr/bin/tail -n '+1' /etc/shadow /opt/SELKS/docker/containers-data/suricata/logs/eve.json
+sudo -n -l /usr/bin/journalctl -u mikroclear.service -n '10 -u ssh.service' --no-pager
+```
+
+- [ ] **Step 5: Validate sudoers**
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks '/usr/sbin/visudo -cf /tmp/mikroclear-mcp-selks.sudoers'
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add services/mcp-server/server.py deploy/sudoers.d/mikroclear-mcp-selks tests/test_mcp_server.py tests/test_sudoers.py README.md
@@ -794,6 +851,99 @@ Include local tests, remote compile, systemd status, masked journal scan, rollba
 ```bash
 git --git-dir=.git-local --work-tree=. add docs/security-runbook.md README.md
 git --git-dir=.git-local --work-tree=. commit -m "Add Mikro-Clear security runbook"
+```
+
+---
+
+## Task 10: Fix Whitelist Exact-IP Matching
+
+**Covers:** `MKC-SEC-SCAN-001`.
+
+**Files:**
+- Modify: `src/mikroclear/alert_logic.py`
+- Modify: `src/mikroclear/legacy.py`
+- Test: `tests/test_alert_logic.py`
+
+**Interfaces:**
+- Produces: exact IP entries match only exact IPs.
+- Produces: CIDR entries remain supported.
+- Produces: implicit prefix matching removed or replaced with explicit documented prefix syntax.
+
+- [ ] **Step 1: Add regression tests**
+
+Test cases:
+
+```python
+self.assertTrue(is_ip_in_whitelist("10.0.0.1", ("10.0.0.1",)))
+self.assertFalse(is_ip_in_whitelist("10.0.0.10", ("10.0.0.1",)))
+self.assertTrue(is_ip_in_whitelist("10.0.0.10", ("10.0.0.0/24",)))
+```
+
+Also assert `legacy_decide_alert_target()` does not select the opposite endpoint when `src_ip` only prefix-matches a whitelist entry.
+
+- [ ] **Step 2: Remove implicit `startswith` matching**
+
+Keep only exact IP and CIDR/network matching unless an explicit operator-owned prefix syntax is introduced.
+
+- [ ] **Step 3: Update legacy single-file path**
+
+Mirror the fixed whitelist logic in `src/mikroclear/legacy.py` before deploy.
+
+- [ ] **Step 4: Run tests**
+
+```bash
+.venv/bin/python -m unittest tests.test_alert_logic
+```
+
+- [ ] **Step 5: Deploy and commit**
+
+Deploy after tests and commit:
+
+```bash
+git --git-dir=.git-local --work-tree=. add src/mikroclear/alert_logic.py src/mikroclear/legacy.py tests/test_alert_logic.py
+git --git-dir=.git-local --work-tree=. commit -m "Fix exact whitelist matching"
+```
+
+---
+
+## Task 11: Enforce RouterOS TLS Endpoint Identity
+
+**Covers:** `MKC-SEC-SCAN-003`.
+
+**Files:**
+- Modify: `src/mikroclear/legacy.py`
+- Modify: `config/mikroclear.env.example`
+- Modify: `README.md`
+- Modify: `docs/runbook.md`
+- Test: `tests/test_routeros_tls.py`
+
+**Interfaces:**
+- Produces: RouterOS API-SSL validates endpoint identity or uses explicit certificate pinning.
+- Produces: documented migration for MikroTik certificates with IP/DNS SAN.
+
+- [ ] **Step 1: Confirm deployed certificate shape**
+
+On SELKS/MikroTik, record whether the RouterOS API-SSL certificate contains the configured RouterOS IP or DNS name in SAN.
+
+- [ ] **Step 2: Add TLS behavior tests**
+
+Assert the CA-verifying mode does not silently disable endpoint identity checks. If the library cannot pass `server_hostname`, test the certificate pinning fallback instead.
+
+- [ ] **Step 3: Implement identity validation**
+
+Preferred: add `MIKROCLEAR_ROUTER_TLS_SERVER_NAME` and pass a wrapper that calls `ctx.wrap_socket(sock, server_hostname=...)` with `ctx.check_hostname = True`.
+
+Fallback: add `MIKROCLEAR_ROUTER_TLS_PIN_SHA256` and verify the peer certificate fingerprint before sending RouterOS credentials.
+
+- [ ] **Step 4: Document certificate migration**
+
+Document MikroTik certificate generation/import requirements and rollback steps.
+
+- [ ] **Step 5: Deploy and commit**
+
+```bash
+git --git-dir=.git-local --work-tree=. add src/mikroclear/legacy.py config/mikroclear.env.example README.md docs/runbook.md tests/test_routeros_tls.py
+git --git-dir=.git-local --work-tree=. commit -m "Enforce RouterOS TLS endpoint identity"
 ```
 
 ---
