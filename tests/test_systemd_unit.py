@@ -36,3 +36,22 @@ class SystemdUnitTests(TestCase):
         self.assertIn(legacy, service_lines)
         self.assertIn(current, service_lines)
         self.assertLess(service_lines.index(legacy), service_lines.index(current))
+
+    def test_service_has_incremental_sandbox_hardening(self):
+        service_lines = section_lines("Service")
+
+        for directive in (
+            "NoNewPrivileges=true",
+            "PrivateTmp=true",
+            "ProtectHome=true",
+            "ProtectSystem=strict",
+            "RestrictSUIDSGID=true",
+            "LockPersonality=true",
+            "MemoryDenyWriteExecute=true",
+            "ReadWritePaths=/var/lib/mikroclear /var/lib/mikrocata",
+            "ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear /etc/mikrocata",
+        ):
+            self.assertIn(directive, service_lines)
+
+        self.assertIn("User=root", service_lines)
+        self.assertIn("Group=root", service_lines)

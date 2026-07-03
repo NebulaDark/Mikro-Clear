@@ -16,6 +16,15 @@ User=root
 Group=root
 WorkingDirectory=/usr/local/bin
 NoNewPrivileges=true
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/mikroclear /var/lib/mikrocata
+ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear /etc/mikrocata
 
 [Install]
 WantedBy=multi-user.target
