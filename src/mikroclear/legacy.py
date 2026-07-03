@@ -93,6 +93,24 @@ except Exception:  # pragma: no cover - production single-file fallback
         )
 
 try:
+    from mikroclear.security import mask_known_secret, sanitize_exception_text
+except Exception:  # pragma: no cover - production single-file fallback
+    def mask_telegram_bot_token(text: Any) -> str:
+        return re.sub(r"/bot[0-9]+:[A-Za-z0-9_-]+/", "/bot***MASKED***/", str(text))
+
+    def mask_known_secret(text: Any, secret: str | None, label: str = "SECRET") -> str:
+        value = mask_telegram_bot_token(text)
+        if secret:
+            value = value.replace(secret, "***MASKED***")
+        return value
+
+    def sanitize_exception_text(exc: BaseException, *secrets: str) -> str:
+        value = f"{type(exc).__name__}: {exc}"
+        for secret in secrets:
+            value = mask_known_secret(value, secret)
+        return mask_telegram_bot_token(value)
+
+try:
     from mikroclear.telegram_notify import (
         TelegramSendResult,
         format_alert_message,
@@ -202,7 +220,7 @@ except Exception:  # pragma: no cover - production single-file fallback
         return TelegramSendResult(
             ok=response.status_code == 200,
             status_code=response.status_code,
-            response_text=response.text,
+            response_text=mask_known_secret(response.text, token),
             retry_after=retry_after,
         )
 
@@ -692,14 +710,14 @@ def sendTelegram(
             debug_log("Telegram message sent successfully")
             return True
 
-        log(f"Failed to send Telegram message: {result.response_text}")
+        log(f"Failed to send Telegram message: {mask_known_secret(result.response_text, TELEGRAM_TOKEN)}")
         if result.status_code == 429:
             retry_after = result.retry_after or TELEGRAM_SYSTEM_COOLDOWN_SECONDS
             set_telegram_lock(retry_after)
             log(f"Telegram flood control active, suppressing Telegram for {retry_after}s")
         return False
     except Exception as exc:
-        log(f"Error sending Telegram message: {exc}")
+        log(f"Error sending Telegram message: {sanitize_exception_text(exc, TELEGRAM_TOKEN)}")
         return False
 
 
@@ -934,7 +952,7 @@ def answer_telegram_callback(callback_id: str, text: str, alert: bool = False) -
             timeout=TELEGRAM_TIMEOUT,
         )
     except Exception as exc:
-        log(f"Error answering Telegram callback: {exc}")
+        log(f"Error answering Telegram callback: {sanitize_exception_text(exc, TELEGRAM_TOKEN)}")
 
 
 def remove_address_from_list(address_list: Any, wanted_ip: str, list_name: str) -> bool:
@@ -1011,7 +1029,7 @@ def process_telegram_updates() -> None:
             answer_telegram_callback(callback_id, result)
             send_system_notification(result, "UNBLOCK")
     except Exception as exc:
-        log(f"Error processing Telegram updates: {type(exc).__name__}: {exc}")
+        log(f"Error processing Telegram updates: {sanitize_exception_text(exc, TELEGRAM_TOKEN)}")
 
 
 def make_ssl_context() -> ssl.SSLContext:

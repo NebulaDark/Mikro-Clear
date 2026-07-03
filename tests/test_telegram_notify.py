@@ -70,3 +70,13 @@ class TelegramNotifyDeliveryTests(TestCase):
         self.assertEqual(result.status_code, 429)
         self.assertEqual(result.retry_after, 12)
         self.assertEqual(result.response_text, "too many")
+
+    def test_send_telegram_message_masks_token_in_response_text(self):
+        response = Mock(status_code=500, text="failed /bot123456:ABC_def-123/sendMessage")
+        response.json.return_value = {}
+
+        with patch("mikroclear.telegram_notify.requests.post", return_value=response):
+            result = send_telegram_message("123456:ABC_def-123", "chat", "hello", timeout=7)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.response_text, "failed /bot***MASKED***/sendMessage")

@@ -7,6 +7,8 @@ from typing import Any, Callable
 
 import requests
 
+from mikroclear.security import mask_known_secret
+
 
 @dataclass(frozen=True)
 class TelegramSendResult:
@@ -128,6 +130,6 @@ def send_telegram_message(
     return TelegramSendResult(
         ok=response.status_code == 200,
         status_code=response.status_code,
-        response_text=response.text,
+        response_text=mask_known_secret(response.text, token),
         retry_after=retry_after,
     )

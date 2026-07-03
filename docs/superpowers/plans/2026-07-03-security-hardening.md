@@ -64,7 +64,7 @@
 - Produces: `mask_known_secret(text: object, secret: str | None, label: str = "SECRET") -> str`
 - Produces: `sanitize_exception_text(exc: BaseException, *secrets: str) -> str`
 
-- [ ] **Step 1: Write failing token masking tests**
+- [x] **Step 1: Write failing token masking tests**
 
 Add to `tests/test_security.py`:
 
@@ -99,7 +99,7 @@ Run:
 
 Expected: fail because `mikroclear.security` does not exist.
 
-- [ ] **Step 2: Implement `src/mikroclear/security.py`**
+- [x] **Step 2: Implement `src/mikroclear/security.py`**
 
 Implement:
 
@@ -129,7 +129,7 @@ def sanitize_exception_text(exc: BaseException, *secrets: str) -> str:
     return mask_telegram_bot_token(value)
 ```
 
-- [ ] **Step 3: Use sanitizer in Telegram exception logging**
+- [x] **Step 3: Use sanitizer in Telegram exception logging**
 
 Update `src/mikroclear/legacy.py`:
 
@@ -154,7 +154,7 @@ log(f"Error processing Telegram updates: {sanitize_exception_text(exc, TELEGRAM_
 log(f"Error sending Telegram message: {sanitize_exception_text(exc, TELEGRAM_TOKEN)}")
 ```
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 ```bash
 .venv/bin/python -m unittest tests.test_security tests.test_telegram_notify tests.test_rebrand
@@ -162,7 +162,16 @@ log(f"Error sending Telegram message: {sanitize_exception_text(exc, TELEGRAM_TOK
 
 Expected: OK.
 
-- [ ] **Step 5: Deploy and verify masked logs**
+- [x] **Step 5: Deploy and verify masked logs**
+
+Verified on SELKS 2026-07-03 after deploying `/usr/local/bin/mikroclear.py.bak-20260703-105002`:
+
+```text
+mikroclear.service: active/enabled
+mikrocataTZSP0.service: inactive/disabled
+deployed sanitizer fake-token check: /bot***MASKED***/getUpdates token=***MASKED***
+note: old pre-deploy journal entries still contain the exposed current token until token rotation and journal retention decision
+```
 
 Run standard deploy workflow, then:
 
@@ -172,7 +181,7 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo -n 
 
 Expected: no raw `/bot<number>:<token>/` strings.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git --git-dir=.git-local --work-tree=. add src/mikroclear/security.py src/mikroclear/legacy.py tests/test_security.py tests/test_telegram_notify.py
@@ -775,4 +784,3 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'sudo -n 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks 'stat -c "%a %U:%G %n" /etc/mikroclear /etc/mikroclear/mikroclear.env /var/lib/mikroclear /var/lib/mikroclear/telegram-unblock-actions.json 2>/dev/null || true'
 ```
-
