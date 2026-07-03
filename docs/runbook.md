@@ -122,3 +122,40 @@ Expected modes:
 600 root:root /etc/mikroclear/mikroclear.env
 700 root:root /var/lib/mikroclear
 ```
+
+## Dedicated Service User Evaluation
+
+Current status from SELKS:
+
+```text
+755 UNKNOWN:UNKNOWN /opt/SELKS/docker/containers-data/suricata/logs
+644 UNKNOWN:UNKNOWN /opt/SELKS/docker/containers-data/suricata/logs/eve.json
+```
+
+The Suricata log path is readable by a non-root service user, but the service
+must stay on `User=root` until a sudo-capable operator prepares ownership for
+state and verifies certificate/read paths.
+
+Operator preparation:
+
+```bash
+sudo useradd --system --home /var/lib/mikroclear --shell /usr/sbin/nologin mikroclear
+sudo install -d -o mikroclear -g mikroclear -m 700 /var/lib/mikroclear
+sudo chown -R mikroclear:mikroclear /var/lib/mikroclear
+sudo setfacl -m u:mikroclear:r /opt/SELKS/docker/containers-data/suricata/logs/eve.json
+```
+
+Only after that, change the service unit:
+
+```ini
+User=mikroclear
+Group=mikroclear
+```
+
+Then verify:
+
+```bash
+sudo systemctl restart mikroclear.service
+sudo systemctl status mikroclear.service --no-pager --lines=30
+sudo journalctl -u mikroclear.service -n 100 --no-pager | grep -Ei 'permission denied|failed|traceback' || true
+```
