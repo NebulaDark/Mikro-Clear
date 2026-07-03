@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -12,7 +13,18 @@ from typing import Any, Callable, Optional
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
 
 
+def ensure_private_state_path(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    if not path.exists():
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+    os.chmod(path, 0o600)
+
+
 def _read_state(path: Path) -> dict[str, dict[str, Any]]:
+    ensure_private_state_path(path)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
@@ -23,8 +35,9 @@ def _read_state(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _write_state(path: Path, state: dict[str, dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_state_path(path)
     path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    os.chmod(path, 0o600)
 
 
 def create_unblock_token(

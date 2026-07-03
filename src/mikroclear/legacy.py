@@ -370,6 +370,7 @@ try:
         build_unblock_keyboard,
         consume_unblock_token,
         create_unblock_token,
+        ensure_private_state_path,
         parse_unblock_callback,
     )
 except Exception:  # pragma: no cover - production single-file fallback
@@ -377,7 +378,17 @@ except Exception:  # pragma: no cover - production single-file fallback
 
     _UNBLOCK_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
 
+    def ensure_private_state_path(path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        if not path.exists():
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write("{}")
+        os.chmod(path, 0o600)
+
     def _read_unblock_state(path: Path) -> Dict[str, Dict[str, Any]]:
+        ensure_private_state_path(path)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
@@ -387,8 +398,9 @@ except Exception:  # pragma: no cover - production single-file fallback
         return {}
 
     def _write_unblock_state(path: Path, state: Dict[str, Dict[str, Any]]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_state_path(path)
         path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        os.chmod(path, 0o600)
 
     def create_unblock_token(
         path: Path,
@@ -540,6 +552,17 @@ TELEGRAM_UNBLOCK_STATE_FILE = os.path.abspath(
 SAVE_LISTS = list(env_csv("MIKROCATA_SAVE_LISTS", (BLOCK_LIST_NAME,)))
 SAVE_INTERVAL = env_int("MIKROCATA_SAVE_INTERVAL", 300)
 
+
+def _ensure_private_runtime_file(path_text: str, initial: str = "") -> None:
+    path = Path(path_text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    if not path.exists():
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(initial)
+    os.chmod(path, 0o600)
+
 # Asset Resolver: MikroTik DHCP leases + PTR DNS fallback for Telegram context
 ASSET_RESOLVER_ENABLE = env_bool("MIKROCATA_ASSET_RESOLVER_ENABLE", True)
 ASSET_RESOLVER_PRIVATE_ONLY = env_bool("MIKROCATA_ASSET_RESOLVER_PRIVATE_ONLY", True)
@@ -661,8 +684,10 @@ def telegram_locked_until() -> int:
 def set_telegram_lock(seconds: int) -> None:
     try:
         until = int(time()) + max(1, int(seconds))
+        _ensure_private_runtime_file(TELEGRAM_LOCK_FILE)
         with open(TELEGRAM_LOCK_FILE, "w", encoding="utf-8") as fh:
             fh.write(str(until))
+        os.chmod(TELEGRAM_LOCK_FILE, 0o600)
     except Exception as exc:
         debug_log(f"Could not write Telegram lock file: {exc}")
 
@@ -1541,8 +1566,10 @@ def check_tik_uptime(resources: Any) -> bool:
     except Exception:
         bookmark = 0
 
+    _ensure_private_runtime_file(UPTIME_BOOKMARK, "0")
     with open(UPTIME_BOOKMARK, "w", encoding="utf-8") as fh:
         fh.write(str(total_seconds))
+    os.chmod(UPTIME_BOOKMARK, 0o600)
 
     rebooted = total_seconds < bookmark
     debug_log(f"Router uptime={total_seconds}s previous={bookmark}s rebooted={rebooted}")
@@ -1565,12 +1592,17 @@ def save_lists(address_list: Any, is_v6: bool = False) -> None:
     curr_file = SAVE_LISTS_LOCATION_V6 if is_v6 else SAVE_LISTS_LOCATION
     tmp_file = curr_file + ".tmp"
 
-    with open(tmp_file, "w", encoding="utf-8") as fh:
+    Path(curr_file).parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(Path(curr_file).parent, 0o700)
+    descriptor = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as fh:
         for save_list in SAVE_LISTS:
             for row in address_list.select(_list, _address, _timeout, _comment).where(_list == save_list):
                 fh.write(ujson.dumps(row) + "\n")
+    os.chmod(tmp_file, 0o600)
 
     os.replace(tmp_file, curr_file)
+    os.chmod(curr_file, 0o600)
     debug_log(f"Saved address-list state to {curr_file}")
 
 
