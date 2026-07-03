@@ -33,6 +33,12 @@ The SELKS operations runbook is stored at:
 docs/runbook.md
 ```
 
+Security recurring checks are stored at:
+
+```text
+docs/security-runbook.md
+```
+
 Use the Telegram token rotation procedure in the runbook after any suspected
 Bot API token exposure. Do not paste live tokens into chat, logs, commits, or
 issue trackers. Mask Telegram Bot API URLs before sharing service output:
