@@ -205,6 +205,90 @@ except Exception:  # pragma: no cover - production single-file fallback
             )
 
 try:
+    from mikroclear.eve_watcher import EveJsonTailer
+except Exception:  # pragma: no cover - production single-file fallback
+    class EveJsonTailer:
+        def __init__(
+            self,
+            *,
+            add_on_start: bool,
+            shutdown_requested: Any,
+            log: Any = None,
+            debug_log: Any = None,
+            sleep: Any = sleep,
+        ) -> None:
+            self.add_on_start = add_on_start
+            self.shutdown_requested = shutdown_requested
+            self.log = log or (lambda message: None)
+            self.debug_log = debug_log or (lambda message: None)
+            self.sleep = sleep
+            self.last_pos = 0
+            self.last_inode: Optional[int] = None
+
+        def reset(self) -> None:
+            self.last_pos = 0
+            self.last_inode = None
+
+        def seek_to_end(self, fpath: str) -> None:
+            if self.add_on_start:
+                self.reset()
+                return
+            while not self.shutdown_requested():
+                try:
+                    stat = os.stat(fpath)
+                    self.last_pos = stat.st_size
+                    self.last_inode = stat.st_ino
+                    self.debug_log(f"Initial file position set to EOF: {self.last_pos}")
+                    return
+                except FileNotFoundError:
+                    self.log(f"File {fpath} not found. Retrying in 10 seconds...")
+                    self.sleep(10)
+
+        def read_json(self, fpath: str) -> List[Dict[str, Any]]:
+            try:
+                stat = os.stat(fpath)
+                if self.last_inode is not None and stat.st_ino != self.last_inode:
+                    self.debug_log("eve.json inode changed, resetting position")
+                    self.last_pos = 0
+                if stat.st_size < self.last_pos:
+                    self.debug_log("eve.json truncated/rotated, resetting position")
+                    self.last_pos = 0
+                self.last_inode = stat.st_ino
+            except FileNotFoundError:
+                self.log(f"File {fpath} not found")
+                return []
+
+            alerts: List[Dict[str, Any]] = []
+            error_lines = 0
+            other_events = 0
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as handle:
+                    handle.seek(self.last_pos)
+                    for line in handle:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except Exception as exc:
+                            error_lines += 1
+                            if error_lines <= 3:
+                                self.debug_log(f"JSON parse error, skipping line: {str(exc)[:120]}")
+                            continue
+                        if data.get("event_type") == "alert":
+                            alerts.append(data)
+                        else:
+                            other_events += 1
+                    self.last_pos = handle.tell()
+            except Exception as exc:
+                self.log(f"Error reading {fpath}: {type(exc).__name__}: {exc}")
+                return []
+            self.debug_log(
+                f"Read summary: {len(alerts)} alerts, {other_events} other events, {error_lines} errors, pos={self.last_pos}"
+            )
+            return alerts
+
+try:
     from mikroclear.security import mask_known_secret, sanitize_exception_text
 except Exception:  # pragma: no cover - production single-file fallback
     def mask_telegram_bot_token(text: Any) -> str:
@@ -716,6 +800,15 @@ def debug_log(message: str) -> None:
     if DEBUG_MODE:
         timestamp = dt.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp} Mikro-Clear-DEBUG] {message}", flush=True)
+
+
+eve_tailer = EveJsonTailer(
+    add_on_start=ADD_ON_START,
+    shutdown_requested=lambda: shutdown_requested,
+    log=log,
+    debug_log=debug_log,
+    sleep=sleep,
+)
 
 
 def on_signal(signum: int, frame: Any) -> None:
@@ -1399,6 +1492,7 @@ class EventHandler(pyinotify.ProcessEvent):
             log("New eve.json detected. Resetting file position.")
             last_pos = 0
             last_inode = None
+            eve_tailer.reset()
             self.process_IN_MODIFY(event)
 
     def process_IN_DELETE(self, event: Any) -> None:
@@ -1412,69 +1506,18 @@ class EventHandler(pyinotify.ProcessEvent):
 
 def seek_to_end(fpath: str) -> None:
     global last_pos, last_inode
-    if ADD_ON_START:
-        last_pos = 0
-        last_inode = None
-        return
-
-    while not shutdown_requested:
-        try:
-            stat = os.stat(fpath)
-            last_pos = stat.st_size
-            last_inode = stat.st_ino
-            debug_log(f"Initial file position set to EOF: {last_pos}")
-            return
-        except FileNotFoundError:
-            log(f"File {fpath} not found. Retrying in 10 seconds...")
-            sleep(10)
+    eve_tailer.seek_to_end(fpath)
+    last_pos = eve_tailer.last_pos
+    last_inode = eve_tailer.last_inode
 
 
 def read_json(fpath: str) -> List[Dict[str, Any]]:
     global last_pos, last_inode
-
-    try:
-        stat = os.stat(fpath)
-        if last_inode is not None and stat.st_ino != last_inode:
-            debug_log("eve.json inode changed, resetting position")
-            last_pos = 0
-        if stat.st_size < last_pos:
-            debug_log("eve.json truncated/rotated, resetting position")
-            last_pos = 0
-        last_inode = stat.st_ino
-    except FileNotFoundError:
-        log(f"File {fpath} not found")
-        return []
-
-    alerts: List[Dict[str, Any]] = []
-    valid_lines = 0
-    error_lines = 0
-    other_events = 0
-
-    try:
-        with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
-            fh.seek(last_pos)
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except Exception as exc:
-                    error_lines += 1
-                    if DEBUG_MODE and error_lines <= 3:
-                        debug_log(f"JSON parse error, skipping line: {str(exc)[:120]}")
-                    continue
-                valid_lines += 1
-                if data.get("event_type") == "alert":
-                    alerts.append(data)
-                else:
-                    other_events += 1
-            last_pos = fh.tell()
-    except Exception as exc:
-        log(f"Error reading {fpath}: {type(exc).__name__}: {exc}")
-        return []
-
-    debug_log(f"Read summary: {len(alerts)} alerts, {other_events} other events, {error_lines} errors, pos={last_pos}")
+    eve_tailer.last_pos = last_pos
+    eve_tailer.last_inode = last_inode
+    alerts = eve_tailer.read_json(fpath)
+    last_pos = eve_tailer.last_pos
+    last_inode = eve_tailer.last_inode
     return alerts
 
 

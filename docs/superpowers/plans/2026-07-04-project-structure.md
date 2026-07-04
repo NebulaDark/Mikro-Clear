@@ -131,11 +131,11 @@ src/mikroclear/
 **Interfaces:**
 - Produces: importable watcher and alert processor units.
 
-- [ ] Move file seek/read JSON behavior.
+- [x] Move file seek/read JSON behavior.
 - [ ] Move single-alert and batch alert processing behind explicit dependencies.
 - [ ] Keep legacy wrappers until production entrypoint changes.
-- [ ] Run focused and full tests.
-- [ ] Commit.
+- [x] Run focused and full tests.
+- [x] Commit watcher extraction.
 
 ## Task 5: Move Asset Resolver And State Store Out Of `legacy.py`
 
