@@ -97,10 +97,10 @@ src/mikroclear/
 **Interfaces:**
 - Produces: importable runtime skeleton modules with no behavior change.
 
-- [ ] Add import tests for every runtime skeleton module.
-- [ ] Add minimal module docstrings and exported names.
-- [ ] Run project-structure tests.
-- [ ] Commit.
+- [x] Add import tests for every runtime skeleton module.
+- [x] Add minimal module docstrings and exported names.
+- [x] Run project-structure tests.
+- [x] Commit.
 
 ## Task 3: Move Settings Loading Out Of `legacy.py`
 

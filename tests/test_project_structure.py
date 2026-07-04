@@ -2,6 +2,19 @@ from unittest import TestCase
 
 
 class ProjectStructureTests(TestCase):
+    def test_runtime_skeleton_modules_are_importable(self):
+        import mikroclear.alert_processor
+        import mikroclear.app
+        import mikroclear.asset_resolver
+        import mikroclear.eve_watcher
+        import mikroclear.logging
+        import mikroclear.runtime
+        import mikroclear.settings
+        import mikroclear.state_store
+
+        self.assertEqual(mikroclear.app.__all__, ["main"])
+        self.assertEqual(mikroclear.settings.__all__, ["Settings"])
+
     def test_suricata_import_paths_preserve_alert_logic_identity(self):
         from mikroclear import alert_logic as legacy_alert_logic
         from mikroclear.suricata import alert_logic
