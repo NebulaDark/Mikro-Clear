@@ -321,6 +321,19 @@ except Exception:  # pragma: no cover - production single-file fallback
     save_lists_with_dependencies = None  # type: ignore
 
 try:
+    from mikroclear.asset_resolver import (
+        AssetResolver,
+        AssetResolverConfig,
+        is_private_ip_text as resolver_is_private_ip_text,
+        sanitize_asset_value as resolver_sanitize_asset_value,
+    )
+except Exception:  # pragma: no cover - production single-file fallback
+    AssetResolver = None  # type: ignore
+    AssetResolverConfig = None  # type: ignore
+    resolver_is_private_ip_text = None  # type: ignore
+    resolver_sanitize_asset_value = None  # type: ignore
+
+try:
     from mikroclear.security import mask_known_secret, sanitize_exception_text
 except Exception:  # pragma: no cover - production single-file fallback
     def mask_telegram_bot_token(text: Any) -> str:
@@ -860,6 +873,23 @@ eve_tailer = EveJsonTailer(
     sleep=sleep,
 )
 
+asset_resolver = (
+    AssetResolver(
+        AssetResolverConfig(
+            enable=ASSET_RESOLVER_ENABLE,
+            private_only=ASSET_RESOLVER_PRIVATE_ONLY,
+            dhcp_enable=ASSET_RESOLVER_DHCP_ENABLE,
+            ptr_enable=ASSET_RESOLVER_PTR_ENABLE,
+            cache_ttl=ASSET_RESOLVER_CACHE_TTL,
+        ),
+        get_router_client=lambda: get_router_client(),
+        debug_log=debug_log,
+        now=time,
+    )
+    if AssetResolver is not None and AssetResolverConfig is not None
+    else None
+)
+
 
 def on_signal(signum: int, frame: Any) -> None:
     global shutdown_requested
@@ -1053,6 +1083,9 @@ def sendTelegram(
 
 
 def is_private_ip_text(ip_text: Optional[str]) -> bool:
+    if resolver_is_private_ip_text is not None:
+        return resolver_is_private_ip_text(ip_text)
+
     if not ip_text:
         return False
 
@@ -1063,6 +1096,9 @@ def is_private_ip_text(ip_text: Optional[str]) -> bool:
 
 
 def asset_cache_get(ip_text: str) -> Optional[Dict[str, str]]:
+    if asset_resolver is not None:
+        return asset_resolver.cache_get(ip_text)
+
     cached = ASSET_CACHE.get(ip_text)
 
     if not cached:
@@ -1078,11 +1114,17 @@ def asset_cache_get(ip_text: str) -> Optional[Dict[str, str]]:
 
 
 def asset_cache_set(ip_text: str, value: Dict[str, str]) -> Dict[str, str]:
+    if asset_resolver is not None:
+        return asset_resolver.cache_set(ip_text, value)
+
     ASSET_CACHE[ip_text] = (time(), value)
     return value
 
 
 def sanitize_asset_value(value: Any, max_len: int = 80) -> str:
+    if resolver_sanitize_asset_value is not None:
+        return resolver_sanitize_asset_value(value, max_len)
+
     if value is None:
         return ""
 
@@ -1100,6 +1142,9 @@ def sanitize_asset_value(value: Any, max_len: int = 80) -> str:
 
 
 def resolve_asset_from_dhcp(ip_text: str) -> Dict[str, str]:
+    if asset_resolver is not None:
+        return asset_resolver.resolve_from_dhcp(ip_text)
+
     if not ASSET_RESOLVER_DHCP_ENABLE:
         return {}
 
@@ -1160,6 +1205,9 @@ def resolve_asset_from_dhcp(ip_text: str) -> Dict[str, str]:
 
 
 def resolve_asset_from_ptr(ip_text: str) -> Dict[str, str]:
+    if asset_resolver is not None:
+        return asset_resolver.resolve_from_ptr(ip_text)
+
     if not ASSET_RESOLVER_PTR_ENABLE:
         return {}
 
@@ -1186,6 +1234,9 @@ def resolve_asset_from_ptr(ip_text: str) -> Dict[str, str]:
 
 
 def resolve_asset(ip_text: Optional[str]) -> Dict[str, str]:
+    if asset_resolver is not None:
+        return asset_resolver.resolve(ip_text)
+
     if not ASSET_RESOLVER_ENABLE:
         return {}
 

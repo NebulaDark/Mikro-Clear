@@ -152,11 +152,11 @@ src/mikroclear/
 **Interfaces:**
 - Produces: asset resolution and RouterOS list persistence modules.
 
-- [ ] Move DHCP/PTR/cache logic.
+- [x] Move DHCP/PTR/cache logic.
 - [x] Move save/restore list logic.
 - [x] Run focused and full tests.
 - [x] Commit state store extraction.
-- [ ] Commit asset resolver extraction.
+- [x] Commit asset resolver extraction.
 
 ## Task 6: Switch CLI To `app.py`
 
