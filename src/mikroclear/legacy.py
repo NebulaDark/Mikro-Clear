@@ -93,6 +93,118 @@ except Exception:  # pragma: no cover - production single-file fallback
         )
 
 try:
+    from mikroclear.settings import Settings
+except Exception:  # pragma: no cover - production single-file fallback
+    class Settings:
+        def __init__(self, **values: Any) -> None:
+            self.__dict__.update(values)
+
+        @classmethod
+        def from_env(cls) -> "Settings":
+            username = env_str("MIKROCATA_ROUTER_USERNAME", "mikrocata2selks")
+            password = env_str("MIKROCATA_ROUTER_PASSWORD", "")
+            router_ip = env_str("MIKROCATA_ROUTER_IP", "192.168.10.1")
+            router_tls_server_name = env_str("MIKROCATA_ROUTER_TLS_SERVER_NAME", router_ip)
+            use_ssl = env_bool("MIKROCATA_USE_SSL", True)
+            port = env_int("MIKROCATA_ROUTER_PORT", 8729 if use_ssl else 8728)
+            block_list_name = env_str("MIKROCATA_BLOCK_LIST_NAME", "Suricata")
+            wan_ip = env_str("MIKROCATA_WAN_IP", "")
+            local_ip_prefix = env_str("MIKROCATA_LOCAL_IP_PREFIX", "192.168.0.0/16")
+            default_whitelist = tuple(
+                item
+                for item in (
+                    wan_ip,
+                    local_ip_prefix,
+                    "127.0.0.1",
+                    "1.1.1.1",
+                    "8.8.8.8",
+                    "fe80:",
+                    "10.0.0.0/8",
+                    "172.16.0.0/12",
+                )
+                if item
+            )
+            log_dir = env_str(
+                "MIKROCATA_SURICATA_LOG_DIR",
+                "/opt/SELKS/docker/containers-data/suricata/logs/",
+            )
+            filepath = os.path.abspath(
+                env_str(
+                    "MIKROCATA_EVE_JSON",
+                    os.path.join(log_dir, "eve.json"),
+                )
+            )
+            state_dir = os.path.abspath(env_str("MIKROCATA_STATE_DIR", "/var/lib/mikroclear"))
+            return cls(
+                username=username,
+                password=password,
+                router_ip=router_ip,
+                router_tls_server_name=router_tls_server_name,
+                use_ssl=use_ssl,
+                port=port,
+                allow_self_signed_certs=env_bool("MIKROCATA_ALLOW_SELF_SIGNED_CERTS", False),
+                ca_file=env_str("MIKROCATA_CA_FILE", "/etc/mikrocata/certs/mikrotik-ca.crt"),
+                router_connect_retry_seconds=env_int("MIKROCATA_ROUTER_CONNECT_RETRY_SECONDS", 30),
+                socket_timeout_seconds=env_int("MIKROCATA_SOCKET_TIMEOUT_SECONDS", 20),
+                router_heartbeat_seconds=env_int("MIKROCATA_ROUTER_HEARTBEAT_SECONDS", 60),
+                router_reconnect_sleep_seconds=env_int("MIKROCATA_ROUTER_RECONNECT_SLEEP_SECONDS", 2),
+                router_connect_notify_enable=env_bool("MIKROCATA_ROUTER_CONNECT_NOTIFY_ENABLE", False),
+                block_list_name=block_list_name,
+                timeout=env_str("MIKROCATA_BLOCK_TIMEOUT", "1d"),
+                monitor_only=env_bool("MIKROCATA_MONITOR_ONLY", False),
+                enable_telegram=env_bool("MIKROCATA_TELEGRAM_ENABLE", False),
+                telegram_token=env_str("MIKROCATA_TELEGRAM_TOKEN", ""),
+                telegram_chatid=env_str("MIKROCATA_TELEGRAM_CHATID", ""),
+                telegram_timeout=env_int("MIKROCATA_TELEGRAM_TIMEOUT", 10),
+                telegram_cooldown_seconds=env_int("MIKROCATA_TELEGRAM_COOLDOWN_SECONDS", 2),
+                telegram_system_cooldown_seconds=env_int("MIKROCATA_TELEGRAM_SYSTEM_COOLDOWN_SECONDS", 300),
+                telegram_unblock_enable=env_bool("MIKROCATA_TELEGRAM_UNBLOCK_ENABLE", True),
+                telegram_unblock_ttl_seconds=env_int("MIKROCATA_TELEGRAM_UNBLOCK_TTL_SECONDS", 24 * 3600),
+                telegram_updates_interval_seconds=env_int("MIKROCATA_TELEGRAM_UPDATES_INTERVAL_SECONDS", 5),
+                wan_ip=wan_ip,
+                local_ip_prefix=local_ip_prefix,
+                default_whitelist=default_whitelist,
+                whitelist_ips=env_csv("MIKROCATA_WHITELIST_IPS", default_whitelist),
+                enable_ipv6=env_bool("MIKROCATA_ENABLE_IPV6", False),
+                severity=env_csv("MIKROCATA_SEVERITY", ("1", "2")),
+                listen_interfaces=env_csv("MIKROCATA_LISTEN_INTERFACES", ("tzsp0",)),
+                add_on_start=env_bool("MIKROCATA_ADD_ON_START", False),
+                debug_mode=env_bool("MIKROCATA_DEBUG", False),
+                comment_time_format=env_str("MIKROCATA_COMMENT_TIME_FORMAT", "%-d %b %Y %H:%M:%S.%f"),
+                selks_container_data_suricata_log=log_dir,
+                filepath=filepath,
+                state_dir=state_dir,
+                save_lists_location=os.path.abspath(
+                    env_str("MIKROCATA_SAVE_LISTS_LOCATION", os.path.join(state_dir, "savelists-tzsp0.json"))
+                ),
+                save_lists_location_v6=os.path.abspath(
+                    env_str("MIKROCATA_SAVE_LISTS_LOCATION_V6", os.path.join(state_dir, "savelists-tzsp0_v6.json"))
+                ),
+                uptime_bookmark=os.path.abspath(
+                    env_str("MIKROCATA_UPTIME_BOOKMARK", os.path.join(state_dir, "uptime-tzsp0.bookmark"))
+                ),
+                ignore_list_location=os.path.abspath(
+                    env_str("MIKROCATA_IGNORE_LIST_LOCATION", os.path.join(state_dir, "ignore-tzsp0.conf"))
+                ),
+                telegram_lock_file=os.path.abspath(
+                    env_str("MIKROCATA_TELEGRAM_LOCK_FILE", os.path.join(state_dir, "telegram-rate-limit.lock"))
+                ),
+                telegram_unblock_state_file=os.path.abspath(
+                    env_str(
+                        "MIKROCATA_TELEGRAM_UNBLOCK_STATE_FILE",
+                        os.path.join(state_dir, "telegram-unblock-actions.json"),
+                    )
+                ),
+                save_lists=env_csv("MIKROCATA_SAVE_LISTS", (block_list_name,)),
+                save_interval=env_int("MIKROCATA_SAVE_INTERVAL", 300),
+                asset_resolver_enable=env_bool("MIKROCATA_ASSET_RESOLVER_ENABLE", True),
+                asset_resolver_private_only=env_bool("MIKROCATA_ASSET_RESOLVER_PRIVATE_ONLY", True),
+                asset_resolver_dhcp_enable=env_bool("MIKROCATA_ASSET_RESOLVER_DHCP_ENABLE", True),
+                asset_resolver_ptr_enable=env_bool("MIKROCATA_ASSET_RESOLVER_PTR_ENABLE", True),
+                asset_resolver_cache_ttl=env_int("MIKROCATA_ASSET_RESOLVER_CACHE_TTL", 3600),
+            )
+
+try:
     from mikroclear.security import mask_known_secret, sanitize_exception_text
 except Exception:  # pragma: no cover - production single-file fallback
     def mask_telegram_bot_token(text: Any) -> str:
@@ -506,90 +618,59 @@ VERSION = "3.1.1-TZSP0-ASSET-RESOLVER"
 # ------------------------------------------------------------------------------
 
 
-USERNAME = env_str("MIKROCATA_ROUTER_USERNAME", "mikrocata2selks")
-PASSWORD = env_str("MIKROCATA_ROUTER_PASSWORD", "")
-ROUTER_IP = env_str("MIKROCATA_ROUTER_IP", "192.168.10.1")
-ROUTER_TLS_SERVER_NAME = env_str("MIKROCATA_ROUTER_TLS_SERVER_NAME", ROUTER_IP)
-USE_SSL = env_bool("MIKROCATA_USE_SSL", True)
-PORT = env_int("MIKROCATA_ROUTER_PORT", 8729 if USE_SSL else 8728)
-ALLOW_SELF_SIGNED_CERTS = env_bool("MIKROCATA_ALLOW_SELF_SIGNED_CERTS", False)
-CA_FILE = env_str("MIKROCATA_CA_FILE", "/etc/mikrocata/certs/mikrotik-ca.crt")
-ROUTER_CONNECT_RETRY_SECONDS = env_int("MIKROCATA_ROUTER_CONNECT_RETRY_SECONDS", 30)
-SOCKET_TIMEOUT_SECONDS = env_int("MIKROCATA_SOCKET_TIMEOUT_SECONDS", 20)
-ROUTER_HEARTBEAT_SECONDS = env_int("MIKROCATA_ROUTER_HEARTBEAT_SECONDS", 60)
-ROUTER_RECONNECT_SLEEP_SECONDS = env_int("MIKROCATA_ROUTER_RECONNECT_SLEEP_SECONDS", 2)
-ROUTER_CONNECT_NOTIFY_ENABLE = env_bool("MIKROCATA_ROUTER_CONNECT_NOTIFY_ENABLE", False)
+SETTINGS = Settings.from_env()
 
-BLOCK_LIST_NAME = env_str("MIKROCATA_BLOCK_LIST_NAME", "Suricata")
-TIMEOUT = env_str("MIKROCATA_BLOCK_TIMEOUT", "1d")
-MONITOR_ONLY = env_bool("MIKROCATA_MONITOR_ONLY", False)
+USERNAME = SETTINGS.username
+PASSWORD = SETTINGS.password
+ROUTER_IP = SETTINGS.router_ip
+ROUTER_TLS_SERVER_NAME = SETTINGS.router_tls_server_name
+USE_SSL = SETTINGS.use_ssl
+PORT = SETTINGS.port
+ALLOW_SELF_SIGNED_CERTS = SETTINGS.allow_self_signed_certs
+CA_FILE = SETTINGS.ca_file
+ROUTER_CONNECT_RETRY_SECONDS = SETTINGS.router_connect_retry_seconds
+SOCKET_TIMEOUT_SECONDS = SETTINGS.socket_timeout_seconds
+ROUTER_HEARTBEAT_SECONDS = SETTINGS.router_heartbeat_seconds
+ROUTER_RECONNECT_SLEEP_SECONDS = SETTINGS.router_reconnect_sleep_seconds
+ROUTER_CONNECT_NOTIFY_ENABLE = SETTINGS.router_connect_notify_enable
 
-ENABLE_TELEGRAM = env_bool("MIKROCATA_TELEGRAM_ENABLE", False)
-TELEGRAM_TOKEN = env_str("MIKROCATA_TELEGRAM_TOKEN", "")
-TELEGRAM_CHATID = env_str("MIKROCATA_TELEGRAM_CHATID", "")
-TELEGRAM_TIMEOUT = env_int("MIKROCATA_TELEGRAM_TIMEOUT", 10)
-TELEGRAM_COOLDOWN_SECONDS = env_int("MIKROCATA_TELEGRAM_COOLDOWN_SECONDS", 2)
-TELEGRAM_SYSTEM_COOLDOWN_SECONDS = env_int("MIKROCATA_TELEGRAM_SYSTEM_COOLDOWN_SECONDS", 300)
-TELEGRAM_UNBLOCK_ENABLE = env_bool("MIKROCATA_TELEGRAM_UNBLOCK_ENABLE", True)
-TELEGRAM_UNBLOCK_TTL_SECONDS = env_int("MIKROCATA_TELEGRAM_UNBLOCK_TTL_SECONDS", 24 * 3600)
-TELEGRAM_UPDATES_INTERVAL_SECONDS = env_int("MIKROCATA_TELEGRAM_UPDATES_INTERVAL_SECONDS", 5)
+BLOCK_LIST_NAME = SETTINGS.block_list_name
+TIMEOUT = SETTINGS.timeout
+MONITOR_ONLY = SETTINGS.monitor_only
 
-WAN_IP = env_str("MIKROCATA_WAN_IP", "")
-LOCAL_IP_PREFIX = env_str("MIKROCATA_LOCAL_IP_PREFIX", "192.168.0.0/16")
-DEFAULT_WHITELIST = tuple(
-    item
-    for item in (
-        WAN_IP,
-        LOCAL_IP_PREFIX,
-        "127.0.0.1",
-        "1.1.1.1",
-        "8.8.8.8",
-        "fe80:",
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-    )
-    if item
-)
-WHITELIST_IPS = env_csv("MIKROCATA_WHITELIST_IPS", DEFAULT_WHITELIST)
-ENABLE_IPV6 = env_bool("MIKROCATA_ENABLE_IPV6", False)
+ENABLE_TELEGRAM = SETTINGS.enable_telegram
+TELEGRAM_TOKEN = SETTINGS.telegram_token
+TELEGRAM_CHATID = SETTINGS.telegram_chatid
+TELEGRAM_TIMEOUT = SETTINGS.telegram_timeout
+TELEGRAM_COOLDOWN_SECONDS = SETTINGS.telegram_cooldown_seconds
+TELEGRAM_SYSTEM_COOLDOWN_SECONDS = SETTINGS.telegram_system_cooldown_seconds
+TELEGRAM_UNBLOCK_ENABLE = SETTINGS.telegram_unblock_enable
+TELEGRAM_UNBLOCK_TTL_SECONDS = SETTINGS.telegram_unblock_ttl_seconds
+TELEGRAM_UPDATES_INTERVAL_SECONDS = SETTINGS.telegram_updates_interval_seconds
 
-SEVERITY = env_csv("MIKROCATA_SEVERITY", ("1", "2"))
-LISTEN_INTERFACES = env_csv("MIKROCATA_LISTEN_INTERFACES", ("tzsp0",))
-ADD_ON_START = env_bool("MIKROCATA_ADD_ON_START", False)
-DEBUG_MODE = env_bool("MIKROCATA_DEBUG", False)
+WAN_IP = SETTINGS.wan_ip
+LOCAL_IP_PREFIX = SETTINGS.local_ip_prefix
+DEFAULT_WHITELIST = SETTINGS.default_whitelist
+WHITELIST_IPS = SETTINGS.whitelist_ips
+ENABLE_IPV6 = SETTINGS.enable_ipv6
 
-COMMENT_TIME_FORMAT = env_str("MIKROCATA_COMMENT_TIME_FORMAT", "%-d %b %Y %H:%M:%S.%f")
-SELKS_CONTAINER_DATA_SURICATA_LOG = env_str(
-    "MIKROCATA_SURICATA_LOG_DIR",
-    "/opt/SELKS/docker/containers-data/suricata/logs/",
-)
-FILEPATH = os.path.abspath(
-    env_str(
-        "MIKROCATA_EVE_JSON",
-        os.path.join(SELKS_CONTAINER_DATA_SURICATA_LOG, "eve.json"),
-    )
-)
-STATE_DIR = os.path.abspath(env_str("MIKROCATA_STATE_DIR", "/var/lib/mikroclear"))
-SAVE_LISTS_LOCATION = os.path.abspath(
-    env_str("MIKROCATA_SAVE_LISTS_LOCATION", os.path.join(STATE_DIR, "savelists-tzsp0.json"))
-)
-SAVE_LISTS_LOCATION_V6 = os.path.abspath(
-    env_str("MIKROCATA_SAVE_LISTS_LOCATION_V6", os.path.join(STATE_DIR, "savelists-tzsp0_v6.json"))
-)
-UPTIME_BOOKMARK = os.path.abspath(
-    env_str("MIKROCATA_UPTIME_BOOKMARK", os.path.join(STATE_DIR, "uptime-tzsp0.bookmark"))
-)
-IGNORE_LIST_LOCATION = os.path.abspath(
-    env_str("MIKROCATA_IGNORE_LIST_LOCATION", os.path.join(STATE_DIR, "ignore-tzsp0.conf"))
-)
-TELEGRAM_LOCK_FILE = os.path.abspath(
-    env_str("MIKROCATA_TELEGRAM_LOCK_FILE", os.path.join(STATE_DIR, "telegram-rate-limit.lock"))
-)
-TELEGRAM_UNBLOCK_STATE_FILE = os.path.abspath(
-    env_str("MIKROCATA_TELEGRAM_UNBLOCK_STATE_FILE", os.path.join(STATE_DIR, "telegram-unblock-actions.json"))
-)
-SAVE_LISTS = list(env_csv("MIKROCATA_SAVE_LISTS", (BLOCK_LIST_NAME,)))
-SAVE_INTERVAL = env_int("MIKROCATA_SAVE_INTERVAL", 300)
+SEVERITY = SETTINGS.severity
+LISTEN_INTERFACES = SETTINGS.listen_interfaces
+ADD_ON_START = SETTINGS.add_on_start
+DEBUG_MODE = SETTINGS.debug_mode
+
+COMMENT_TIME_FORMAT = SETTINGS.comment_time_format
+SELKS_CONTAINER_DATA_SURICATA_LOG = SETTINGS.selks_container_data_suricata_log
+FILEPATH = SETTINGS.filepath
+STATE_DIR = SETTINGS.state_dir
+SAVE_LISTS_LOCATION = SETTINGS.save_lists_location
+SAVE_LISTS_LOCATION_V6 = SETTINGS.save_lists_location_v6
+UPTIME_BOOKMARK = SETTINGS.uptime_bookmark
+IGNORE_LIST_LOCATION = SETTINGS.ignore_list_location
+TELEGRAM_LOCK_FILE = SETTINGS.telegram_lock_file
+TELEGRAM_UNBLOCK_STATE_FILE = SETTINGS.telegram_unblock_state_file
+SAVE_LISTS = list(SETTINGS.save_lists)
+SAVE_INTERVAL = SETTINGS.save_interval
 
 
 def _ensure_private_runtime_file(path_text: str, initial: str = "") -> None:
@@ -603,11 +684,11 @@ def _ensure_private_runtime_file(path_text: str, initial: str = "") -> None:
     os.chmod(path, 0o600)
 
 # Asset Resolver: MikroTik DHCP leases + PTR DNS fallback for Telegram context
-ASSET_RESOLVER_ENABLE = env_bool("MIKROCATA_ASSET_RESOLVER_ENABLE", True)
-ASSET_RESOLVER_PRIVATE_ONLY = env_bool("MIKROCATA_ASSET_RESOLVER_PRIVATE_ONLY", True)
-ASSET_RESOLVER_DHCP_ENABLE = env_bool("MIKROCATA_ASSET_RESOLVER_DHCP_ENABLE", True)
-ASSET_RESOLVER_PTR_ENABLE = env_bool("MIKROCATA_ASSET_RESOLVER_PTR_ENABLE", True)
-ASSET_RESOLVER_CACHE_TTL = env_int("MIKROCATA_ASSET_RESOLVER_CACHE_TTL", 3600)
+ASSET_RESOLVER_ENABLE = SETTINGS.asset_resolver_enable
+ASSET_RESOLVER_PRIVATE_ONLY = SETTINGS.asset_resolver_private_only
+ASSET_RESOLVER_DHCP_ENABLE = SETTINGS.asset_resolver_dhcp_enable
+ASSET_RESOLVER_PTR_ENABLE = SETTINGS.asset_resolver_ptr_enable
+ASSET_RESOLVER_CACHE_TTL = SETTINGS.asset_resolver_cache_ttl
 
 ASSET_CACHE: Dict[str, Tuple[float, Dict[str, str]]] = {}
 

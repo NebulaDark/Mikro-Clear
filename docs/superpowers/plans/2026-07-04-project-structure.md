@@ -113,11 +113,11 @@ src/mikroclear/
 - Produces: `Settings.from_env()`.
 - Consumes: `mikroclear.config` env helpers.
 
-- [ ] Add tests for `MIKROCLEAR_*` precedence over `MIKROCATA_*`.
-- [ ] Move runtime config constants into a dataclass.
-- [ ] Keep legacy module constants assigned from `Settings.from_env()` during transition.
-- [ ] Run focused and full tests.
-- [ ] Commit.
+- [x] Add tests for `MIKROCLEAR_*` precedence over `MIKROCATA_*`.
+- [x] Move runtime config constants into a dataclass.
+- [x] Keep legacy module constants assigned from `Settings.from_env()` during transition.
+- [x] Run focused and full tests.
+- [x] Commit.
 
 ## Task 4: Move Watcher And Alert Processing Out Of `legacy.py`
 
