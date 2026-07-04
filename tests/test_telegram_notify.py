@@ -43,7 +43,7 @@ class TelegramNotifyFormattingTests(TestCase):
 class TelegramNotifyDeliveryTests(TestCase):
     def test_send_telegram_message_posts_expected_payload(self):
         response = Mock(status_code=200, text="ok")
-        with patch("mikroclear.telegram_notify.requests.post", return_value=response) as post:
+        with patch("mikroclear.telegram.notify.requests.post", return_value=response) as post:
             result = send_telegram_message("token", "chat", "<b>hello</b>", timeout=7)
 
         self.assertTrue(result.ok)
@@ -63,7 +63,7 @@ class TelegramNotifyDeliveryTests(TestCase):
         response = Mock(status_code=429, text="too many")
         response.json.return_value = {"parameters": {"retry_after": 12}}
 
-        with patch("mikroclear.telegram_notify.requests.post", return_value=response):
+        with patch("mikroclear.telegram.notify.requests.post", return_value=response):
             result = send_telegram_message("token", "chat", "hello", timeout=7)
 
         self.assertFalse(result.ok)
@@ -75,7 +75,7 @@ class TelegramNotifyDeliveryTests(TestCase):
         response = Mock(status_code=500, text="failed /bot123456:ABC_def-123/sendMessage")
         response.json.return_value = {}
 
-        with patch("mikroclear.telegram_notify.requests.post", return_value=response):
+        with patch("mikroclear.telegram.notify.requests.post", return_value=response):
             result = send_telegram_message("123456:ABC_def-123", "chat", "hello", timeout=7)
 
         self.assertFalse(result.ok)
