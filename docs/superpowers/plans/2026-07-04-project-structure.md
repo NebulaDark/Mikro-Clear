@@ -153,9 +153,10 @@ src/mikroclear/
 - Produces: asset resolution and RouterOS list persistence modules.
 
 - [ ] Move DHCP/PTR/cache logic.
-- [ ] Move save/restore list logic.
-- [ ] Run focused and full tests.
-- [ ] Commit.
+- [x] Move save/restore list logic.
+- [x] Run focused and full tests.
+- [x] Commit state store extraction.
+- [ ] Commit asset resolver extraction.
 
 ## Task 6: Switch CLI To `app.py`
 

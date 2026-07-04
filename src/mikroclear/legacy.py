@@ -304,6 +304,23 @@ except Exception:  # pragma: no cover - production single-file fallback
     update_existing_address_with_dependencies = None  # type: ignore
 
 try:
+    from mikroclear.state_store import (
+        StateStoreConfig,
+        add_saved_lists as add_saved_lists_with_dependencies,
+        check_tik_uptime as check_tik_uptime_with_dependencies,
+        ensure_private_runtime_file,
+        parse_routeros_uptime as parse_routeros_uptime_with_dependencies,
+        save_lists as save_lists_with_dependencies,
+    )
+except Exception:  # pragma: no cover - production single-file fallback
+    StateStoreConfig = None  # type: ignore
+    add_saved_lists_with_dependencies = None  # type: ignore
+    check_tik_uptime_with_dependencies = None  # type: ignore
+    ensure_private_runtime_file = None  # type: ignore
+    parse_routeros_uptime_with_dependencies = None  # type: ignore
+    save_lists_with_dependencies = None  # type: ignore
+
+try:
     from mikroclear.security import mask_known_secret, sanitize_exception_text
 except Exception:  # pragma: no cover - production single-file fallback
     def mask_telegram_bot_token(text: Any) -> str:
@@ -773,6 +790,10 @@ SAVE_INTERVAL = SETTINGS.save_interval
 
 
 def _ensure_private_runtime_file(path_text: str, initial: str = "") -> None:
+    if ensure_private_runtime_file is not None:
+        ensure_private_runtime_file(path_text, initial)
+        return
+
     path = Path(path_text)
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
@@ -781,6 +802,20 @@ def _ensure_private_runtime_file(path_text: str, initial: str = "") -> None:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(initial)
     os.chmod(path, 0o600)
+
+
+def _state_store_config() -> Any:
+    if StateStoreConfig is None:
+        return None
+    return StateStoreConfig(
+        save_lists_location=SAVE_LISTS_LOCATION,
+        save_lists_location_v6=SAVE_LISTS_LOCATION_V6,
+        uptime_bookmark=UPTIME_BOOKMARK,
+        save_lists=tuple(SAVE_LISTS),
+        block_list_name=BLOCK_LIST_NAME,
+        timeout=TIMEOUT,
+        whitelist_ips=WHITELIST_IPS,
+    )
 
 # Asset Resolver: MikroTik DHCP leases + PTR DNS fallback for Telegram context
 ASSET_RESOLVER_ENABLE = SETTINGS.asset_resolver_enable
@@ -1797,6 +1832,13 @@ def format_event_timestamp(value: Any) -> str:
 
 
 def check_tik_uptime(resources: Any) -> bool:
+    if check_tik_uptime_with_dependencies is not None:
+        return check_tik_uptime_with_dependencies(
+            resources,
+            config=_state_store_config(),
+            debug_log=debug_log,
+        )
+
     uptime = "0s"
     for row in resources:
         uptime = row.get("uptime", "0s")
@@ -1823,6 +1865,9 @@ def check_tik_uptime(resources: Any) -> bool:
 
 
 def parse_routeros_uptime(uptime: str) -> int:
+    if parse_routeros_uptime_with_dependencies is not None:
+        return parse_routeros_uptime_with_dependencies(uptime)
+
     units = {"w": 7 * 24 * 3600, "d": 24 * 3600, "h": 3600, "m": 60, "s": 1}
     total = 0
     for num, unit in re.findall(r"(\d+)([wdhms])", uptime):
@@ -1831,6 +1876,15 @@ def parse_routeros_uptime(uptime: str) -> int:
 
 
 def save_lists(address_list: Any, is_v6: bool = False) -> None:
+    if save_lists_with_dependencies is not None:
+        save_lists_with_dependencies(
+            address_list,
+            config=_state_store_config(),
+            is_v6=is_v6,
+            debug_log=debug_log,
+        )
+        return
+
     _address = Key("address")
     _list = Key("list")
     _timeout = Key("timeout")
@@ -1853,6 +1907,15 @@ def save_lists(address_list: Any, is_v6: bool = False) -> None:
 
 
 def add_saved_lists(address_list: Any, is_v6: bool = False) -> None:
+    if add_saved_lists_with_dependencies is not None:
+        add_saved_lists_with_dependencies(
+            address_list,
+            config=_state_store_config(),
+            is_v6=is_v6,
+            debug_log=debug_log,
+        )
+        return
+
     curr_file = SAVE_LISTS_LOCATION_V6 if is_v6 else SAVE_LISTS_LOCATION
 
     try:
