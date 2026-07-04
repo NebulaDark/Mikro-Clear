@@ -292,12 +292,14 @@ try:
     from mikroclear.alert_processor import (
         AlertProcessorConfig,
         format_event_timestamp as processor_format_event_timestamp,
+        process_alert_batch as process_alert_batch_with_dependencies,
         process_single_alert as process_single_alert_with_dependencies,
         update_existing_address as update_existing_address_with_dependencies,
     )
 except Exception:  # pragma: no cover - production single-file fallback
     AlertProcessorConfig = None  # type: ignore
     processor_format_event_timestamp = None  # type: ignore
+    process_alert_batch_with_dependencies = None  # type: ignore
     process_single_alert_with_dependencies = None  # type: ignore
     update_existing_address_with_dependencies = None  # type: ignore
 
@@ -1562,6 +1564,43 @@ def validate_event(event: Any) -> Optional[Dict[str, Any]]:
 
 
 def add_to_tik(alerts: Optional[List[Dict[str, Any]]]) -> None:
+    global last_save_time
+    if process_alert_batch_with_dependencies is not None:
+        last_save_time = process_alert_batch_with_dependencies(
+            alerts,
+            client=get_router_client(),
+            config=_alert_processor_config(),
+            validate_event=validate_event,
+            process_single=process_single_alert,
+            save_restore=_save_restore_lists,
+            last_save_time=last_save_time,
+            save_interval=SAVE_INTERVAL,
+            now=time,
+            log=log,
+            debug_log=debug_log,
+        )
+        return
+
+    _legacy_add_to_tik_fallback(alerts)
+
+
+def _save_restore_lists(client: Any) -> None:
+    address_list, address_list_v6, resources = client.paths()
+
+    if check_tik_uptime(resources):
+        log("Router reboot detected - restoring saved lists")
+        send_system_notification("Router reboot detected - restoring saved address lists", "RESTORE")
+        add_saved_lists(address_list)
+        if ENABLE_IPV6 and address_list_v6 is not None:
+            add_saved_lists(address_list_v6, True)
+
+    save_lists(address_list)
+
+    if ENABLE_IPV6 and address_list_v6 is not None:
+        save_lists(address_list_v6, True)
+
+
+def _legacy_add_to_tik_fallback(alerts: Optional[List[Dict[str, Any]]]) -> None:
     global last_save_time
 
     if not alerts:

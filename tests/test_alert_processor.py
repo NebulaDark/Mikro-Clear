@@ -1,7 +1,7 @@
 from unittest import TestCase
 from unittest.mock import Mock
 
-from mikroclear.alert_processor import AlertProcessorConfig, process_single_alert
+from mikroclear.alert_processor import AlertProcessorConfig, process_alert_batch, process_single_alert
 
 
 def alert_event(src_ip="9.9.9.9", dest_ip="192.168.10.15"):
@@ -22,6 +22,72 @@ def alert_event(src_ip="9.9.9.9", dest_ip="192.168.10.15"):
 
 
 class AlertProcessorTests(TestCase):
+    def test_process_alert_batch_deduplicates_by_target_and_runs_save_callback(self):
+        client = Mock()
+        address_list = Mock()
+        client.paths.return_value = (address_list, None, object())
+        client.run_with_reconnect.side_effect = lambda _name, func: func()
+        processed = []
+        save_restore = Mock()
+        config = AlertProcessorConfig(
+            severities=("1", "2"),
+            listen_interfaces=("tzsp0",),
+            whitelist_ips=("192.168.10.0/24",),
+            block_list_name="Suricata",
+            timeout="1d",
+        )
+        first = alert_event(src_ip="192.168.10.9", dest_ip="8.8.8.8")
+        second = alert_event(src_ip="192.168.10.10", dest_ip="8.8.8.8")
+
+        last_save_time = process_alert_batch(
+            [first, second],
+            client=client,
+            config=config,
+            validate_event=lambda event: event,
+            process_single=lambda event, _address_list, _address_list_v6: processed.append(event),
+            save_restore=save_restore,
+            last_save_time=0,
+            save_interval=300,
+            now=lambda: 500,
+            log=Mock(),
+            debug_log=Mock(),
+        )
+
+        self.assertEqual(processed, [second])
+        save_restore.assert_called_once_with(client)
+        self.assertEqual(last_save_time, 500)
+        self.assertEqual(
+            [call.args[0] for call in client.run_with_reconnect.call_args_list],
+            ["processing alerts", "saving/restoring lists"],
+        )
+
+    def test_process_alert_batch_returns_existing_save_time_when_no_alerts(self):
+        client = Mock()
+        config = AlertProcessorConfig(
+            severities=("1", "2"),
+            listen_interfaces=("tzsp0",),
+            whitelist_ips=(),
+            block_list_name="Suricata",
+            timeout="1d",
+        )
+
+        result = process_alert_batch(
+            [],
+            client=client,
+            config=config,
+            validate_event=lambda event: event,
+            process_single=Mock(),
+            save_restore=Mock(),
+            last_save_time=123,
+            save_interval=300,
+            now=lambda: 500,
+            log=Mock(),
+            debug_log=Mock(),
+        )
+
+        self.assertEqual(result, 123)
+        client.run_with_reconnect.assert_not_called()
+
     def test_process_single_alert_blocks_external_source(self):
         address_list = Mock()
         send_telegram = Mock()

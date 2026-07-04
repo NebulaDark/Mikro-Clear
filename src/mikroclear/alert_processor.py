@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime as dt
+from time import time
 from typing import Any, Callable
 
 try:
@@ -148,9 +149,68 @@ def process_single_alert(
         raise
 
 
+def process_alert_batch(
+    alerts: list[dict[str, Any]] | None,
+    *,
+    client: Any,
+    config: AlertProcessorConfig,
+    validate_event: Callable[[Any], dict[str, Any] | None],
+    process_single: Callable[[dict[str, Any], Any, Any], None],
+    save_restore: Callable[[Any], None],
+    last_save_time: int,
+    save_interval: int,
+    now: Callable[[], float] = time,
+    log: Callable[[str], None],
+    debug_log: Callable[[str], None],
+) -> int:
+    if not alerts:
+        debug_log("No alerts to process")
+        return last_save_time
+
+    valid_events: list[dict[str, Any]] = []
+    for raw in alerts:
+        event = validate_event(raw)
+        if event is not None:
+            valid_events.append(event)
+
+    if not valid_events:
+        return last_save_time
+
+    unique: dict[str, dict[str, Any]] = {}
+    for event in valid_events:
+        src = str(event["src_ip"])
+        dst = str(event["dest_ip"])
+        target_ip = dst if is_ip_in_whitelist(src, config.whitelist_ips) else src
+        unique[target_ip] = event
+
+    debug_log(f"Processing {len(unique)} unique target IPs from {len(valid_events)} valid alerts")
+
+    def process_batch() -> None:
+        address_list, address_list_v6, _resources = client.paths()
+        for event in unique.values():
+            process_single(event, address_list, address_list_v6)
+
+    client.run_with_reconnect("processing alerts", process_batch)
+
+    current_time = int(now())
+    if current_time - last_save_time < save_interval:
+        return last_save_time
+
+    def save_restore_batch() -> None:
+        save_restore(client)
+
+    try:
+        client.run_with_reconnect("saving/restoring lists", save_restore_batch)
+    except Exception as exc:
+        log(f"ERROR while saving/restoring lists after reconnect retry: {type(exc).__name__}: {exc}")
+
+    return current_time
+
+
 __all__ = [
     "AlertProcessorConfig",
     "format_event_timestamp",
+    "process_alert_batch",
     "process_single_alert",
     "update_existing_address",
 ]
