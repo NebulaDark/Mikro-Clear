@@ -518,6 +518,7 @@ ROUTER_CONNECT_RETRY_SECONDS = env_int("MIKROCATA_ROUTER_CONNECT_RETRY_SECONDS",
 SOCKET_TIMEOUT_SECONDS = env_int("MIKROCATA_SOCKET_TIMEOUT_SECONDS", 20)
 ROUTER_HEARTBEAT_SECONDS = env_int("MIKROCATA_ROUTER_HEARTBEAT_SECONDS", 60)
 ROUTER_RECONNECT_SLEEP_SECONDS = env_int("MIKROCATA_ROUTER_RECONNECT_SLEEP_SECONDS", 2)
+ROUTER_CONNECT_NOTIFY_ENABLE = env_bool("MIKROCATA_ROUTER_CONNECT_NOTIFY_ENABLE", False)
 
 BLOCK_LIST_NAME = env_str("MIKROCATA_BLOCK_LIST_NAME", "Suricata")
 TIMEOUT = env_str("MIKROCATA_BLOCK_TIMEOUT", "1d")
@@ -1213,10 +1214,11 @@ class RouterOSClient:
                 self.connected_at = time()
                 self.last_heartbeat = 0.0
                 log("Connected to MikroTik")
-                send_system_notification(
-                    f"Connected to MikroTik {ROUTER_IP}:{actual_port} via {'SSL' if USE_SSL else 'plain API'}",
-                    "SYSTEM",
-                )
+                if ROUTER_CONNECT_NOTIFY_ENABLE:
+                    send_system_notification(
+                        f"Connected to MikroTik {ROUTER_IP}:{actual_port} via {'SSL' if USE_SSL else 'plain API'}",
+                        "SYSTEM",
+                    )
                 return
             except librouteros.exceptions.TrapError as exc:
                 msg = str(exc).lower()

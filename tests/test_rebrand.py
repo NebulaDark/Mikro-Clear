@@ -101,3 +101,21 @@ class RebrandTests(TestCase):
         address_list.add.assert_called_once()
         send_telegram.assert_called_once()
         self.assertTrue(any("Severity:2" in call.args[0] for call in log.call_args_list))
+
+    def test_routeros_connect_notification_can_be_disabled(self):
+        legacy = load_legacy()
+        client = legacy.RouterOSClient()
+
+        with (
+            patch.object(legacy, "USERNAME", "user"),
+            patch.object(legacy, "PASSWORD", "password"),
+            patch.object(legacy, "ROUTER_IP", "192.168.10.1"),
+            patch.object(legacy, "PORT", 8729),
+            patch.object(legacy, "USE_SSL", True),
+            patch.object(legacy, "ROUTER_CONNECT_NOTIFY_ENABLE", False),
+            patch.object(client, "connect_once", return_value=object()),
+            patch.object(legacy, "send_system_notification") as send_system_notification,
+        ):
+            client.connect()
+
+        send_system_notification.assert_not_called()
