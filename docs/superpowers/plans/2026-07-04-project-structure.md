@@ -133,6 +133,8 @@ src/mikroclear/
 
 - [x] Move file seek/read JSON behavior.
 - [ ] Move single-alert and batch alert processing behind explicit dependencies.
+  - [x] Move single-alert processing behind explicit dependencies.
+  - [ ] Move batch alert processing behind explicit dependencies.
 - [ ] Keep legacy wrappers until production entrypoint changes.
 - [x] Run focused and full tests.
 - [x] Commit watcher extraction.

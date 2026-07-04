@@ -289,6 +289,19 @@ except Exception:  # pragma: no cover - production single-file fallback
             return alerts
 
 try:
+    from mikroclear.alert_processor import (
+        AlertProcessorConfig,
+        format_event_timestamp as processor_format_event_timestamp,
+        process_single_alert as process_single_alert_with_dependencies,
+        update_existing_address as update_existing_address_with_dependencies,
+    )
+except Exception:  # pragma: no cover - production single-file fallback
+    AlertProcessorConfig = None  # type: ignore
+    processor_format_event_timestamp = None  # type: ignore
+    process_single_alert_with_dependencies = None  # type: ignore
+    update_existing_address_with_dependencies = None  # type: ignore
+
+try:
     from mikroclear.security import mask_known_secret, sanitize_exception_text
 except Exception:  # pragma: no cover - production single-file fallback
     def mask_telegram_bot_token(text: Any) -> str:
@@ -1609,7 +1622,39 @@ def add_to_tik(alerts: Optional[List[Dict[str, Any]]]) -> None:
                 print(traceback.format_exc(), flush=True)
 
 
+def _alert_processor_config() -> Any:
+    if AlertProcessorConfig is None:
+        return None
+    return AlertProcessorConfig(
+        severities=SEVERITY,
+        listen_interfaces=LISTEN_INTERFACES,
+        whitelist_ips=WHITELIST_IPS,
+        block_list_name=BLOCK_LIST_NAME,
+        timeout=TIMEOUT,
+        monitor_only=MONITOR_ONLY,
+        enable_ipv6=ENABLE_IPV6,
+        comment_time_format=COMMENT_TIME_FORMAT,
+    )
+
+
 def process_single_alert(event: Dict[str, Any], address_list: Any, address_list_v6: Any) -> None:
+    if process_single_alert_with_dependencies is None:
+        _legacy_process_single_alert_fallback(event, address_list, address_list_v6)
+        return
+
+    process_single_alert_with_dependencies(
+        event,
+        address_list,
+        address_list_v6,
+        config=_alert_processor_config(),
+        ignore_predicate=lambda item: in_ignore_list(ignore_list, dict(item)),
+        send_telegram=sendTelegram,
+        log=log,
+        debug_log=debug_log,
+    )
+
+
+def _legacy_process_single_alert_fallback(event: Dict[str, Any], address_list: Any, address_list_v6: Any) -> None:
     alert = event["alert"]
     sid = str(alert.get("signature_id", "N/A"))
     filter_decision = decide_should_process_event(
@@ -1673,6 +1718,24 @@ def process_single_alert(event: Dict[str, Any], address_list: Any, address_list_
 
 
 def update_existing_address(curr_list: Any, wanted_ip: str, comment: str, event: Dict[str, Any], peer_ip: str, wanted_port: Any) -> None:
+    if update_existing_address_with_dependencies is not None:
+        update_existing_address_with_dependencies(
+            curr_list,
+            wanted_ip,
+            comment,
+            event,
+            peer_ip,
+            wanted_port,
+            config=_alert_processor_config(),
+            send_telegram=sendTelegram,
+            log=log,
+        )
+        return
+
+    _legacy_update_existing_address_fallback(curr_list, wanted_ip, comment, event, peer_ip, wanted_port)
+
+
+def _legacy_update_existing_address_fallback(curr_list: Any, wanted_ip: str, comment: str, event: Dict[str, Any], peer_ip: str, wanted_port: Any) -> None:
     _address = Key("address")
     _id = Key(".id")
     _list = Key("list")
