@@ -15,5 +15,8 @@ dependencies = [
     "maxminddb==3.1.1",
 ]
 
+[project.scripts]
+mikroclear = "mikroclear.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

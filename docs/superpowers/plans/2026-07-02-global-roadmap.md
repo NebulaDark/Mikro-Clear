@@ -218,7 +218,7 @@ git --git-dir=.git-local --work-tree=. commit -m "Extract RouterOS operations"
 .venv/bin/python -m unittest tests.test_telegram_unblock tests.test_rebrand
 ```
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git --git-dir=.git-local --work-tree=. commit -m "Harden Telegram unblock callbacks"
@@ -360,9 +360,166 @@ git --git-dir=.git-local --work-tree=. commit -m "Add Mikro-Clear runbook"
 
 ---
 
-## Phase 6: Compatibility Removal Later
+## Phase 6: Package And Deploy Target Architecture
 
-### Task 11: Plan Legacy Removal Only After Stable Runtime
+### Task 11: Add Package Entrypoints
+
+**Files:**
+- Create: `src/mikroclear/cli.py`
+- Create: `src/mikroclear/__main__.py`
+- Modify: `pyproject.toml`
+- Test: `tests/test_cli.py`
+
+**Interfaces:**
+- Produces: console script `mikroclear = "mikroclear.cli:main"`.
+- Produces: `python -m mikroclear` entrypoint.
+- Consumes: current `src/mikroclear/legacy.py::main` during the transition.
+
+- [x] Add a package CLI that delegates to `legacy.main()` without changing runtime behavior.
+- [x] Add `python -m mikroclear` support.
+- [x] Add tests for console script metadata and CLI delegation.
+- [x] Run:
+
+```bash
+.venv/bin/python -m unittest tests.test_cli tests.test_rebrand
+.venv/bin/python -m py_compile src/mikroclear/cli.py src/mikroclear/__main__.py
+```
+
+- [ ] Commit:
+
+```bash
+git --git-dir=.git-local --work-tree=. commit -m "Add Mikro-Clear package entrypoints"
+```
+
+### Task 12: Extract Runtime Orchestration From `legacy.py`
+
+**Files:**
+- Create: `src/mikroclear/app.py`
+- Create: `src/mikroclear/settings.py`
+- Create: `src/mikroclear/logging.py`
+- Create: `tests/test_app.py`
+- Create: `tests/test_settings.py`
+- Modify: `src/mikroclear/legacy.py`
+- Modify: `src/mikroclear/cli.py`
+
+**Interfaces:**
+- Produces: `MikroClearService` as the long-running service coordinator.
+- Produces: `Settings.from_env()` as the single configuration loader.
+- Consumes: existing extracted modules for alert logic, Telegram, RouterOS, TLS, and security.
+
+- [ ] Move startup configuration globals into a typed settings object.
+- [ ] Move signal handling, startup logging, and main loop orchestration into `app.py`.
+- [ ] Keep `legacy.py` as a compatibility wrapper until production is switched to package entrypoints.
+- [ ] Add focused tests for settings precedence and service startup wiring.
+- [ ] Run:
+
+```bash
+.venv/bin/python -m unittest tests.test_app tests.test_settings tests.test_rebrand
+```
+
+- [ ] Commit:
+
+```bash
+git --git-dir=.git-local --work-tree=. commit -m "Extract Mikro-Clear runtime orchestration"
+```
+
+### Task 13: Switch systemd To Package Entrypoint
+
+**Files:**
+- Modify: `systemd/mikroclear.service`
+- Modify: `README.md`
+- Modify: `docs/runbook.md`
+- Test: `tests/test_systemd_unit.py`
+
+**Interfaces:**
+- Consumes: console script `mikroclear`.
+- Produces: systemd unit that no longer executes `/usr/local/bin/mikroclear.py` directly.
+
+- [ ] Change `ExecStart` to the installed package command.
+- [ ] Keep rollback instructions for `/usr/local/bin/mikroclear.py` during one stable runtime window.
+- [ ] Verify local unit tests.
+- [ ] Verify candidate unit with `systemd-analyze verify` on SELKS before deployment.
+- [ ] Commit:
+
+```bash
+git --git-dir=.git-local --work-tree=. commit -m "Run Mikro-Clear from package entrypoint"
+```
+
+### Task 14: Add Wheel-Based Linux Install Flow
+
+**Files:**
+- Create: `deploy/install-wheel.sh`
+- Create: `tests/test_install_wheel_script.py`
+- Modify: `README.md`
+- Modify: `docs/runbook.md`
+
+**Interfaces:**
+- Produces: repeatable wheel build/install flow for Linux hosts.
+- Consumes: package entrypoint `mikroclear`.
+
+- [ ] Build a wheel with `python -m build`.
+- [ ] Install into `/opt/mikroclear-venv`.
+- [ ] Install env example and systemd unit.
+- [ ] Run service restart and verification checks.
+- [ ] Document rollback to the previous wheel or legacy script.
+- [ ] Commit:
+
+```bash
+git --git-dir=.git-local --work-tree=. commit -m "Add wheel install flow"
+```
+
+### Task 15: Add Docker Deployment Target
+
+**Files:**
+- Create: `Dockerfile`
+- Create: `docker-compose.yml`
+- Create: `.dockerignore`
+- Create: `tests/test_docker_artifacts.py`
+- Modify: `README.md`
+- Modify: `docs/runbook.md`
+
+**Interfaces:**
+- Produces: Docker image that runs `mikroclear`.
+- Produces: compose example with read-only Suricata log mount and persistent state volume.
+
+- [ ] Add a non-root runtime image.
+- [ ] Mount `/var/lib/mikroclear` as writable state.
+- [ ] Mount Suricata `eve.json` read-only.
+- [ ] Pass secrets through env files or Docker secrets, not baked into the image.
+- [ ] Add a healthcheck that verifies the process is running.
+- [ ] Commit:
+
+```bash
+git --git-dir=.git-local --work-tree=. commit -m "Add Docker deployment target"
+```
+
+### Task 16: Add Single-Binary Linux Artifact
+
+**Files:**
+- Create: `deploy/build-binary.sh`
+- Create: `tests/test_binary_build_script.py`
+- Modify: `README.md`
+- Modify: `docs/runbook.md`
+
+**Interfaces:**
+- Produces: single Linux executable artifact for hosts that cannot use Docker or wheel installs.
+- Consumes: package entrypoint `mikroclear`.
+
+- [ ] Choose PyInstaller or Nuitka based on dependency compatibility.
+- [ ] Build an executable that reads `/etc/mikroclear/mikroclear.env`.
+- [ ] Keep state and config external to the binary.
+- [ ] Document systemd unit and rollback flow for the binary.
+- [ ] Commit:
+
+```bash
+git --git-dir=.git-local --work-tree=. commit -m "Add Linux binary build target"
+```
+
+---
+
+## Phase 7: Compatibility Removal Later
+
+### Task 17: Plan Legacy Removal Only After Stable Runtime
 
 **Files:**
 - Modify later: `src/mikrocata/*`
