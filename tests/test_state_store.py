@@ -3,13 +3,9 @@ from pathlib import Path
 import tempfile
 from unittest import TestCase
 
-from mikroclear.state_store import (
-    StateStoreConfig,
-    add_saved_lists,
-    check_tik_uptime,
-    parse_routeros_uptime,
-    save_lists,
-)
+from mikroclear.state.address_list_store import add_saved_lists, save_lists
+from mikroclear.state.files import StateStoreConfig
+from mikroclear.state.uptime import check_tik_uptime, parse_routeros_uptime
 
 
 class FakeWhere:

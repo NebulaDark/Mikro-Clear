@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 from unittest import TestCase
 
-from mikroclear.eve_watcher import EveJsonTailer
+from mikroclear.suricata.eve_tailer import EveJsonTailer
 
 
 class EveJsonTailerTests(TestCase):

@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from mikroclear.telegram_unblock import create_unblock_token, ensure_private_state_path
+from mikroclear.telegram.unblock import create_unblock_token, ensure_private_state_path
 
 
 class RuntimePermissionTests(unittest.TestCase):

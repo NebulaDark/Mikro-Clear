@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from mikroclear.settings import Settings
 from mikroclear.telegram.polling import TelegramUpdatePoller
-from mikroclear.telegram_unblock import (
+from mikroclear.telegram.unblock import (
     build_unblock_keyboard,
     consume_unblock_token,
     create_unblock_token,

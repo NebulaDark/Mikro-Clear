@@ -6,19 +6,27 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProjectStructureTests(TestCase):
-    def test_runtime_skeleton_modules_are_importable(self):
-        import mikroclear.alert_processor
+    def test_canonical_runtime_modules_are_importable(self):
         import mikroclear.app
-        import mikroclear.asset_resolver
+        import mikroclear.assets.resolver
         import mikroclear.bot.auth
         import mikroclear.bot.dispatcher
         import mikroclear.bot.modules.status
         import mikroclear.bot.settings
-        import mikroclear.eve_watcher
         import mikroclear.logging
         import mikroclear.runtime
+        import mikroclear.runtime.providers
+        import mikroclear.runtime.status_snapshot
+        import mikroclear.runtime.wiring
         import mikroclear.settings
-        import mikroclear.state_store
+        import mikroclear.state.address_list_store
+        import mikroclear.state.files
+        import mikroclear.state.uptime
+        import mikroclear.suricata.eve_tailer
+        import mikroclear.telegram.formatting
+        import mikroclear.telegram.notify
+        import mikroclear.telegram.polling
+        import mikroclear.telegram.unblock
 
         self.assertEqual(mikroclear.app.__all__, ["build_service", "main"])
         self.assertEqual(mikroclear.settings.__all__, ["Settings", "load_settings"])
@@ -48,10 +56,10 @@ class ProjectStructureTests(TestCase):
 
     def test_routeros_import_paths_preserve_tls_identity(self):
         from mikroclear import routeros_tls as legacy_tls
-        from mikroclear.routeros import tls
+        from mikroclear.routeros import ssl_context
 
-        self.assertIs(tls.build_routeros_ssl_context, legacy_tls.build_routeros_ssl_context)
-        self.assertIs(tls.make_routeros_ssl_wrapper, legacy_tls.make_routeros_ssl_wrapper)
+        self.assertIs(ssl_context.build_routeros_ssl_context, legacy_tls.build_routeros_ssl_context)
+        self.assertIs(ssl_context.make_routeros_ssl_wrapper, legacy_tls.make_routeros_ssl_wrapper)
 
     def test_telegram_import_paths_preserve_identity(self):
         from mikroclear import telegram_notify as legacy_notify
