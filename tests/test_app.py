@@ -9,12 +9,21 @@ def fake_pyinotify_module() -> types.SimpleNamespace:
 
 
 class AppEntrypointTests(TestCase):
-    def test_app_main_keeps_legacy_runtime_fallback(self):
+    def test_app_main_builds_and_runs_runtime_service(self):
         with patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}):
-            from mikroclear import legacy
-            from mikroclear.app import main
+            from mikroclear import app
 
-            with patch.object(legacy, "main", return_value=9) as legacy_main:
-                self.assertEqual(main(), 9)
+        service = types.SimpleNamespace(run=lambda: 9)
+        with patch.object(app, "build_service", return_value=service) as build_service:
+            self.assertEqual(app.main(), 9)
 
-        legacy_main.assert_called_once_with()
+        build_service.assert_called_once_with()
+
+    def test_build_service_uses_runtime_service(self):
+        with patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}):
+            from mikroclear import app
+            from mikroclear.runtime import MikroClearService
+
+            service = app.build_service()
+
+        self.assertIsInstance(service, MikroClearService)
