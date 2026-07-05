@@ -133,9 +133,8 @@ Deploy flow for the systemd unit:
 upload_unit_candidate -> deploy_unit_candidate(confirm=True)
 ```
 
-The unit deploy migrates from `mikrocataTZSP0.service` to `mikroclear.service`
-by stopping and disabling the legacy unit, enabling the new unit, and then
-starting the new service.
+The unit deploy updates `mikroclear.service`; legacy service names are not
+production deploy targets.
 
 Standalone service operations:
 

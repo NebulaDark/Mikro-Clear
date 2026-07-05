@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE_UNIT = ROOT / "deploy" / "systemd" / "mikroclear.service.candidate"
 PRODUCTION_UNIT = ROOT / "systemd" / "mikroclear.service"
 PLAN = ROOT / "docs" / "superpowers" / "plans" / "2026-07-05-systemd-package-entrypoint-plan.md"
+PREFLIGHT = ROOT / "docs" / "superpowers" / "preflight" / "2026-07-05-selks-readonly-preflight.md"
 
 
 def section_lines(path: Path, section_name: str) -> list[str]:
@@ -60,3 +61,14 @@ class SystemdCandidateUnitTests(TestCase):
         self.assertIn("systemd-analyze verify", text)
         self.assertIn("Do not run systemctl in this stage", text)
         self.assertNotIn("mikrocataTZSP0.service", text)
+
+    def test_preflight_report_uses_mikroclear_as_production_service(self):
+        text = PREFLIGHT.read_text(encoding="utf-8")
+
+        self.assertIn("production service is `mikroclear.service`", text)
+        self.assertIn("systemctl cat mikroclear.service", text)
+        self.assertIn("systemctl status mikroclear.service --no-pager", text)
+        self.assertIn("FragmentPath=/etc/systemd/system/mikroclear.service", text)
+        self.assertIn("ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py", text)
+        self.assertNotIn("systemctl cat mikrocataTZSP0.service", text)
+        self.assertNotIn("journalctl -u mikrocataTZSP0.service", text)

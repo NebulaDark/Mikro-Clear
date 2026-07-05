@@ -10,8 +10,6 @@ Run on SELKS as a sudo-capable operator:
 systemctl status mikroclear.service --no-pager --lines=25
 systemctl is-active mikroclear.service
 systemctl is-enabled mikroclear.service
-systemctl is-active mikrocataTZSP0.service || true
-systemctl is-enabled mikrocataTZSP0.service || true
 ```
 
 Review recent service logs with token masking before copying output:
