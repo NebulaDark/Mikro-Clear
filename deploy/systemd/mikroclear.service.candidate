@@ -1,0 +1,30 @@
+[Unit]
+Description=Mikro-Clear - Suricata to MikroTik AutoBlock
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env
+EnvironmentFile=-/etc/mikroclear/mikroclear.env
+ExecStart=/opt/mikrocata-venv/bin/python -m mikroclear
+Restart=on-failure
+RestartSec=30
+User=root
+Group=root
+WorkingDirectory=/usr/local/bin
+NoNewPrivileges=true
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/mikroclear /var/lib/mikrocata
+ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear /etc/mikrocata
+
+[Install]
+WantedBy=multi-user.target
