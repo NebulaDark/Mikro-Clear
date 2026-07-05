@@ -6,6 +6,10 @@ class ProjectStructureTests(TestCase):
         import mikroclear.alert_processor
         import mikroclear.app
         import mikroclear.asset_resolver
+        import mikroclear.bot.auth
+        import mikroclear.bot.dispatcher
+        import mikroclear.bot.modules.status
+        import mikroclear.bot.settings
         import mikroclear.eve_watcher
         import mikroclear.logging
         import mikroclear.runtime
