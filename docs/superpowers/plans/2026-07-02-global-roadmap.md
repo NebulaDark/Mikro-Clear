@@ -208,11 +208,11 @@ git --git-dir=.git-local --work-tree=. commit -m "Extract RouterOS operations"
 - Consumes: existing callback token state file.
 - Produces: Telegram callback action that removes IP from MikroTik address-list.
 
-- [ ] Keep existing `Unblock <ip>` inline button.
-- [ ] Add callback response text for success, expired token, already removed, and RouterOS failure.
-- [ ] Log every unblock action with operator-visible result.
-- [ ] Send Telegram system notification after successful unblock.
-- [ ] Run:
+- [x] Keep existing `Unblock <ip>` inline button.
+- [x] Add callback response text for success, expired token, already removed, and RouterOS failure.
+- [x] Log every unblock action with operator-visible result.
+- [x] Send Telegram system notification after successful unblock.
+- [x] Run:
 
 ```bash
 .venv/bin/python -m unittest tests.test_telegram_unblock tests.test_rebrand

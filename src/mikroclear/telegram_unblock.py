@@ -1,4 +1,5 @@
 from mikroclear.telegram.unblock import (
+    UnblockCallbackResult,
     build_unblock_keyboard,
     consume_unblock_token,
     create_unblock_token,
@@ -7,6 +8,7 @@ from mikroclear.telegram.unblock import (
 )
 
 __all__ = [
+    "UnblockCallbackResult",
     "build_unblock_keyboard",
     "consume_unblock_token",
     "create_unblock_token",

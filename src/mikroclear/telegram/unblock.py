@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import secrets
@@ -11,6 +12,13 @@ from typing import Any, Callable, Optional
 
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
+
+
+@dataclass(frozen=True)
+class UnblockCallbackResult:
+    text: str
+    success: bool
+    alert: bool = False
 
 
 def ensure_private_state_path(path: Path) -> None:

@@ -25,6 +25,7 @@ import socket
 import ssl
 import sys
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime as dt
 from time import sleep, time
@@ -645,6 +646,7 @@ except Exception:  # pragma: no cover - production single-file fallback
 
 try:
     from mikroclear.telegram_unblock import (
+        UnblockCallbackResult,
         build_unblock_keyboard,
         consume_unblock_token,
         create_unblock_token,
@@ -679,6 +681,12 @@ except Exception:  # pragma: no cover - production single-file fallback
         ensure_private_state_path(path)
         path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
         os.chmod(path, 0o600)
+
+    @dataclass(frozen=True)
+    class UnblockCallbackResult:
+        text: str
+        success: bool
+        alert: bool = False
 
     def create_unblock_token(
         path: Path,
@@ -1346,13 +1354,15 @@ def remove_address_from_list(address_list: Any, wanted_ip: str, list_name: str) 
     return remove_from_address_list(address_list, list_name, wanted_ip) > 0
 
 
-def handle_unblock_action(action: Dict[str, Any]) -> str:
+def handle_unblock_action(action: Dict[str, Any]) -> UnblockCallbackResult:
     wanted_ip = str(action.get("wanted_ip", ""))
     list_name = str(action.get("list_name") or BLOCK_LIST_NAME)
     if not is_valid_ip(wanted_ip):
-        return "Invalid unblock target"
+        log(f"TELEGRAM UNBLOCK INVALID: {wanted_ip or '<empty>'} from {list_name}")
+        return UnblockCallbackResult("Invalid unblock target", False, True)
     if is_ip_in_whitelist(wanted_ip, WHITELIST_IPS):
-        return f"Refusing to unblock whitelisted target {wanted_ip}"
+        log(f"TELEGRAM UNBLOCK REFUSED: {wanted_ip} is whitelisted")
+        return UnblockCallbackResult(f"Refusing to unblock whitelisted target {wanted_ip}", False, True)
 
     client = get_router_client()
 
@@ -1361,12 +1371,17 @@ def handle_unblock_action(action: Dict[str, Any]) -> str:
         target_list = address_list_v6 if ":" in wanted_ip and address_list_v6 is not None else address_list
         return remove_address_from_list(target_list, wanted_ip, list_name)
 
-    removed = client.run_with_reconnect("telegram unblock", remove_batch)
+    try:
+        removed = client.run_with_reconnect("telegram unblock", remove_batch)
+    except Exception as exc:
+        log(f"TELEGRAM UNBLOCK FAILED: {wanted_ip} from {list_name} - {type(exc).__name__}: {exc}")
+        return UnblockCallbackResult(f"Could not unblock {wanted_ip}", False, True)
+
     if removed:
         log(f"TELEGRAM UNBLOCKED: {wanted_ip} from {list_name} - SID:{action.get('sid', 'N/A')}")
-        return f"Unblocked {wanted_ip}"
+        return UnblockCallbackResult(f"Unblocked {wanted_ip}", True)
     log(f"TELEGRAM UNBLOCK NOOP: {wanted_ip} not found in {list_name}")
-    return f"{wanted_ip} was not found in {list_name}"
+    return UnblockCallbackResult(f"{wanted_ip} was not found in {list_name}", False)
 
 
 def process_telegram_updates() -> None:
@@ -1423,11 +1438,13 @@ def process_telegram_updates() -> None:
         action = consume_unblock_token(Path(TELEGRAM_UNBLOCK_STATE_FILE), token, now=int(time()))
         if not action:
             answer_telegram_callback(callback_id, "Unblock request expired or already used", True)
+            log("TELEGRAM UNBLOCK EXPIRED: callback token expired or already used")
             continue
 
         result = handle_unblock_action(action)
-        answer_telegram_callback(callback_id, result)
-        send_system_notification(result, "UNBLOCK")
+        answer_telegram_callback(callback_id, result.text, result.alert)
+        if result.success:
+            send_system_notification(result.text, "UNBLOCK")
 
 
 def make_ssl_context() -> ssl.SSLContext:
