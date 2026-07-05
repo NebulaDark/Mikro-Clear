@@ -20,8 +20,8 @@ performed during this check.
 
 ## Extraction Slice
 
-This slice keeps runtime behavior unchanged and moves small, testable boundaries
-out of `legacy_runtime.py`:
+This slice kept runtime behavior unchanged and moved small, testable boundaries
+out of the former runtime monolith:
 
 - `mikroclear.settings.load_settings()` is now the runtime settings loader
   boundary.
@@ -30,11 +30,11 @@ out of `legacy_runtime.py`:
 - `mikroclear.routeros.client.build_routeros_connect_kwargs()` owns RouterOS API
   connection argument construction.
 
-## Still Deferred
+## Superseded Deferred Items
 
-- `legacy_runtime.py` still owns the runtime composition and callback polling
-  loop.
+- Runtime composition and callback polling have since moved into modular package
+  providers.
 - RouterOS write actions are not changed.
-- New Telegram control-plane modules are not implemented in this slice.
-- Future slices should extract Telegram callback handling and RouterOS client
-  connection lifecycle behind dependency-injected adapters.
+- New Telegram control-plane write actions remain out of scope.
+- RouterOS client connection lifecycle is now dependency-injected through
+  `mikroclear.routeros.client.RouterOSClient`.

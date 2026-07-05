@@ -34,5 +34,5 @@ class LegacyWrapperTests(TestCase):
 
         text = plan.read_text(encoding="utf-8")
         self.assertIn("legacy.py", text)
-        self.assertIn("legacy_runtime.py", text)
+        self.assertIn("former runtime monolith has been retired", text)
         self.assertIn("thin compatibility wrapper", text)

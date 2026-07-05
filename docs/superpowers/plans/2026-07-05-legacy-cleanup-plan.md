@@ -11,35 +11,36 @@ ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
 ```
 
 The repository keeps `src/mikroclear/legacy.py` as a thin compatibility wrapper
-for existing imports and tests. The former monolithic implementation has moved
-to `src/mikroclear/legacy_runtime.py`.
+for existing imports. The former runtime monolith has been retired; package
+runtime composition is now built from `app.py`, `runtime.py`, and focused
+RouterOS, Suricata, Telegram, state, and asset modules.
 
-This is intentionally not a behavior change. The wrapper preserves existing
-runtime symbols while new orchestration code imports `legacy_runtime.py`
-directly.
+This is intentionally not a behavior change. The wrapper exposes only
+`main()` and delegates to `mikroclear.app.main()`.
 
 ## Completed Slice
 
 - Keep `mikroclear.legacy.main()` as a compatibility wrapper around
   `mikroclear.app.main()`.
 - Move the large legacy implementation out of `legacy.py`.
-- Keep private and public legacy symbols available for compatibility.
-- Make `mikroclear.app.build_service()` depend on `legacy_runtime.py`, not on
-  the compatibility wrapper.
+- Stop exporting private runtime symbols through `mikroclear.legacy`.
+- Make `mikroclear.app.build_service()` depend on modular package providers.
 - Add unit tests for the wrapper boundary and cleanup plan presence.
+- Extract configuration loading into `mikroclear.settings` and `config.py`.
+- Extract RouterOS connect/reconnect/heartbeat and address-list actions into
+  `mikroclear.routeros`.
+- Extract Telegram polling, notification, formatting, rate-limit, command, and
+  unblock boundaries into `mikroclear.telegram` and `mikroclear.bot`.
+- Extract Suricata tailing, ignore rules, event handling, and alert pipeline
+  into `mikroclear.suricata`.
+- Move state-file, save/restore, uptime, and private permission helpers under
+  `mikroclear.state`.
+- Wire asset resolver through runtime-owned dependencies.
 
 ## Remaining Work
 
-1. Extract configuration loading from `legacy_runtime.py` into
-   `mikroclear.settings` and runtime-specific config adapters.
-2. Extract RouterOS write/read helpers into `mikroclear.routeros` modules and
-   keep write-safety checks near the API boundary.
-3. Extract Telegram polling and command handling into `mikroclear.telegram` and
-   `mikroclear.bot` modules.
-4. Extract Suricata alert processing into `mikroclear.suricata` modules.
-5. Move state-file and ignore-list handling into dedicated state modules.
-6. Reduce `legacy_runtime.py` to a composition layer, then retire compatibility
-   exports only after production has run stably through the package entrypoint.
+- Deploy is intentionally out of scope for this branch.
+- After review, run a SELKS read-only preflight before any service restart.
 
 ## Compatibility Boundaries
 
@@ -53,14 +54,11 @@ directly.
 
 ## Risks
 
-- `legacy_runtime.py` still contains broad module-level initialization.
-- Tests that patch `mikroclear.legacy` rely on the compatibility facade
-  exporting private names.
 - Future extraction must preserve production behavior around Telegram polling,
   RouterOS reconnects, ignore-list reloads, and systemd runtime paths.
+- The branch has not been deployed or exercised against SELKS production.
 
 ## Next Safe Step
 
-Start with read-only extraction targets: settings adapters, alert parsing, and
-message formatting. Defer RouterOS write-path refactors until write safety tests
-cover allowlists, dry-run behavior, and audit logging.
+Review the modular runtime diff, then run local package artifact validation and
+SELKS read-only checks before considering a deployment window.

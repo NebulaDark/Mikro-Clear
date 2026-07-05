@@ -44,7 +44,7 @@ class AppEntrypointTests(TestCase):
             if name == "mikroclear.legacy_runtime" or (
                 name == "mikroclear" and "legacy_runtime" in tuple(fromlist or ())
             ):
-                raise AssertionError("app.build_service must not import mikroclear.legacy_runtime")
+                raise AssertionError("app.build_service must not load the retired runtime module")
             return real_import(name, globals, locals, fromlist, level)
 
         try:
