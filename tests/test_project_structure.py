@@ -1,4 +1,8 @@
 from unittest import TestCase
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProjectStructureTests(TestCase):
@@ -61,3 +65,45 @@ class ProjectStructureTests(TestCase):
         self.assertIs(notify.format_system_message, legacy_notify.format_system_message)
         self.assertIs(polling.TelegramPollingBackoff, legacy_polling.TelegramPollingBackoff)
         self.assertIs(unblock.create_unblock_token, legacy_unblock.create_unblock_token)
+
+    def test_canonical_modules_do_not_import_old_top_level_shims(self):
+        forbidden = {
+            "src/mikroclear/assets/resolver.py": ("mikroclear.asset_resolver",),
+            "src/mikroclear/state/files.py": ("mikroclear.state_store",),
+            "src/mikroclear/state/address_list_store.py": ("mikroclear.state_store",),
+            "src/mikroclear/state/uptime.py": ("mikroclear.state_store",),
+            "src/mikroclear/suricata/eve_tailer.py": ("mikroclear.eve_watcher",),
+            "src/mikroclear/telegram/formatting.py": ("mikroclear.telegram.notify",),
+            "src/mikroclear/routeros/address_list.py": ("mikroclear.routeros.client",),
+        }
+
+        failures = []
+        for relative, forbidden_imports in forbidden.items():
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            for forbidden_import in forbidden_imports:
+                if forbidden_import in text:
+                    failures.append(f"{relative} imports {forbidden_import}")
+
+        self.assertEqual(failures, [])
+
+    def test_top_level_modules_are_thin_compatibility_shims(self):
+        shim_paths = [
+            "src/mikroclear/asset_resolver.py",
+            "src/mikroclear/state_store.py",
+            "src/mikroclear/eve_watcher.py",
+            "src/mikroclear/telegram_notify.py",
+            "src/mikroclear/telegram_polling.py",
+            "src/mikroclear/telegram_unblock.py",
+            "src/mikroclear/routeros_client.py",
+            "src/mikroclear/routeros_tls.py",
+            "src/mikroclear/alert_logic.py",
+            "src/mikroclear/events.py",
+        ]
+
+        oversized = []
+        for relative in shim_paths:
+            lines = (ROOT / relative).read_text(encoding="utf-8").splitlines()
+            if len(lines) > 80:
+                oversized.append(f"{relative}: {len(lines)} lines")
+
+        self.assertEqual(oversized, [])
