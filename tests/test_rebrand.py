@@ -1,19 +1,16 @@
 import os
 from pathlib import Path
-import sys
-import types
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
+from mikroclear.alert_processor import AlertProcessorConfig, process_single_alert
+from mikroclear.config import env_str
+from mikroclear.routeros.client import RouterOSClient
+from mikroclear.settings import Settings
+from mikroclear.telegram.formatting import format_alert_message
+
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_legacy():
-    fake_pyinotify = types.SimpleNamespace(ProcessEvent=object)
-    with patch.dict(sys.modules, {"pyinotify": fake_pyinotify}):
-        from mikroclear import legacy
-    return legacy
 
 
 class RebrandTests(TestCase):
@@ -30,7 +27,6 @@ class RebrandTests(TestCase):
         self.assertTrue(mikrocata.alert_logic.is_valid_ip("1.1.1.1"))
 
     def test_mikroclear_env_takes_precedence_over_legacy_env(self):
-        legacy = load_legacy()
         with patch.dict(
             os.environ,
             {
@@ -38,11 +34,10 @@ class RebrandTests(TestCase):
                 "MIKROCATA_ROUTER_IP": "192.0.2.1",
             },
         ):
-            self.assertEqual(legacy.env_str("MIKROCATA_ROUTER_IP"), "10.0.0.1")
+            self.assertEqual(env_str("MIKROCATA_ROUTER_IP"), "10.0.0.1")
 
     def test_telegram_branding_uses_mikro_clear(self):
-        legacy = load_legacy()
-        text = legacy.format_telegram_message_safe(
+        text = format_alert_message(
             {
                 "timestamp": "2026-07-02T12:00:00.000000+0300",
                 "proto": "TCP",
@@ -70,7 +65,6 @@ class RebrandTests(TestCase):
         self.assertTrue((ROOT / "config" / "mikroclear.env.example").exists())
 
     def test_process_single_alert_logs_severity_without_name_error(self):
-        legacy = load_legacy()
         address_list = Mock()
         event = {
             "src_ip": "9.9.9.9",
@@ -86,36 +80,45 @@ class RebrandTests(TestCase):
             },
         }
 
-        with (
-            patch.object(legacy, "SEVERITY", ("1", "2")),
-            patch.object(legacy, "LISTEN_INTERFACES", ("tzsp0",)),
-            patch.object(legacy, "ENABLE_IPV6", False),
-            patch.object(legacy, "WHITELIST_IPS", ()),
-            patch.object(legacy, "MONITOR_ONLY", False),
-            patch.object(legacy, "ignore_list", []),
-            patch.object(legacy, "sendTelegram") as send_telegram,
-            patch.object(legacy, "log") as log,
-        ):
-            legacy.process_single_alert(event, address_list, None)
+        send_telegram = Mock()
+        log = Mock()
+        process_single_alert(
+            event,
+            address_list,
+            None,
+            config=AlertProcessorConfig(
+                severities=("1", "2"),
+                listen_interfaces=("tzsp0",),
+                whitelist_ips=(),
+                block_list_name="Suricata",
+                timeout="1d",
+            ),
+            ignore_predicate=lambda item: False,
+            send_telegram=send_telegram,
+            log=log,
+            debug_log=Mock(),
+        )
 
         address_list.add.assert_called_once()
         send_telegram.assert_called_once()
         self.assertTrue(any("Severity:2" in call.args[0] for call in log.call_args_list))
 
     def test_routeros_connect_notification_can_be_disabled(self):
-        legacy = load_legacy()
-        client = legacy.RouterOSClient()
+        send_system_notification = Mock()
+        client = RouterOSClient(
+            Settings(
+                username="user",
+                password="password",
+                router_ip="192.168.10.1",
+                router_connect_notify_enable=False,
+            ),
+            log=Mock(),
+            send_system_notification=send_system_notification,
+            sleep=Mock(),
+            time=Mock(return_value=100.0),
+        )
 
-        with (
-            patch.object(legacy, "USERNAME", "user"),
-            patch.object(legacy, "PASSWORD", "password"),
-            patch.object(legacy, "ROUTER_IP", "192.168.10.1"),
-            patch.object(legacy, "PORT", 8729),
-            patch.object(legacy, "USE_SSL", True),
-            patch.object(legacy, "ROUTER_CONNECT_NOTIFY_ENABLE", False),
-            patch.object(client, "connect_once", return_value=object()),
-            patch.object(legacy, "send_system_notification") as send_system_notification,
-        ):
+        with patch.object(client, "connect_once", return_value=object()):
             client.connect()
 
         send_system_notification.assert_not_called()

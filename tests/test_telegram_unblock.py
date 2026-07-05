@@ -1,10 +1,11 @@
 import tempfile
-import time
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from mikroclear.settings import Settings
+from mikroclear.telegram.polling import TelegramUpdatePoller
 from mikroclear.telegram_unblock import (
     build_unblock_keyboard,
     consume_unblock_token,
@@ -87,29 +88,19 @@ class TelegramUnblockTests(unittest.TestCase):
         self.assertIn("Unblock 9.9.9.9", buttons[0][0]["text"])
 
 
-class LegacyTelegramUnblockFlowTests(unittest.TestCase):
-    def import_legacy(self):
-        with patch.dict("sys.modules", {"pyinotify": fake_pyinotify_module()}):
-            from mikroclear import legacy
-
-        return legacy
-
+class TelegramUnblockFlowTests(unittest.TestCase):
     def test_routeros_failure_returns_callback_text_and_logs_result(self):
-        legacy = self.import_legacy()
-
         class FailingClient:
             def run_with_reconnect(self, operation_name, func):
                 raise RuntimeError("router offline")
 
-        with (
-            patch.object(legacy, "is_valid_ip", return_value=True),
-            patch.object(legacy, "is_ip_in_whitelist", return_value=False),
-            patch.object(legacy, "get_router_client", return_value=FailingClient()),
-            patch.object(legacy, "log") as log,
-        ):
-            result = legacy.handle_unblock_action(
-                {"wanted_ip": "9.9.9.9", "list_name": "Suricata", "sid": "2402000"}
-            )
+        from mikroclear.app import RuntimeProviders
+
+        log = Mock()
+        providers = RuntimeProviders(settings=Settings(whitelist_ips=()), service_start_time=100.0)
+        providers.get_router_client = Mock(return_value=FailingClient())
+        with patch("mikroclear.app.log", log):
+            result = providers.handle_unblock_action({"wanted_ip": "9.9.9.9", "list_name": "Suricata", "sid": "2402000"})
 
         self.assertEqual(result.text, "Could not unblock 9.9.9.9")
         self.assertFalse(result.success)
@@ -117,45 +108,42 @@ class LegacyTelegramUnblockFlowTests(unittest.TestCase):
         self.assertIn("TELEGRAM UNBLOCK FAILED: 9.9.9.9 from Suricata", log.call_args[0][0])
 
     def test_process_updates_sends_system_notification_only_after_success(self):
-        legacy = self.import_legacy()
-
-        with (
-            patch.object(legacy, "ENABLE_TELEGRAM", True),
-            patch.object(legacy, "TELEGRAM_UNBLOCK_ENABLE", True),
-            patch.object(legacy, "TELEGRAM_TOKEN", "token"),
-            patch.object(legacy, "TELEGRAM_CHATID", "chat-1"),
-            patch.object(legacy, "telegram_update_offset", 0),
-            patch.object(legacy.requests, "get", return_value=FakeTelegramResponse()),
-            patch.object(legacy, "consume_unblock_token", return_value={"wanted_ip": "9.9.9.9"}),
-            patch.object(
-                legacy,
-                "handle_unblock_action",
-                return_value=types.SimpleNamespace(text="9.9.9.9 was not found in Suricata", success=False, alert=False),
+        answer_callback = Mock()
+        send_system_notification = Mock()
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=Mock(),
+            handle_unblock_action=Mock(
+                return_value=types.SimpleNamespace(text="9.9.9.9 was not found in Suricata", success=False, alert=False)
             ),
-            patch.object(legacy, "answer_telegram_callback") as answer_callback,
-            patch.object(legacy, "send_system_notification") as send_system_notification,
-        ):
-            legacy.process_telegram_updates()
+            answer_callback=answer_callback,
+            send_system_notification=send_system_notification,
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=FakeTelegramResponse()),
+        )
+        with patch("mikroclear.telegram.unblock.consume_unblock_token", return_value={"wanted_ip": "9.9.9.9"}):
+            poller.process_updates()
 
         answer_callback.assert_called_once_with("callback-1", "9.9.9.9 was not found in Suricata", False)
         send_system_notification.assert_not_called()
 
     def test_process_updates_logs_expired_unblock_token(self):
-        legacy = self.import_legacy()
-
-        with (
-            patch.object(legacy, "ENABLE_TELEGRAM", True),
-            patch.object(legacy, "TELEGRAM_UNBLOCK_ENABLE", True),
-            patch.object(legacy, "TELEGRAM_TOKEN", "token"),
-            patch.object(legacy, "TELEGRAM_CHATID", "chat-1"),
-            patch.object(legacy, "telegram_update_offset", 0),
-            patch.object(legacy.requests, "get", return_value=FakeTelegramResponse()),
-            patch.object(legacy, "consume_unblock_token", return_value=None),
-            patch.object(legacy, "answer_telegram_callback") as answer_callback,
-            patch.object(legacy, "send_system_notification") as send_system_notification,
-            patch.object(legacy, "log") as log,
-        ):
-            legacy.process_telegram_updates()
+        answer_callback = Mock()
+        send_system_notification = Mock()
+        log = Mock()
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=Mock(),
+            handle_unblock_action=Mock(),
+            answer_callback=answer_callback,
+            send_system_notification=send_system_notification,
+            log=log,
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=FakeTelegramResponse()),
+        )
+        with patch("mikroclear.telegram.unblock.consume_unblock_token", return_value=None):
+            poller.process_updates()
 
         answer_callback.assert_called_once_with("callback-1", "Unblock request expired or already used", True)
         send_system_notification.assert_not_called()

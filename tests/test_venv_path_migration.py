@@ -23,6 +23,8 @@ class VenvPathMigrationTests(TestCase):
     def test_old_mikrocata_venv_path_is_not_in_tracked_files(self):
         matches: list[str] = []
         for path in tracked_files():
+            if not path.exists():
+                continue
             text = path.read_text(encoding="utf-8", errors="ignore")
             if OLD_VENV in text:
                 matches.append(str(path.relative_to(ROOT)))

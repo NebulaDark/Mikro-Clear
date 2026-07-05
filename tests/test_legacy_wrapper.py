@@ -9,19 +9,17 @@ ROOT = Path(__file__).resolve().parents[1]
 class LegacyWrapperTests(TestCase):
     def test_legacy_py_is_thin_compatibility_wrapper(self):
         legacy_path = ROOT / "src" / "mikroclear" / "legacy.py"
-        runtime_path = ROOT / "src" / "mikroclear" / "legacy_runtime.py"
+        text = legacy_path.read_text(encoding="utf-8")
 
-        self.assertTrue(runtime_path.exists())
         self.assertLessEqual(len(legacy_path.read_text(encoding="utf-8").splitlines()), 80)
+        self.assertNotIn("legacy_runtime", text)
 
-    def test_legacy_wrapper_preserves_runtime_symbols(self):
+    def test_legacy_wrapper_exports_only_main(self):
         from mikroclear import legacy
 
-        self.assertTrue(hasattr(legacy, "EventHandler"))
-        self.assertTrue(hasattr(legacy, "RouterOSClient"))
-        self.assertTrue(hasattr(legacy, "get_router_client"))
-        self.assertTrue(hasattr(legacy, "process_telegram_updates"))
-        self.assertTrue(hasattr(legacy, "_ensure_private_runtime_file"))
+        self.assertEqual(legacy.__all__, ["main"])
+        self.assertFalse(hasattr(legacy, "RouterOSClient"))
+        self.assertFalse(hasattr(legacy, "process_telegram_updates"))
 
     def test_legacy_main_delegates_to_app_main(self):
         from mikroclear import legacy
