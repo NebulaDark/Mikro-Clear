@@ -2141,69 +2141,9 @@ def print_startup_config() -> None:
 
 
 def main() -> int:
-    signal.signal(signal.SIGTERM, on_signal)
-    signal.signal(signal.SIGINT, on_signal)
+    from mikroclear import app
 
-    ensure_dirs()
-    print_startup_config()
-    send_system_notification(f"Mikro-Clear v{VERSION} started", "START")
-
-    seek_to_end(FILEPATH)
-
-    client = get_router_client()
-    client.connect()
-    client.heartbeat(force=True)
-
-    read_ignore_list(IGNORE_LIST_LOCATION)
-
-    directory_to_monitor = os.path.dirname(FILEPATH) or "."
-    wm = pyinotify.WatchManager()
-    handler = EventHandler()
-    notifier = pyinotify.Notifier(wm, handler)
-    mask = pyinotify.IN_CREATE | pyinotify.IN_MODIFY | pyinotify.IN_DELETE | pyinotify.IN_MOVED_TO
-    wm.add_watch(directory_to_monitor, mask, rec=False)
-
-    log(f"Monitoring {FILEPATH} for Suricata alerts")
-    log(f"Whitelist: {WHITELIST_IPS}")
-
-    last_idle_heartbeat = 0.0
-    global last_telegram_updates_check
-
-    while not shutdown_requested:
-        try:
-            notifier.process_events()
-            if notifier.check_events(timeout=1000):
-                notifier.read_events()
-
-            if time() - last_telegram_updates_check >= TELEGRAM_UPDATES_INTERVAL_SECONDS:
-                last_telegram_updates_check = time()
-                process_telegram_updates()
-
-            if time() - last_idle_heartbeat >= ROUTER_HEARTBEAT_SECONDS:
-                last_idle_heartbeat = time()
-                client.heartbeat()
-
-        except KeyboardInterrupt:
-            break
-        except Exception as exc:
-            log(f"Unexpected error in main loop: {type(exc).__name__}: {exc}")
-            if DEBUG_MODE:
-                print(traceback.format_exc(), flush=True)
-            sleep(5)
-
-    try:
-        notifier.stop()
-    except Exception:
-        pass
-
-    try:
-        client.close()
-    except Exception:
-        pass
-
-    send_system_notification(f"Mikro-Clear v{VERSION} stopped", "STOP")
-    log("Stopped")
-    return 0
+    return app.main()
 
 
 if __name__ == "__main__":

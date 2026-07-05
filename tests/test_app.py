@@ -27,3 +27,13 @@ class AppEntrypointTests(TestCase):
             service = app.build_service()
 
         self.assertIsInstance(service, MikroClearService)
+
+    def test_legacy_main_is_compatibility_wrapper_for_app_main(self):
+        with patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}):
+            from mikroclear import app
+            from mikroclear import legacy
+
+        with patch.object(app, "main", return_value=11) as app_main:
+            self.assertEqual(legacy.main(), 11)
+
+        app_main.assert_called_once_with()
