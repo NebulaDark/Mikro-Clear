@@ -56,5 +56,7 @@ class SystemdCandidateUnitTests(TestCase):
 
         self.assertIn("Rollback", text)
         self.assertIn("/usr/local/bin/mikroclear.py", text)
+        self.assertIn("/etc/systemd/system/mikroclear.service", text)
         self.assertIn("systemd-analyze verify", text)
         self.assertIn("Do not run systemctl in this stage", text)
+        self.assertNotIn("mikrocataTZSP0.service", text)

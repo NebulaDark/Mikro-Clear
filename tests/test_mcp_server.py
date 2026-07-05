@@ -195,8 +195,7 @@ class McpServerSshTests(TestCase):
         command = run_ssh.call_args.args[0]
         self.assertIn("sudo -n /usr/bin/install -o root -g root -m 644", command)
         self.assertIn("sudo -n /usr/bin/systemctl daemon-reload", command)
-        self.assertIn("sudo -n /usr/bin/systemctl stop mikrocataTZSP0.service", command)
-        self.assertIn("sudo -n /usr/bin/systemctl disable mikrocataTZSP0.service", command)
+        self.assertNotIn("mikrocataTZSP0.service", command)
         self.assertIn("sudo -n /usr/bin/systemctl enable mikroclear.service", command)
         self.assertIn("sudo -n /usr/bin/systemctl restart mikroclear.service", command)
         self.assertIn("sudo -n /usr/bin/systemd-analyze verify", command)

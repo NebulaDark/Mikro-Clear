@@ -9,7 +9,6 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("mikroclear-selks")
 SERVICE_NAME = "mikroclear.service"
-LEGACY_SERVICE_NAME = "mikrocataTZSP0.service"
 SELKS_HOST = os.getenv("MIKROCLEAR_MCP_SSH_HOST") or os.getenv("MIKROCATA_MCP_SSH_HOST", "selks")
 SSH_COMMAND = shlex.split(
     os.getenv("MIKROCLEAR_MCP_SSH_COMMAND")
@@ -225,8 +224,6 @@ def deploy_unit_candidate(confirm: bool = False) -> str:
         f"sudo -n /usr/bin/install -o root -g root -m 644 {CANDIDATE_UNIT} {REMOTE_UNIT} && "
         "sudo -n /usr/bin/systemctl daemon-reload && "
         f"sudo -n /usr/bin/systemd-analyze verify {REMOTE_UNIT} && "
-        f"(sudo -n /usr/bin/systemctl stop {LEGACY_SERVICE_NAME} || true) && "
-        f"(sudo -n /usr/bin/systemctl disable {LEGACY_SERVICE_NAME} || true) && "
         f"sudo -n /usr/bin/systemctl enable {SERVICE_NAME} && "
         f"sudo -n /usr/bin/systemctl restart {SERVICE_NAME} && "
         f"sudo -n /usr/bin/systemctl status {SERVICE_NAME} --no-pager --lines=20",
@@ -236,7 +233,7 @@ def deploy_unit_candidate(confirm: bool = False) -> str:
 
 @mcp.tool()
 def status_legacy_mikrocata() -> str:
-    return run_ssh(f"systemctl status {LEGACY_SERVICE_NAME} --no-pager", 20)
+    return status_mikroclear()
 
 
 if __name__ == "__main__":

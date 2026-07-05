@@ -12,8 +12,6 @@ mcp-selks ALL=(root) NOPASSWD: \
     /usr/bin/systemd-analyze verify /etc/systemd/system/mikroclear.service, \
     /usr/local/sbin/mikroclear-mask-env /etc/mikroclear/mikroclear.env, \
     /usr/local/sbin/mikroclear-mask-env /etc/mikrocata/mikrocataTZSP0.env, \
-    /usr/bin/systemctl stop mikrocataTZSP0.service, \
-    /usr/bin/systemctl disable mikrocataTZSP0.service, \
     /usr/bin/systemctl daemon-reload, \
     /usr/bin/tail -n 20 /opt/SELKS/docker/containers-data/suricata/logs/eve.json, \
     /usr/bin/tail -n 50 /opt/SELKS/docker/containers-data/suricata/logs/eve.json, \
