@@ -36,11 +36,28 @@ try:
 except Exception:  # pragma: no cover
     ujson = json  # type: ignore
 
-import pyinotify  # type: ignore
 import requests
 import librouteros
 from librouteros import connect
 from librouteros.query import Key
+
+try:
+    import pyinotify  # type: ignore
+except Exception:  # pragma: no cover - import-safe package entrypoint smoke fallback
+    class _MissingPyinotify:
+        ProcessEvent = object
+        IN_CREATE = 0
+        IN_MODIFY = 0
+        IN_DELETE = 0
+        IN_MOVED_TO = 0
+
+        def WatchManager(self) -> Any:
+            raise RuntimeError("pyinotify is required to run Mikro-Clear on production Linux")
+
+        def Notifier(self, watch_manager: Any, handler: Any) -> Any:
+            raise RuntimeError("pyinotify is required to run Mikro-Clear on production Linux")
+
+    pyinotify = _MissingPyinotify()  # type: ignore
 
 try:
     from mikroclear.config import env_bool, env_csv, env_int, env_name_candidates, env_str

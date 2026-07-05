@@ -63,6 +63,21 @@ class AppEntrypointTests(TestCase):
 
         self.assertIsInstance(service, MikroClearService)
 
+    def test_build_service_is_import_safe_when_pyinotify_is_unavailable(self):
+        original_legacy = sys.modules.pop("mikroclear.legacy", None)
+        try:
+            with patch.dict(sys.modules, {"pyinotify": None}):
+                from mikroclear import app
+                from mikroclear.runtime import MikroClearService
+
+                service = app.build_service()
+
+            self.assertIsInstance(service, MikroClearService)
+        finally:
+            sys.modules.pop("mikroclear.legacy", None)
+            if original_legacy is not None:
+                sys.modules["mikroclear.legacy"] = original_legacy
+
     def test_legacy_main_is_compatibility_wrapper_for_app_main(self):
         with patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}):
             from mikroclear import app
