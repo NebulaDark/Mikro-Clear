@@ -10,7 +10,7 @@ from mikroclear.runtime import MikroClearService, RuntimeConfig, RuntimeDependen
 
 
 def build_service() -> MikroClearService:
-    from mikroclear import legacy
+    from mikroclear import legacy_runtime as legacy
 
     return MikroClearService(
         RuntimeConfig(

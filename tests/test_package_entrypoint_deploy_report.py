@@ -28,5 +28,5 @@ class PackageEntrypointDeployReportTests(TestCase):
         text = REPORT.read_text(encoding="utf-8")
 
         self.assertIn("/var/tmp/mikroclear-deploy/mikroclear.service.before-package-entrypoint", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", text)
         self.assertIn("legacy rollback", text)

@@ -47,7 +47,7 @@ The package import check succeeded:
 The service was still active on the legacy ExecStart before the switch:
 
 ```text
-/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
+/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
 ## Initial Failure And Fix
@@ -92,7 +92,7 @@ The pre-switch unit was saved at:
 Legacy rollback ExecStart:
 
 ```text
-/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
+/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
 This legacy rollback remains available until the package-entrypoint runtime has
