@@ -32,6 +32,13 @@ class RouterOsConnectConfig:
     tls_server_name: str
 
 
+@dataclass(frozen=True)
+class RouterOsLifecycleConfig:
+    heartbeat_seconds: int = 60
+    reconnect_sleep_seconds: int = 2
+    enable_ipv6: bool = False
+
+
 def build_routeros_connect_kwargs(
     config: RouterOsConnectConfig,
     *,
@@ -50,6 +57,97 @@ def build_routeros_connect_kwargs(
     if config.use_ssl:
         kwargs["ssl_wrapper"] = ssl_wrapper_factory(ssl_context, config.tls_server_name or config.host)
     return kwargs
+
+
+class RouterOsApiLifecycle:
+    def __init__(
+        self,
+        config: RouterOsLifecycleConfig,
+        *,
+        connect: Callable[[], Any],
+        log: Callable[[str], None],
+        sleep: Callable[[float], None],
+        time: Callable[[], float],
+        transient_errors: tuple[type[BaseException], ...] | None = None,
+    ) -> None:
+        self.config = config
+        self.api: Any = None
+        self.connected_at = 0.0
+        self.last_heartbeat = 0.0
+        self._connect = connect
+        self._log = log
+        self._sleep = sleep
+        self._time = time
+        if transient_errors is None:
+            errors: tuple[type[BaseException], ...] = (ssl.SSLError, socket.timeout, TimeoutError)
+            if librouteros is not None:
+                errors = errors + (librouteros.exceptions.ConnectionClosed,)
+            transient_errors = errors
+        self._transient_errors = transient_errors
+
+    def mark_connected(self, api: Any) -> None:
+        self.api = api
+        self.connected_at = self._time()
+        self.last_heartbeat = 0.0
+
+    def close(self) -> None:
+        if self.api is not None:
+            try:
+                close_method = getattr(self.api, "close", None)
+                if callable(close_method):
+                    close_method()
+            except Exception:
+                pass
+        self.api = None
+
+    def reconnect(self, reason: str = "") -> None:
+        if reason:
+            self._log(f"RouterOS API reconnect requested: {reason}")
+        self.close()
+        self._sleep(max(0, self.config.reconnect_sleep_seconds))
+        self.mark_connected(self._connect())
+
+    def ensure_connected(self) -> Any:
+        if self.api is None:
+            self.mark_connected(self._connect())
+        return self.api
+
+    def heartbeat(self, force: bool = False) -> bool:
+        now = self._time()
+        if not force and now - self.last_heartbeat < self.config.heartbeat_seconds:
+            return True
+
+        try:
+            api = self.ensure_connected()
+            resources = api.path("/system/resource")
+            for _ in resources:
+                break
+            self.last_heartbeat = now
+            return True
+        except self._transient_errors as exc:
+            self.reconnect(f"heartbeat failed: {type(exc).__name__}: {exc}")
+            return False
+        except Exception as exc:
+            self._log(f"RouterOS heartbeat error: {type(exc).__name__}: {exc}")
+            return False
+
+    def paths(self) -> tuple[Any, Any | None, Any]:
+        api = self.ensure_connected()
+        address_list = api.path("/ip/firewall/address-list")
+        address_list_v6 = api.path("/ipv6/firewall/address-list") if self.config.enable_ipv6 else None
+        resources = api.path("/system/resource")
+        return address_list, address_list_v6, resources
+
+    def run_with_reconnect(self, operation_name: str, func: Callable[[], Any]) -> Any:
+        manager = RouterOsConnectionManager(
+            RouterOsClientConfig(reconnect_sleep_seconds=self.config.reconnect_sleep_seconds),
+            heartbeat=self.heartbeat,
+            reconnect=self.reconnect,
+            log=self._log,
+            sleep=self._sleep,
+            transient_errors=self._transient_errors,
+        )
+        return manager.run_with_reconnect(operation_name, func)
 
 
 class RouterOsConnectionManager:

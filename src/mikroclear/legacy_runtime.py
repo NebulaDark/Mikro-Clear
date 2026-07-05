@@ -416,12 +416,13 @@ try:
     from mikroclear.bot.dispatcher import dispatch_message
     from mikroclear.bot.modules.status import StatusSnapshot
     from mikroclear.bot.settings import BotSettings
-    from mikroclear.telegram.commands import process_message_command
+    from mikroclear.telegram.commands import process_callback_update, process_message_command
 except Exception:  # pragma: no cover - production single-file fallback
     BotAuth = None  # type: ignore
     BotSettings = None  # type: ignore
     StatusSnapshot = None  # type: ignore
     dispatch_message = None  # type: ignore
+    process_callback_update = None  # type: ignore
     process_message_command = None  # type: ignore
 
 try:
@@ -540,9 +541,11 @@ except Exception:  # pragma: no cover - production single-file fallback
 
 try:
     from mikroclear.routeros_client import (
+        RouterOsApiLifecycle,
         RouterOsConnectConfig,
         RouterOsClientConfig,
         RouterOsConnectionManager,
+        RouterOsLifecycleConfig,
         add_to_address_list,
         build_routeros_connect_kwargs,
         remove_from_address_list,
@@ -564,6 +567,17 @@ except Exception:  # pragma: no cover - production single-file fallback
             self.port = port
             self.use_ssl = use_ssl
             self.tls_server_name = tls_server_name
+
+    class RouterOsLifecycleConfig:
+        def __init__(
+            self,
+            heartbeat_seconds: int = 60,
+            reconnect_sleep_seconds: int = 2,
+            enable_ipv6: bool = False,
+        ) -> None:
+            self.heartbeat_seconds = heartbeat_seconds
+            self.reconnect_sleep_seconds = reconnect_sleep_seconds
+            self.enable_ipv6 = enable_ipv6
 
     class RouterOsClientConfig:
         def __init__(self, reconnect_sleep_seconds: int = 2) -> None:
@@ -617,6 +631,95 @@ except Exception:  # pragma: no cover - production single-file fallback
                 self._log(f"RouterOS API error during {operation_name}: {type(exc).__name__}: {exc}")
                 self._reconnect(f"{operation_name} failed")
                 return func()
+
+    class RouterOsApiLifecycle:
+        def __init__(
+            self,
+            config: Any,
+            *,
+            connect: Any,
+            log: Any,
+            sleep: Any,
+            time: Any,
+            transient_errors: Any = None,
+        ) -> None:
+            self.config = config
+            self.api = None
+            self.connected_at = 0.0
+            self.last_heartbeat = 0.0
+            self._connect = connect
+            self._log = log
+            self._sleep = sleep
+            self._time = time
+            self._transient_errors = transient_errors or (
+                ssl.SSLError,
+                librouteros.exceptions.ConnectionClosed,
+                socket.timeout,
+                TimeoutError,
+            )
+
+        def mark_connected(self, api: Any) -> None:
+            self.api = api
+            self.connected_at = self._time()
+            self.last_heartbeat = 0.0
+
+        def close(self) -> None:
+            if self.api is not None:
+                try:
+                    close_method = getattr(self.api, "close", None)
+                    if callable(close_method):
+                        close_method()
+                except Exception:
+                    pass
+            self.api = None
+
+        def reconnect(self, reason: str = "") -> None:
+            if reason:
+                self._log(f"RouterOS API reconnect requested: {reason}")
+            self.close()
+            self._sleep(max(0, self.config.reconnect_sleep_seconds))
+            self.mark_connected(self._connect())
+
+        def ensure_connected(self) -> Any:
+            if self.api is None:
+                self.mark_connected(self._connect())
+            return self.api
+
+        def heartbeat(self, force: bool = False) -> bool:
+            now = self._time()
+            if not force and now - self.last_heartbeat < self.config.heartbeat_seconds:
+                return True
+            try:
+                api = self.ensure_connected()
+                resources = api.path("/system/resource")
+                for _ in resources:
+                    break
+                self.last_heartbeat = now
+                return True
+            except self._transient_errors as exc:
+                self.reconnect(f"heartbeat failed: {type(exc).__name__}: {exc}")
+                return False
+            except Exception as exc:
+                self._log(f"RouterOS heartbeat error: {type(exc).__name__}: {exc}")
+                return False
+
+        def paths(self) -> Tuple[Any, Optional[Any], Any]:
+            api = self.ensure_connected()
+            address_list = api.path("/ip/firewall/address-list")
+            address_list_v6 = api.path("/ipv6/firewall/address-list") if self.config.enable_ipv6 else None
+            resources = api.path("/system/resource")
+            return address_list, address_list_v6, resources
+
+        def run_with_reconnect(self, operation_name: str, func: Any) -> Any:
+            manager = RouterOsConnectionManager(
+                RouterOsClientConfig(reconnect_sleep_seconds=self.config.reconnect_sleep_seconds),
+                heartbeat=self.heartbeat,
+                reconnect=self.reconnect,
+                log=self._log,
+                sleep=self._sleep,
+                transient_errors=self._transient_errors,
+            )
+            return manager.run_with_reconnect(operation_name, func)
 
     def remove_from_address_list(address_list: Any, list_name: str, address: str) -> int:
         _address = Key("address")
@@ -1540,29 +1643,21 @@ def process_telegram_updates() -> None:
         callback = update.get("callback_query") or {}
         if not callback:
             continue
-        callback_id = str(callback.get("id", ""))
-        message = callback.get("message") or {}
-        chat = message.get("chat") or {}
-        chat_id = str(chat.get("id", ""))
-        if chat_id != str(TELEGRAM_CHATID):
-            answer_telegram_callback(callback_id, "Unauthorized chat", True)
-            log(f"Rejected Telegram callback from unauthorized chat {chat_id}")
+        if process_callback_update is None:
             continue
 
-        token = parse_unblock_callback(callback.get("data"))
-        if not token:
-            continue
-
-        action = consume_unblock_token(Path(TELEGRAM_UNBLOCK_STATE_FILE), token, now=int(time()))
-        if not action:
-            answer_telegram_callback(callback_id, "Unblock request expired or already used", True)
-            log("TELEGRAM UNBLOCK EXPIRED: callback token expired or already used")
-            continue
-
-        result = handle_unblock_action(action)
-        answer_telegram_callback(callback_id, result.text, result.alert)
-        if result.success:
-            send_system_notification(result.text, "UNBLOCK")
+        process_callback_update(
+            callback=callback,
+            allowed_chat_id=str(TELEGRAM_CHATID),
+            state_file=Path(TELEGRAM_UNBLOCK_STATE_FILE),
+            now=int(time()),
+            parse_unblock_callback=parse_unblock_callback,
+            consume_unblock_token=consume_unblock_token,
+            handle_unblock_action=handle_unblock_action,
+            answer_callback=answer_telegram_callback,
+            send_system_notification=send_system_notification,
+            log=log,
+        )
 
 
 def make_ssl_context() -> ssl.SSLContext:
@@ -1573,19 +1668,45 @@ def make_ssl_context() -> ssl.SSLContext:
 
 class RouterOSClient:
     def __init__(self) -> None:
-        self.api: Any = None
-        self.connected_at: float = 0.0
-        self.last_heartbeat: float = 0.0
+        self.lifecycle = RouterOsApiLifecycle(
+            RouterOsLifecycleConfig(
+                heartbeat_seconds=ROUTER_HEARTBEAT_SECONDS,
+                reconnect_sleep_seconds=ROUTER_RECONNECT_SLEEP_SECONDS,
+                enable_ipv6=ENABLE_IPV6,
+            ),
+            connect=self.connect_once,
+            log=log,
+            sleep=sleep,
+            time=time,
+            transient_errors=(ssl.SSLError, librouteros.exceptions.ConnectionClosed, socket.timeout, TimeoutError),
+        )
+
+    @property
+    def api(self) -> Any:
+        return self.lifecycle.api
+
+    @api.setter
+    def api(self, value: Any) -> None:
+        self.lifecycle.api = value
+
+    @property
+    def connected_at(self) -> float:
+        return self.lifecycle.connected_at
+
+    @connected_at.setter
+    def connected_at(self, value: float) -> None:
+        self.lifecycle.connected_at = value
+
+    @property
+    def last_heartbeat(self) -> float:
+        return self.lifecycle.last_heartbeat
+
+    @last_heartbeat.setter
+    def last_heartbeat(self, value: float) -> None:
+        self.lifecycle.last_heartbeat = value
 
     def close(self) -> None:
-        if self.api is not None:
-            try:
-                close_method = getattr(self.api, "close", None)
-                if callable(close_method):
-                    close_method()
-            except Exception:
-                pass
-        self.api = None
+        self.lifecycle.close()
 
     def connect_once(self) -> Any:
         actual_port = PORT or (8729 if USE_SSL else 8728)
@@ -1622,9 +1743,7 @@ class RouterOSClient:
             try:
                 self.close()
                 log(f"Connecting to MikroTik {ROUTER_IP}:{actual_port} via {'SSL' if USE_SSL else 'plain API'}...")
-                self.api = self.connect_once()
-                self.connected_at = time()
-                self.last_heartbeat = 0.0
+                self.lifecycle.mark_connected(self.connect_once())
                 log("Connected to MikroTik")
                 if ROUTER_CONNECT_NOTIFY_ENABLE:
                     send_system_notification(
@@ -1689,11 +1808,8 @@ class RouterOSClient:
             return False
 
     def paths(self) -> Tuple[Any, Optional[Any], Any]:
-        api = self.ensure_connected()
-        address_list = api.path("/ip/firewall/address-list")
-        address_list_v6 = api.path("/ipv6/firewall/address-list") if ENABLE_IPV6 else None
-        resources = api.path("/system/resource")
-        return address_list, address_list_v6, resources
+        self.ensure_connected()
+        return self.lifecycle.paths()
 
     def run_with_reconnect(self, operation_name: str, func: Any) -> Any:
         manager = RouterOsConnectionManager(

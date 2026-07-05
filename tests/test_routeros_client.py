@@ -2,9 +2,11 @@ import socket
 from unittest import TestCase
 
 from mikroclear.routeros_client import (
+    RouterOsApiLifecycle,
     RouterOsConnectConfig,
     RouterOsClientConfig,
     RouterOsConnectionManager,
+    RouterOsLifecycleConfig,
     add_to_address_list,
     build_routeros_connect_kwargs,
     remove_from_address_list,
@@ -134,3 +136,85 @@ class RouterOsConnectBoundaryTests(TestCase):
 
         self.assertNotIn("ssl_wrapper", kwargs)
         self.assertNotIn("login_method", kwargs)
+
+
+class FakeApi:
+    def __init__(self):
+        self.closed = False
+        self.path_calls = []
+
+    def close(self):
+        self.closed = True
+
+    def path(self, name):
+        self.path_calls.append(name)
+        return [f"resource:{name}"]
+
+
+class RouterOsApiLifecycleTests(TestCase):
+    def test_lifecycle_close_closes_current_api(self):
+        api = FakeApi()
+        lifecycle = RouterOsApiLifecycle(
+            RouterOsLifecycleConfig(),
+            connect=lambda: api,
+            log=lambda message: None,
+            sleep=lambda seconds: None,
+            time=lambda: 10.0,
+        )
+        lifecycle.mark_connected(api)
+
+        lifecycle.close()
+
+        self.assertTrue(api.closed)
+        self.assertIsNone(lifecycle.api)
+
+    def test_lifecycle_ensure_connected_connects_once_and_tracks_timestamp(self):
+        api = FakeApi()
+        lifecycle = RouterOsApiLifecycle(
+            RouterOsLifecycleConfig(),
+            connect=lambda: api,
+            log=lambda message: None,
+            sleep=lambda seconds: None,
+            time=lambda: 12.0,
+        )
+
+        self.assertIs(lifecycle.ensure_connected(), api)
+        self.assertEqual(lifecycle.connected_at, 12.0)
+        self.assertEqual(lifecycle.last_heartbeat, 0.0)
+
+    def test_lifecycle_paths_returns_ipv4_ipv6_and_resources(self):
+        api = FakeApi()
+        lifecycle = RouterOsApiLifecycle(
+            RouterOsLifecycleConfig(enable_ipv6=True),
+            connect=lambda: api,
+            log=lambda message: None,
+            sleep=lambda seconds: None,
+            time=lambda: 12.0,
+        )
+        lifecycle.mark_connected(api)
+
+        address_list, address_list_v6, resources = lifecycle.paths()
+
+        self.assertEqual(address_list, ["resource:/ip/firewall/address-list"])
+        self.assertEqual(address_list_v6, ["resource:/ipv6/firewall/address-list"])
+        self.assertEqual(resources, ["resource:/system/resource"])
+
+    def test_lifecycle_reconnect_closes_sleeps_and_reconnects(self):
+        old_api = FakeApi()
+        new_api = FakeApi()
+        events = []
+        apis = iter([new_api])
+        lifecycle = RouterOsApiLifecycle(
+            RouterOsLifecycleConfig(reconnect_sleep_seconds=2),
+            connect=lambda: next(apis),
+            log=lambda message: events.append(("log", message)),
+            sleep=lambda seconds: events.append(("sleep", seconds)),
+            time=lambda: 20.0,
+        )
+        lifecycle.mark_connected(old_api)
+
+        lifecycle.reconnect("test reason")
+
+        self.assertTrue(old_api.closed)
+        self.assertIs(lifecycle.api, new_api)
+        self.assertEqual(events, [("log", "RouterOS API reconnect requested: test reason"), ("sleep", 2)])
