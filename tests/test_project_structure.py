@@ -17,7 +17,7 @@ class ProjectStructureTests(TestCase):
         import mikroclear.state_store
 
         self.assertEqual(mikroclear.app.__all__, ["build_service", "main"])
-        self.assertEqual(mikroclear.settings.__all__, ["Settings"])
+        self.assertEqual(mikroclear.settings.__all__, ["Settings", "load_settings"])
 
     def test_suricata_import_paths_preserve_alert_logic_identity(self):
         from mikroclear import alert_logic as legacy_alert_logic

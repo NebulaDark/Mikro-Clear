@@ -111,7 +111,7 @@ except Exception:  # pragma: no cover - production single-file fallback
         )
 
 try:
-    from mikroclear.settings import Settings
+    from mikroclear.settings import Settings, load_settings
 except Exception:  # pragma: no cover - production single-file fallback
     class Settings:
         def __init__(self, **values: Any) -> None:
@@ -221,6 +221,9 @@ except Exception:  # pragma: no cover - production single-file fallback
                 asset_resolver_ptr_enable=env_bool("MIKROCATA_ASSET_RESOLVER_PTR_ENABLE", True),
                 asset_resolver_cache_ttl=env_int("MIKROCATA_ASSET_RESOLVER_CACHE_TTL", 3600),
             )
+
+    def load_settings() -> "Settings":
+        return Settings.from_env()
 
 try:
     from mikroclear.eve_watcher import EveJsonTailer
@@ -413,11 +416,13 @@ try:
     from mikroclear.bot.dispatcher import dispatch_message
     from mikroclear.bot.modules.status import StatusSnapshot
     from mikroclear.bot.settings import BotSettings
+    from mikroclear.telegram.commands import process_message_command
 except Exception:  # pragma: no cover - production single-file fallback
     BotAuth = None  # type: ignore
     BotSettings = None  # type: ignore
     StatusSnapshot = None  # type: ignore
     dispatch_message = None  # type: ignore
+    process_message_command = None  # type: ignore
 
 try:
     from mikroclear.telegram_notify import (
@@ -535,15 +540,53 @@ except Exception:  # pragma: no cover - production single-file fallback
 
 try:
     from mikroclear.routeros_client import (
+        RouterOsConnectConfig,
         RouterOsClientConfig,
         RouterOsConnectionManager,
         add_to_address_list,
+        build_routeros_connect_kwargs,
         remove_from_address_list,
     )
 except Exception:  # pragma: no cover - production single-file fallback
+    class RouterOsConnectConfig:
+        def __init__(
+            self,
+            username: str,
+            password: str,
+            host: str,
+            port: int,
+            use_ssl: bool,
+            tls_server_name: str,
+        ) -> None:
+            self.username = username
+            self.password = password
+            self.host = host
+            self.port = port
+            self.use_ssl = use_ssl
+            self.tls_server_name = tls_server_name
+
     class RouterOsClientConfig:
         def __init__(self, reconnect_sleep_seconds: int = 2) -> None:
             self.reconnect_sleep_seconds = reconnect_sleep_seconds
+
+    def build_routeros_connect_kwargs(
+        config: Any,
+        *,
+        ssl_context: Any,
+        ssl_wrapper_factory: Any,
+        login_method: Any = None,
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "username": config.username,
+            "password": config.password,
+            "host": config.host,
+            "port": config.port,
+        }
+        if login_method is not None:
+            kwargs["login_method"] = login_method
+        if config.use_ssl:
+            kwargs["ssl_wrapper"] = ssl_wrapper_factory(ssl_context, config.tls_server_name or config.host)
+        return kwargs
 
     class RouterOsConnectionManager:
         def __init__(
@@ -783,7 +826,7 @@ VERSION = "3.1.1-TZSP0-ASSET-RESOLVER"
 # ------------------------------------------------------------------------------
 
 
-SETTINGS = Settings.from_env()
+SETTINGS = load_settings()
 
 USERNAME = SETTINGS.username
 PASSWORD = SETTINGS.password
@@ -1475,27 +1518,23 @@ def process_telegram_updates() -> None:
         telegram_update_offset = max(telegram_update_offset, update_id + 1)
         message_update = update.get("message") or {}
         if message_update:
-            if BotAuth is None or BotSettings is None or dispatch_message is None:
+            if BotAuth is None or BotSettings is None or dispatch_message is None or process_message_command is None:
                 continue
             chat = message_update.get("chat") or {}
             chat_id = str(chat.get("id", ""))
             auth = BotAuth(BotSettings.from_env(), legacy_chat_id=str(TELEGRAM_CHATID))
-            result = dispatch_message(
-                message_update.get("text", ""),
-                chat_id,
-                auth,
-                build_status_snapshot,
+            handled = process_message_command(
+                text=message_update.get("text", ""),
+                chat_id=chat_id,
+                auth=auth,
+                status_snapshot_factory=build_status_snapshot,
+                dispatch_message=dispatch_message,
+                send_message=send_telegram_message,
+                token=TELEGRAM_TOKEN,
+                timeout=TELEGRAM_TIMEOUT,
+                log=log,
             )
-            if result is not None:
-                if result.alert and result.text == "Unauthorized":
-                    log(f"Rejected Telegram command from unauthorized chat {chat_id}")
-                    continue
-                send_telegram_message(
-                    token=TELEGRAM_TOKEN,
-                    chat_id=chat_id,
-                    text=result.text,
-                    timeout=TELEGRAM_TIMEOUT,
-                )
+            if handled:
                 continue
 
         callback = update.get("callback_query") or {}
@@ -1552,19 +1591,21 @@ class RouterOSClient:
         actual_port = PORT or (8729 if USE_SSL else 8728)
         socket.setdefaulttimeout(SOCKET_TIMEOUT_SECONDS)
 
-        kwargs: Dict[str, Any] = {
-            "username": USERNAME,
-            "password": PASSWORD,
-            "host": ROUTER_IP,
-            "port": actual_port,
-        }
-
-        if routeros_login is not None and hasattr(routeros_login, "plain"):
-            kwargs["login_method"] = routeros_login.plain
-
-        if USE_SSL:
-            ctx = make_ssl_context()
-            kwargs["ssl_wrapper"] = make_routeros_ssl_wrapper(ctx, ROUTER_TLS_SERVER_NAME or ROUTER_IP)
+        login_method = routeros_login.plain if routeros_login is not None and hasattr(routeros_login, "plain") else None
+        ctx = make_ssl_context() if USE_SSL else None
+        kwargs = build_routeros_connect_kwargs(
+            RouterOsConnectConfig(
+                username=USERNAME,
+                password=PASSWORD,
+                host=ROUTER_IP,
+                port=actual_port,
+                use_ssl=USE_SSL,
+                tls_server_name=ROUTER_TLS_SERVER_NAME or ROUTER_IP,
+            ),
+            ssl_context=ctx,
+            ssl_wrapper_factory=make_routeros_ssl_wrapper,
+            login_method=login_method,
+        )
 
         return connect(**kwargs)
 

@@ -169,4 +169,8 @@ class Settings:
         )
 
 
-__all__ = ["Settings"]
+def load_settings() -> Settings:
+    return Settings.from_env()
+
+
+__all__ = ["Settings", "load_settings"]

@@ -5,7 +5,7 @@ import types
 from unittest import TestCase
 from unittest.mock import patch
 
-from mikroclear.settings import Settings
+from mikroclear.settings import Settings, load_settings
 
 
 def load_legacy():
@@ -32,6 +32,13 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.router_ip, "10.0.0.1")
         self.assertEqual(settings.port, 8729)
         self.assertTrue(settings.use_ssl)
+
+    def test_load_settings_is_runtime_loader_boundary(self):
+        with patch.object(Settings, "from_env", return_value=Settings(router_ip="10.9.0.1")) as from_env:
+            settings = load_settings()
+
+        from_env.assert_called_once_with()
+        self.assertEqual(settings.router_ip, "10.9.0.1")
 
     def test_computed_paths_use_state_dir(self):
         with patch.dict(os.environ, {"MIKROCLEAR_STATE_DIR": "/tmp/mikroclear-state"}, clear=True):

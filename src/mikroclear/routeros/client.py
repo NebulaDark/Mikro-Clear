@@ -22,6 +22,36 @@ class RouterOsClientConfig:
     reconnect_sleep_seconds: int = 2
 
 
+@dataclass(frozen=True)
+class RouterOsConnectConfig:
+    username: str
+    password: str
+    host: str
+    port: int
+    use_ssl: bool
+    tls_server_name: str
+
+
+def build_routeros_connect_kwargs(
+    config: RouterOsConnectConfig,
+    *,
+    ssl_context: Any,
+    ssl_wrapper_factory: Callable[[Any, str], Any],
+    login_method: Any = None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "username": config.username,
+        "password": config.password,
+        "host": config.host,
+        "port": config.port,
+    }
+    if login_method is not None:
+        kwargs["login_method"] = login_method
+    if config.use_ssl:
+        kwargs["ssl_wrapper"] = ssl_wrapper_factory(ssl_context, config.tls_server_name or config.host)
+    return kwargs
+
+
 class RouterOsConnectionManager:
     def __init__(
         self,

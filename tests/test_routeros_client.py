@@ -2,9 +2,11 @@ import socket
 from unittest import TestCase
 
 from mikroclear.routeros_client import (
+    RouterOsConnectConfig,
     RouterOsClientConfig,
     RouterOsConnectionManager,
     add_to_address_list,
+    build_routeros_connect_kwargs,
     remove_from_address_list,
 )
 
@@ -86,3 +88,49 @@ class RouterOsConnectionManagerTests(TestCase):
         self.assertEqual(attempts["count"], 2)
         self.assertIn(("heartbeat", False), events)
         self.assertIn(("reconnect", "test operation failed"), events)
+
+
+class RouterOsConnectBoundaryTests(TestCase):
+    def test_build_routeros_connect_kwargs_uses_ssl_wrapper_when_ssl_enabled(self):
+        config = RouterOsConnectConfig(
+            username="user",
+            password="pass",
+            host="192.0.2.1",
+            port=8729,
+            use_ssl=True,
+            tls_server_name="router.local",
+        )
+
+        kwargs = build_routeros_connect_kwargs(
+            config,
+            ssl_context="ctx",
+            ssl_wrapper_factory=lambda context, server_name: f"{context}:{server_name}",
+            login_method="plain-login",
+        )
+
+        self.assertEqual(kwargs["username"], "user")
+        self.assertEqual(kwargs["password"], "pass")
+        self.assertEqual(kwargs["host"], "192.0.2.1")
+        self.assertEqual(kwargs["port"], 8729)
+        self.assertEqual(kwargs["login_method"], "plain-login")
+        self.assertEqual(kwargs["ssl_wrapper"], "ctx:router.local")
+
+    def test_build_routeros_connect_kwargs_omits_ssl_wrapper_for_plain_api(self):
+        config = RouterOsConnectConfig(
+            username="user",
+            password="pass",
+            host="192.0.2.1",
+            port=8728,
+            use_ssl=False,
+            tls_server_name="router.local",
+        )
+
+        kwargs = build_routeros_connect_kwargs(
+            config,
+            ssl_context=None,
+            ssl_wrapper_factory=lambda context, server_name: "unexpected",
+            login_method=None,
+        )
+
+        self.assertNotIn("ssl_wrapper", kwargs)
+        self.assertNotIn("login_method", kwargs)
