@@ -4,6 +4,7 @@ from unittest import TestCase
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN = ROOT / "docs" / "superpowers" / "plans" / "2026-07-05-package-importability-plan.md"
+CHECKLIST = ROOT / "docs" / "superpowers" / "plans" / "2026-07-05-selks-package-install-checklist.md"
 PREFLIGHT = ROOT / "docs" / "superpowers" / "preflight" / "2026-07-05-selks-readonly-preflight.md"
 PYPROJECT = ROOT / "pyproject.toml"
 
@@ -59,3 +60,29 @@ class PackageImportabilityPlanTests(TestCase):
 
         self.assertIn('build-backend = "setuptools.build_meta"', text)
         self.assertIn('mikroclear = "mikroclear.cli:main"', text)
+
+    def test_selks_package_install_checklist_is_deploy_gated(self):
+        text = CHECKLIST.read_text(encoding="utf-8")
+
+        self.assertIn("Requires separate explicit deploy approval", text)
+        self.assertIn("Do not run this checklist during non-deploy planning", text)
+        self.assertIn("Do not switch ExecStart until import succeeds", text)
+        self.assertIn("Do not restart `mikroclear.service` in the package install step", text)
+
+    def test_selks_package_install_checklist_covers_install_and_import_check(self):
+        text = CHECKLIST.read_text(encoding="utf-8")
+
+        self.assertIn("backup current service and script", text)
+        self.assertIn("upload wheel to /var/tmp/mikroclear-deploy/", text)
+        self.assertIn("install wheel into /opt/mikrocata-venv", text)
+        self.assertIn("/opt/mikrocata-venv/bin/python -m pip install --no-deps", text)
+        self.assertIn("run import-only check", text)
+        self.assertIn("import mikroclear; print(mikroclear.__file__)", text)
+
+    def test_selks_package_install_checklist_documents_rollback(self):
+        text = CHECKLIST.read_text(encoding="utf-8")
+
+        self.assertIn("rollback with pip uninstall mikro-clear", text)
+        self.assertIn("/opt/mikrocata-venv/bin/python -m pip uninstall mikro-clear", text)
+        self.assertIn("/usr/local/bin/mikroclear.py", text)
+        self.assertIn("/etc/systemd/system/mikroclear.service", text)
