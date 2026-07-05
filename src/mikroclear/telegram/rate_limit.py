@@ -3,7 +3,7 @@
 import os
 from typing import Callable
 
-from mikroclear.state_store import ensure_private_runtime_file
+from mikroclear.state.files import ensure_private_runtime_file
 
 
 class TelegramRateLimitLock:

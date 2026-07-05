@@ -14,17 +14,18 @@ import requests
 from mikroclear.assets.resolver import AssetResolver, AssetResolverConfig
 from mikroclear.bot.modules.status import StatusSnapshot
 from mikroclear.bot.settings import BotSettings
-from mikroclear.events import validate_event
 from mikroclear.runtime import MikroClearService, RuntimeConfig, RuntimeDependencies
 from mikroclear.routeros.client import RouterOSClient, remove_from_address_list
 from mikroclear.security import sanitize_exception_text
 from mikroclear.settings import Settings, load_settings
-from mikroclear.state.address_list_store import StateStoreConfig, add_saved_lists, save_lists
+from mikroclear.state.address_list_store import add_saved_lists, save_lists
 from mikroclear.state.files import ensure_private_runtime_file
+from mikroclear.state.files import StateStoreConfig
 from mikroclear.state.uptime import check_tik_uptime
 from mikroclear.suricata.alert_logic import is_ip_in_whitelist, is_valid_ip
 from mikroclear.suricata.event_handler import make_event_handler
 from mikroclear.suricata.eve_tailer import EveJsonTailer
+from mikroclear.suricata.events import validate_event
 from mikroclear.suricata.ignore_rules import IgnoreRules
 from mikroclear.suricata.pipeline import AlertPipeline, AlertProcessorConfig
 from mikroclear.telegram.formatting import escape_html_safe, format_system_message
