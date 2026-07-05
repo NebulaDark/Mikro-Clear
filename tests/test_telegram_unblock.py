@@ -94,13 +94,15 @@ class TelegramUnblockFlowTests(unittest.TestCase):
             def run_with_reconnect(self, operation_name, func):
                 raise RuntimeError("router offline")
 
-        from mikroclear.app import RuntimeProviders
+        from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
 
         log = Mock()
-        providers = RuntimeProviders(settings=Settings(whitelist_ips=()), service_start_time=100.0)
-        providers.get_router_client = Mock(return_value=FailingClient())
-        with patch("mikroclear.app.log", log):
-            result = providers.handle_unblock_action({"wanted_ip": "9.9.9.9", "list_name": "Suricata", "sid": "2402000"})
+        handler = TelegramUnblockHandler(
+            Settings(whitelist_ips=()),
+            get_router_client=Mock(return_value=FailingClient()),
+            log=log,
+        )
+        result = handler.handle_unblock_action({"wanted_ip": "9.9.9.9", "list_name": "Suricata", "sid": "2402000"})
 
         self.assertEqual(result.text, "Could not unblock 9.9.9.9")
         self.assertFalse(result.success)

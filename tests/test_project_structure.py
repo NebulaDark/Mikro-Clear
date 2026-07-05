@@ -107,3 +107,22 @@ class ProjectStructureTests(TestCase):
                 oversized.append(f"{relative}: {len(lines)} lines")
 
         self.assertEqual(oversized, [])
+
+    def test_app_is_thin_runtime_entrypoint(self):
+        app_text = (ROOT / "src/mikroclear/app.py").read_text(encoding="utf-8")
+
+        self.assertLessEqual(len(app_text.splitlines()), 80)
+        self.assertNotIn("class RuntimeProviders", app_text)
+        self.assertNotIn("def handle_unblock_action", app_text)
+        self.assertNotIn("def build_status_snapshot", app_text)
+
+    def test_runtime_wiring_modules_are_importable(self):
+        import mikroclear.runtime.providers
+        import mikroclear.runtime.status_snapshot
+        import mikroclear.runtime.wiring
+        import mikroclear.telegram.unblock_handler
+
+        self.assertTrue(hasattr(mikroclear.runtime.providers, "RuntimeProviders"))
+        self.assertTrue(hasattr(mikroclear.runtime.wiring, "build_runtime_service"))
+        self.assertTrue(hasattr(mikroclear.runtime.status_snapshot, "build_status_snapshot"))
+        self.assertTrue(hasattr(mikroclear.telegram.unblock_handler, "TelegramUnblockHandler"))
