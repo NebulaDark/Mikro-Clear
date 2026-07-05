@@ -392,6 +392,17 @@ except Exception:  # pragma: no cover - production single-file fallback
             return should_log, delay
 
 try:
+    from mikroclear.bot.auth import BotAuth
+    from mikroclear.bot.dispatcher import dispatch_message
+    from mikroclear.bot.modules.status import StatusSnapshot
+    from mikroclear.bot.settings import BotSettings
+except Exception:  # pragma: no cover - production single-file fallback
+    BotAuth = None  # type: ignore
+    BotSettings = None  # type: ignore
+    StatusSnapshot = None  # type: ignore
+    dispatch_message = None  # type: ignore
+
+try:
     from mikroclear.telegram_notify import (
         TelegramSendResult,
         format_alert_message,
@@ -808,6 +819,7 @@ TELEGRAM_LOCK_FILE = SETTINGS.telegram_lock_file
 TELEGRAM_UNBLOCK_STATE_FILE = SETTINGS.telegram_unblock_state_file
 SAVE_LISTS = list(SETTINGS.save_lists)
 SAVE_INTERVAL = SETTINGS.save_interval
+SERVICE_START_TIME = time()
 
 
 def _ensure_private_runtime_file(path_text: str, initial: str = "") -> None:
@@ -1350,6 +1362,25 @@ def record_telegram_polling_failure(error_text: str) -> None:
         log(f"Error processing Telegram updates; retry in {delay}s: {error_text}")
 
 
+def build_status_snapshot() -> Any:
+    bot_settings = BotSettings.from_env()
+    client = router_client
+    connected_at = float(getattr(client, "connected_at", 0.0) or 0.0)
+    connected = bool(getattr(client, "api", None))
+    connected_seconds = int(time() - connected_at) if connected and connected_at else 0
+    return StatusSnapshot(
+        uptime_seconds=int(time() - SERVICE_START_TIME),
+        routeros_connected=connected,
+        routeros_connected_seconds=connected_seconds,
+        eve_path=FILEPATH,
+        block_list_name=BLOCK_LIST_NAME,
+        monitor_only=MONITOR_ONLY,
+        telegram_unblock_enabled=TELEGRAM_UNBLOCK_ENABLE,
+        state_dir=STATE_DIR,
+        bot_settings=bot_settings,
+    )
+
+
 def remove_address_from_list(address_list: Any, wanted_ip: str, list_name: str) -> bool:
     return remove_from_address_list(address_list, list_name, wanted_ip) > 0
 
@@ -1397,7 +1428,11 @@ def process_telegram_updates() -> None:
     try:
         response = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-            params={"offset": telegram_update_offset, "timeout": 0, "allowed_updates": ujson.dumps(["callback_query"])},
+            params={
+                "offset": telegram_update_offset,
+                "timeout": 0,
+                "allowed_updates": ujson.dumps(["callback_query", "message"]),
+            },
             timeout=TELEGRAM_TIMEOUT,
         )
         if response.status_code != 200:
@@ -1421,7 +1456,34 @@ def process_telegram_updates() -> None:
     for update in body.get("result", []):
         update_id = int(update.get("update_id", 0))
         telegram_update_offset = max(telegram_update_offset, update_id + 1)
+        message_update = update.get("message") or {}
+        if message_update:
+            if BotAuth is None or BotSettings is None or dispatch_message is None:
+                continue
+            chat = message_update.get("chat") or {}
+            chat_id = str(chat.get("id", ""))
+            auth = BotAuth(BotSettings.from_env(), legacy_chat_id=str(TELEGRAM_CHATID))
+            result = dispatch_message(
+                message_update.get("text", ""),
+                chat_id,
+                auth,
+                build_status_snapshot,
+            )
+            if result is not None:
+                if result.alert and result.text == "Unauthorized":
+                    log(f"Rejected Telegram command from unauthorized chat {chat_id}")
+                    continue
+                send_telegram_message(
+                    token=TELEGRAM_TOKEN,
+                    chat_id=chat_id,
+                    text=result.text,
+                    timeout=TELEGRAM_TIMEOUT,
+                )
+                continue
+
         callback = update.get("callback_query") or {}
+        if not callback:
+            continue
         callback_id = str(callback.get("id", ""))
         message = callback.get("message") or {}
         chat = message.get("chat") or {}
