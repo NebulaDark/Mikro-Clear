@@ -12,7 +12,7 @@ class SelksPackageInstallPreflightReportTests(TestCase):
 
         self.assertIn("Production service identity is correct: `mikroclear.service`", text)
         self.assertIn("FragmentPath=/etc/systemd/system/mikroclear.service", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", text)
 
     def test_report_records_venv_pip_and_import_blocker(self):
         text = REPORT.read_text(encoding="utf-8")

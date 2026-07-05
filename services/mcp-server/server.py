@@ -98,7 +98,7 @@ def tail_mikrocata_logs(lines: int = 100) -> str:
 @mcp.tool()
 def check_mikroclear_syntax() -> str:
     return run_ssh(
-        "/opt/mikrocata-venv/bin/python -c "
+        "/opt/mikroclear-venv/bin/python -c "
         f"\"path='{REMOTE_SCRIPT}'; "
         "compile(open(path, encoding='utf-8').read(), path, 'exec'); "
         "print('OK')\"",
@@ -160,7 +160,7 @@ def upload_candidate_script() -> str:
         f"/usr/bin/install -d -m 700 {CANDIDATE_DIR} && "
         f"cat > {CANDIDATE_SCRIPT} && "
         f"chmod 600 {CANDIDATE_SCRIPT} && "
-        f"/opt/mikrocata-venv/bin/python -c \"path='{CANDIDATE_SCRIPT}'; "
+        f"/opt/mikroclear-venv/bin/python -c \"path='{CANDIDATE_SCRIPT}'; "
         "compile(open(path, encoding='utf-8').read(), path, 'exec'); print('OK')\" && "
         f"stat -c '%U:%G %a %s %y %n' {CANDIDATE_SCRIPT}",
         30,
@@ -181,7 +181,7 @@ def deploy_candidate_script(confirm: bool = False) -> str:
         f"sudo -n cp {LEGACY_REMOTE_SCRIPT} \"$legacy_backup\"; "
         "fi && "
         f"sudo -n install -o root -g root -m 755 {CANDIDATE_SCRIPT} {REMOTE_SCRIPT} && "
-        "/opt/mikrocata-venv/bin/python -c "
+        "/opt/mikroclear-venv/bin/python -c "
         f"\"path='{REMOTE_SCRIPT}'; compile(open(path, encoding='utf-8').read(), path, 'exec'); print('OK')\" && "
         f"sudo -n systemctl restart {SERVICE_NAME} && "
         f"systemctl status {SERVICE_NAME} --no-pager --lines=20 && "

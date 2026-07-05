@@ -82,7 +82,7 @@ Upload and verify candidates on SELKS:
 /usr/bin/install -d -m 700 /var/tmp/mikroclear-deploy
 # upload /var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate
 # upload /var/tmp/mikroclear-deploy/mikroclear-codex.service
-/opt/mikrocata-venv/bin/python -c "path='/var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate'; compile(open(path, encoding='utf-8').read(), path, 'exec'); print('OK')"
+/opt/mikroclear-venv/bin/python -c "path='/var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate'; compile(open(path, encoding='utf-8').read(), path, 'exec'); print('OK')"
 /usr/bin/systemd-analyze verify /var/tmp/mikroclear-deploy/mikroclear-codex.service
 ```
 

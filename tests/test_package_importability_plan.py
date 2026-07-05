@@ -13,9 +13,9 @@ class PackageImportabilityPlanTests(TestCase):
     def test_plan_selects_wheel_install_into_existing_selks_venv(self):
         text = PLAN.read_text(encoding="utf-8")
 
-        self.assertIn("Selected strategy: wheel install into `/opt/mikrocata-venv`", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python -m pip install", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python -m mikroclear", text)
+        self.assertIn("Selected strategy: wheel install into `/opt/mikroclear-venv`", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python -m pip install", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python -m mikroclear", text)
         self.assertIn("editable install as the first production switch", text)
         self.assertIn("`PYTHONPATH` in systemd", text)
 
@@ -74,8 +74,8 @@ class PackageImportabilityPlanTests(TestCase):
 
         self.assertIn("backup current service and script", text)
         self.assertIn("upload wheel to /var/tmp/mikroclear-deploy/", text)
-        self.assertIn("install wheel into /opt/mikrocata-venv", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python -m pip install --no-deps", text)
+        self.assertIn("install wheel into /opt/mikroclear-venv", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python -m pip install --no-deps", text)
         self.assertIn("run import-only check", text)
         self.assertIn("import mikroclear; print(mikroclear.__file__)", text)
 
@@ -83,6 +83,6 @@ class PackageImportabilityPlanTests(TestCase):
         text = CHECKLIST.read_text(encoding="utf-8")
 
         self.assertIn("rollback with pip uninstall mikro-clear", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python -m pip uninstall mikro-clear", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python -m pip uninstall mikro-clear", text)
         self.assertIn("/usr/local/bin/mikroclear.py", text)
         self.assertIn("/etc/systemd/system/mikroclear.service", text)

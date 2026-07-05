@@ -53,7 +53,7 @@ Expected current production values:
 
 ```text
 FragmentPath=/etc/systemd/system/mikroclear.service
-ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
+ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
 Expected env strategy:
@@ -72,7 +72,7 @@ Command:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python --version'
+  '/opt/mikroclear-venv/bin/python --version'
 ```
 
 Observed result:
@@ -85,20 +85,20 @@ Command:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python -c "import sys; print(sys.path)"'
+  '/opt/mikroclear-venv/bin/python -c "import sys; print(sys.path)"'
 ```
 
 Observed result:
 
 ```text
-['', '/usr/lib/python311.zip', '/usr/lib/python3.11', '/usr/lib/python3.11/lib-dynload', '/opt/mikrocata-venv/lib/python3.11/site-packages']
+['', '/usr/lib/python311.zip', '/usr/lib/python3.11', '/usr/lib/python3.11/lib-dynload', '/opt/mikroclear-venv/lib/python3.11/site-packages']
 ```
 
 Command:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python -c "import librouteros, requests, ujson; print(\"deps ok\")"'
+  '/opt/mikroclear-venv/bin/python -c "import librouteros, requests, ujson; print(\"deps ok\")"'
 ```
 
 Observed result:
@@ -178,7 +178,7 @@ Command:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
+  '/opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
 ```
 
 Observed result:
@@ -190,7 +190,7 @@ ModuleNotFoundError: No module named 'mikroclear'
 Finding:
 
 - `mikroclear` is not currently importable in the SELKS venv.
-- This blocks a direct `ExecStart=/opt/mikrocata-venv/bin/python -m mikroclear`
+- This blocks a direct `ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear`
   switch until package install or another import path strategy is prepared.
 
 ## Risks
@@ -199,7 +199,7 @@ Finding:
   SSH alias is `selks`.
 - The candidate package entrypoint is not importable on SELKS today.
 - The active package-entrypoint switch is blocked until `mikroclear` is installed
-  or otherwise made importable in `/opt/mikrocata-venv`.
+  or otherwise made importable in `/opt/mikroclear-venv`.
 - Read-only journal visibility is limited for the MCP SSH user.
 - Legacy env/state directories are root-owned and may need separately approved
   sudo-capable checks for file-level state verification.
@@ -209,7 +209,7 @@ Finding:
 Blocking:
 
 ```text
-/opt/mikrocata-venv/bin/python -m mikroclear
+/opt/mikroclear-venv/bin/python -m mikroclear
 ```
 
 would fail today because `mikroclear` is not importable in the SELKS venv.
@@ -248,7 +248,7 @@ Prepare a separate non-deploy package install/importability plan:
 
 1. Decide how SELKS venv will get the package:
    - editable install from a deployed source tree;
-   - wheel install into `/opt/mikrocata-venv`;
+   - wheel install into `/opt/mikroclear-venv`;
    - or a controlled `PYTHONPATH` strategy.
 2. Add local tests for the chosen install artifact.
 3. Plan a read-only SELKS check to verify candidate importability without

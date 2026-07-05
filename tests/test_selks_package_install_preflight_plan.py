@@ -23,14 +23,14 @@ class SelksPackageInstallPreflightPlanTests(TestCase):
 
         self.assertIn("systemctl cat mikroclear.service", text)
         self.assertIn("systemctl show mikroclear.service --property=ExecStart,EnvironmentFiles,FragmentPath,DropInPaths", text)
-        self.assertIn("ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py", text)
+        self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", text)
         self.assertIn("FragmentPath=/etc/systemd/system/mikroclear.service", text)
 
     def test_plan_checks_python_pip_and_import_state(self):
         text = PLAN.read_text(encoding="utf-8")
 
-        self.assertIn("/opt/mikrocata-venv/bin/python --version", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python -m pip --version", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python --version", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python -m pip --version", text)
         self.assertIn("import mikroclear; print(mikroclear.__file__)", text)
         self.assertIn("ModuleNotFoundError is acceptable before install", text)
 
@@ -46,7 +46,7 @@ class SelksPackageInstallPreflightPlanTests(TestCase):
         text = PLAN.read_text(encoding="utf-8")
 
         self.assertIn("Blockers", text)
-        self.assertIn("pip is unavailable in `/opt/mikrocata-venv`", text)
+        self.assertIn("pip is unavailable in `/opt/mikroclear-venv`", text)
         self.assertIn("current ExecStart is not the legacy script", text)
         self.assertIn("Next Gate", text)
         self.assertIn("approve SELKS wheel upload/install", text)

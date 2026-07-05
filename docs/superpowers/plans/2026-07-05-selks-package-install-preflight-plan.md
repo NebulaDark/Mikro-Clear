@@ -57,7 +57,7 @@ Expected:
 
 ```text
 FragmentPath=/etc/systemd/system/mikroclear.service
-ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
+ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
 If current ExecStart is not the legacy script, stop and re-plan. The package install stage assumes systemd is still unchanged.
@@ -66,24 +66,24 @@ If current ExecStart is not the legacy script, stop and re-plan. The package ins
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python --version'
+  '/opt/mikroclear-venv/bin/python --version'
 
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python -m pip --version'
+  '/opt/mikroclear-venv/bin/python -m pip --version'
 ```
 
 Expected:
 
 ```text
 Python 3.11.x
-pip available from /opt/mikrocata-venv
+pip available from /opt/mikroclear-venv
 ```
 
 ### 3. Current Import State
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
+  '/opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
 ```
 
 ModuleNotFoundError is acceptable before install and means the package install blocker still exists.
@@ -109,7 +109,7 @@ Expected rollback anchors:
 
 Do not approve the SELKS package install stage if any of these are true:
 
-- pip is unavailable in `/opt/mikrocata-venv`;
+- pip is unavailable in `/opt/mikroclear-venv`;
 - current ExecStart is not the legacy script;
 - `/etc/systemd/system/mikroclear.service` is missing;
 - `/usr/local/bin/mikroclear.py` is missing;
@@ -128,13 +128,13 @@ SELKS package install checklist: docs/superpowers/plans/2026-07-05-selks-package
 requires separate explicit deploy approval
 ```
 
-The package install stage may upload and install the wheel into `/opt/mikrocata-venv`, then run only:
+The package install stage may upload and install the wheel into `/opt/mikroclear-venv`, then run only:
 
 ```bash
-/opt/mikrocata-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"
+/opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"
 ```
 
-Changing `ExecStart` to `/opt/mikrocata-venv/bin/python -m mikroclear` remains a later separate systemd switch stage.
+Changing `ExecStart` to `/opt/mikroclear-venv/bin/python -m mikroclear` remains a later separate systemd switch stage.
 
 ## Verification
 

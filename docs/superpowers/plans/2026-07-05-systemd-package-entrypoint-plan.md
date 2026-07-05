@@ -17,7 +17,7 @@ The current production unit template in this repository still uses the deployed
 single-file script:
 
 ```text
-ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
+ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
 This is intentionally preserved in `systemd/mikroclear.service` for rollback and
@@ -40,7 +40,7 @@ Legacy paths preserved during the transition:
 /etc/mikrocata/mikrocataTZSP0.env
 /var/lib/mikrocata
 /etc/mikrocata
-/opt/mikrocata-venv
+/opt/mikroclear-venv
 ```
 
 Current Mikro-Clear paths already represented in the unit:
@@ -55,7 +55,7 @@ Current Mikro-Clear paths already represented in the unit:
 The candidate unit uses the package module entrypoint:
 
 ```text
-ExecStart=/opt/mikrocata-venv/bin/python -m mikroclear
+ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
 ```
 
 This is safer than relying on a console script for the first switch because the
@@ -70,7 +70,7 @@ mikroclear = "mikroclear.cli:main"
 
 First switch recommendation:
 
-1. Keep `/opt/mikrocata-venv/bin/python`.
+1. Keep `/opt/mikroclear-venv/bin/python`.
 2. Use `-m mikroclear`.
 3. Keep `WorkingDirectory=/usr/local/bin` for now.
 4. Keep the legacy script and env fallback until one stable runtime window passes.
@@ -114,7 +114,7 @@ Later cleanup, after stable runtime:
 Fast rollback is to restore the legacy ExecStart:
 
 ```text
-ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
+ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
 Backups to create before any future deploy stage:
@@ -172,7 +172,7 @@ Do not connect to RouterOS and do not start the real runtime loop in this stage.
 Text-based unit tests must verify:
 
 - production unit still has the legacy ExecStart;
-- candidate unit uses `/opt/mikrocata-venv/bin/python -m mikroclear`;
+- candidate unit uses `/opt/mikroclear-venv/bin/python -m mikroclear`;
 - candidate keeps both env files in legacy-then-current override order;
 - candidate keeps legacy state/config paths during the transition;
 - this plan contains rollback and safety notes.

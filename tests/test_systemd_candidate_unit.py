@@ -26,13 +26,13 @@ class SystemdCandidateUnitTests(TestCase):
     def test_current_production_unit_keeps_legacy_execstart(self):
         service_lines = section_lines(PRODUCTION_UNIT, "Service")
 
-        self.assertIn("ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
+        self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
 
     def test_candidate_execstart_uses_package_entrypoint(self):
         service_lines = section_lines(CANDIDATE_UNIT, "Service")
 
-        self.assertIn("ExecStart=/opt/mikrocata-venv/bin/python -m mikroclear", service_lines)
-        self.assertNotIn("ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
+        self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", service_lines)
+        self.assertNotIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
 
     def test_candidate_keeps_legacy_env_fallback_order(self):
         service_lines = section_lines(CANDIDATE_UNIT, "Service")
@@ -69,6 +69,6 @@ class SystemdCandidateUnitTests(TestCase):
         self.assertIn("systemctl cat mikroclear.service", text)
         self.assertIn("systemctl status mikroclear.service --no-pager", text)
         self.assertIn("FragmentPath=/etc/systemd/system/mikroclear.service", text)
-        self.assertIn("ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py", text)
+        self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", text)
         self.assertNotIn("systemctl cat mikrocataTZSP0.service", text)
         self.assertNotIn("journalctl -u mikrocataTZSP0.service", text)

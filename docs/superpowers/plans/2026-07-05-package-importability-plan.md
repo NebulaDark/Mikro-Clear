@@ -4,7 +4,7 @@
 
 **Goal:** Prepare the non-deploy path that makes `python -m mikroclear` importable in the SELKS venv before switching `mikroclear.service` to the package entrypoint.
 
-**Architecture:** Keep the production service and SELKS files unchanged in this stage. Build and inspect a local wheel artifact, then document an explicitly approved future install into the existing `/opt/mikrocata-venv`; the candidate systemd unit can only be used after a read-only importability check succeeds on SELKS.
+**Architecture:** Keep the production service and SELKS files unchanged in this stage. Build and inspect a local wheel artifact, then document an explicitly approved future install into the existing `/opt/mikroclear-venv`; the candidate systemd unit can only be used after a read-only importability check succeeds on SELKS.
 
 **Tech Stack:** Python 3.11, setuptools, wheel artifact, unittest, systemd candidate text, SELKS SSH read-only checks.
 
@@ -16,33 +16,33 @@
 - No RouterOS connection.
 - Do not change the behavior of the existing `mikroclear.service`.
 - Production service remains `mikroclear.service`.
-- Current production ExecStart remains `/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py` until a separately approved deploy stage.
-- Candidate ExecStart remains `/opt/mikrocata-venv/bin/python -m mikroclear`.
+- Current production ExecStart remains `/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py` until a separately approved deploy stage.
+- Candidate ExecStart remains `/opt/mikroclear-venv/bin/python -m mikroclear`.
 
 ---
 
 ## Decision
 
-Selected strategy: wheel install into `/opt/mikrocata-venv`.
+Selected strategy: wheel install into `/opt/mikroclear-venv`.
 
-This is the safest first package-entrypoint path because SELKS already runs the service with `/opt/mikrocata-venv/bin/python`, and the read-only preflight confirmed the venv has the runtime dependencies `librouteros`, `requests`, and `ujson`.
+This is the safest first package-entrypoint path because SELKS already runs the service with `/opt/mikroclear-venv/bin/python`, and the read-only preflight confirmed the venv has the runtime dependencies `librouteros`, `requests`, and `ujson`.
 
 Rejected for the first switch:
 
 - editable install as the first production switch, because it depends on a mutable source tree path on SELKS;
 - `PYTHONPATH` in systemd, because it adds another runtime path knob and weakens the clarity of the package boundary;
-- console script as the first switch, because `ExecStart=/opt/mikrocata-venv/bin/python -m mikroclear` is explicit and does not depend on `PATH`.
+- console script as the first switch, because `ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear` is explicit and does not depend on `PATH`.
 
 The future approved install command should use the existing venv:
 
 ```bash
-/opt/mikrocata-venv/bin/python -m pip install --no-deps /var/tmp/mikroclear-deploy/mikro_clear-*.whl
+/opt/mikroclear-venv/bin/python -m pip install --no-deps /var/tmp/mikroclear-deploy/mikro_clear-*.whl
 ```
 
 The future candidate runtime command remains:
 
 ```bash
-/opt/mikrocata-venv/bin/python -m mikroclear
+/opt/mikroclear-venv/bin/python -m mikroclear
 ```
 
 ## Current Blocker
@@ -56,10 +56,10 @@ ModuleNotFoundError: No module named 'mikroclear'
 Therefore, switching `mikroclear.service` to:
 
 ```text
-ExecStart=/opt/mikrocata-venv/bin/python -m mikroclear
+ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
 ```
 
-is blocked until the package is installed into `/opt/mikrocata-venv` or a separately approved equivalent import strategy is in place.
+is blocked until the package is installed into `/opt/mikroclear-venv` or a separately approved equivalent import strategy is in place.
 
 ## Artifact Checks
 
@@ -93,7 +93,7 @@ After a separately approved package upload/install stage, run a read-only import
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
+  '/opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
 ```
 
 This command must not call `app.main()` and must not start the Telegram polling lifecycle.
@@ -114,13 +114,13 @@ Rollback constraints preserve:
 If a future package install needs rollback before the systemd switch, remove only the package from the existing venv:
 
 ```bash
-/opt/mikrocata-venv/bin/python -m pip uninstall mikro-clear
+/opt/mikroclear-venv/bin/python -m pip uninstall mikro-clear
 ```
 
 If a future systemd switch also happened, restore:
 
 ```text
-ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
+ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
 and verify `mikroclear.service` only after explicit deploy/rollback approval.
@@ -133,7 +133,7 @@ and verify `mikroclear.service` only after explicit deploy/rollback approval.
 
 **Interfaces:**
 - Consumes: `docs/superpowers/preflight/2026-07-05-selks-readonly-preflight.md`
-- Produces: a test-covered decision that wheel install into `/opt/mikrocata-venv` is the next non-deploy preparation target.
+- Produces: a test-covered decision that wheel install into `/opt/mikroclear-venv` is the next non-deploy preparation target.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -152,9 +152,9 @@ class PackageImportabilityPlanTests(TestCase):
     def test_plan_selects_wheel_install_into_existing_selks_venv(self):
         text = PLAN.read_text(encoding="utf-8")
 
-        self.assertIn("Selected strategy: wheel install into `/opt/mikrocata-venv`", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python -m pip install", text)
-        self.assertIn("/opt/mikrocata-venv/bin/python -m mikroclear", text)
+        self.assertIn("Selected strategy: wheel install into `/opt/mikroclear-venv`", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python -m pip install", text)
+        self.assertIn("/opt/mikroclear-venv/bin/python -m mikroclear", text)
 ```
 
 - [ ] **Step 2: Run focused test to verify it fails**
@@ -252,7 +252,7 @@ Add assertions that the checklist contains:
 ```text
 backup current service and script
 upload wheel to /var/tmp/mikroclear-deploy/
-install wheel into /opt/mikrocata-venv
+install wheel into /opt/mikroclear-venv
 run import-only check
 do not switch ExecStart until import succeeds
 rollback with pip uninstall mikro-clear

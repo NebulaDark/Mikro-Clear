@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - No push, no deploy, no SELKS changes.
-- Do not install the wheel into `/opt/mikrocata-venv` in this stage.
+- Do not install the wheel into `/opt/mikroclear-venv` in this stage.
 - Do not start `app.main()` or the Telegram polling lifecycle.
 - Do not connect to RouterOS.
 - Keep generated wheel artifacts outside the repository or remove them before commit.

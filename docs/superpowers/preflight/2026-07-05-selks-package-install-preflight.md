@@ -28,7 +28,7 @@ Observed:
 # /etc/systemd/system/mikroclear.service
 EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env
 EnvironmentFile=-/etc/mikroclear/mikroclear.env
-ExecStart=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py
+ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
 Command:
@@ -41,7 +41,7 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
 Observed:
 
 ```text
-ExecStart={ path=/opt/mikrocata-venv/bin/python ; argv[]=/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py ; ignore_errors=no ; start_time=[Sat 2026-07-04 18:31:59 MSK] ; stop_time=[n/a] ; pid=1800991 ; code=(null) ; status=0/0 }
+ExecStart={ path=/opt/mikroclear-venv/bin/python ; argv[]=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py ; ignore_errors=no ; start_time=[Sat 2026-07-04 18:31:59 MSK] ; stop_time=[n/a] ; pid=1800991 ; code=(null) ; status=0/0 }
 EnvironmentFiles=/etc/mikrocata/mikrocataTZSP0.env (ignore_errors=yes)
 EnvironmentFiles=/etc/mikroclear/mikroclear.env (ignore_errors=yes)
 FragmentPath=/etc/systemd/system/mikroclear.service
@@ -52,7 +52,7 @@ Finding:
 
 - Production service identity is correct: `mikroclear.service`.
 - Current ExecStart is still the legacy script:
-  `/opt/mikrocata-venv/bin/python /usr/local/bin/mikroclear.py`.
+  `/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py`.
 - No systemd switch has happened.
 
 ## Existing Venv And Pip
@@ -61,22 +61,22 @@ Commands:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python --version'
+  '/opt/mikroclear-venv/bin/python --version'
 
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python -m pip --version'
+  '/opt/mikroclear-venv/bin/python -m pip --version'
 ```
 
 Observed:
 
 ```text
 Python 3.11.2
-pip 26.1.2 from /opt/mikrocata-venv/lib/python3.11/site-packages/pip (python 3.11)
+pip 26.1.2 from /opt/mikroclear-venv/lib/python3.11/site-packages/pip (python 3.11)
 ```
 
 Finding:
 
-- `/opt/mikrocata-venv` can run Python 3.11.
+- `/opt/mikroclear-venv` can run Python 3.11.
 - `pip` is available in the target venv.
 
 ## Current Import State
@@ -85,7 +85,7 @@ Command:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikrocata-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
+  '/opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
 ```
 
 Observed:
@@ -100,7 +100,7 @@ Finding:
 
 - `mikroclear` is not importable in the SELKS venv yet.
 - This is expected before wheel install.
-- Do not switch ExecStart to `/opt/mikrocata-venv/bin/python -m mikroclear`
+- Do not switch ExecStart to `/opt/mikroclear-venv/bin/python -m mikroclear`
   until this import-only check succeeds.
 
 ## Rollback Anchors
@@ -135,7 +135,7 @@ Go for a separately approved wheel upload/install stage:
 
 Still no-go for systemd package-entrypoint switch:
 
-- `mikroclear` is not importable in `/opt/mikrocata-venv`.
+- `mikroclear` is not importable in `/opt/mikroclear-venv`.
 
 ## Next Safe Step
 
@@ -146,13 +146,13 @@ After explicit approval, perform only the package install stage:
 3. Install with:
 
    ```bash
-   /opt/mikrocata-venv/bin/python -m pip install --no-deps /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl
+   /opt/mikroclear-venv/bin/python -m pip install --no-deps /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl
    ```
 
 4. Run only:
 
    ```bash
-   /opt/mikrocata-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"
+   /opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"
    ```
 
 Do not run `systemctl`, do not restart `mikroclear.service`, and do not change
