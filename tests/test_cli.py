@@ -23,14 +23,14 @@ class CliEntrypointTests(TestCase):
             "mikroclear.cli:main",
         )
 
-    def test_cli_main_delegates_to_legacy_main(self):
+    def test_cli_main_delegates_to_app_main(self):
         with patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}):
             from mikroclear import cli
 
-        with patch.object(cli.legacy, "main", return_value=7) as legacy_main:
+        with patch.object(cli.app, "main", return_value=7) as app_main:
             self.assertEqual(cli.main(), 7)
 
-        legacy_main.assert_called_once_with()
+        app_main.assert_called_once_with()
 
     def test_python_module_entrypoint_delegates_to_cli_main(self):
         with (

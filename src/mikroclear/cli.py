@@ -1,5 +1,5 @@
-from . import legacy
+from . import app
 
 
 def main() -> int:
-    return legacy.main()
+    return app.main()

@@ -171,7 +171,7 @@ src/mikroclear/
 - Produces: `mikroclear.app.main()`.
 - Keeps: `legacy.main()` compatibility wrapper.
 
-- [ ] Add tests proving `cli.main()` calls `app.main()`.
-- [ ] Make `legacy.main()` delegate to `app.main()` or remain fallback during deployment window.
-- [ ] Run full tests.
-- [ ] Commit.
+- [x] Add tests proving `cli.main()` calls `app.main()`.
+- [x] Make `legacy.main()` delegate to `app.main()` or remain fallback during deployment window.
+- [x] Run full tests.
+- [x] Commit.
