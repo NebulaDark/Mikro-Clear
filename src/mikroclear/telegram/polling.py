@@ -60,6 +60,7 @@ class TelegramUpdatePoller:
         send_system_notification: Callable[[str, str], Any],
         log: Callable[[str], None],
         now: Callable[[], float],
+        mangle_handler: Any = None,
         http_get: Callable[..., Any] = requests.get,
         send_message: Callable[..., Any] = send_telegram_message,
         backoff: TelegramPollingBackoff | None = None,
@@ -71,6 +72,7 @@ class TelegramUpdatePoller:
         self.send_system_notification = send_system_notification
         self.log = log
         self.now = now
+        self.mangle_handler = mangle_handler
         self.http_get = http_get
         self.send_message = send_message
         self.backoff = backoff or TelegramPollingBackoff()
@@ -79,7 +81,6 @@ class TelegramUpdatePoller:
     def process_updates(self) -> None:
         if (
             not self.settings.enable_telegram
-            or not self.settings.telegram_unblock_enable
             or not self.settings.telegram_token
             or not self.settings.telegram_chatid
         ):
@@ -137,6 +138,15 @@ class TelegramUpdatePoller:
         chat = message_update.get("chat") or {}
         chat_id = str(chat.get("id", ""))
         auth = BotAuth(BotSettings.from_env(), legacy_chat_id=str(self.settings.telegram_chatid))
+        if self.mangle_handler is not None and self.mangle_handler.handle_message(
+            text=message_update.get("text", ""),
+            chat_id=chat_id,
+            auth=auth,
+            send_message=self.send_message,
+            token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+        ):
+            return True
         return process_message_command(
             text=message_update.get("text", ""),
             chat_id=chat_id,
@@ -153,6 +163,18 @@ class TelegramUpdatePoller:
         callback = update.get("callback_query") or {}
         if not callback:
             return False
+
+        auth = BotAuth(BotSettings.from_env(), legacy_chat_id=str(self.settings.telegram_chatid))
+        if self.mangle_handler is not None and self.mangle_handler.handle_callback(
+            callback=callback,
+            auth=auth,
+            answer_callback=self.answer_callback,
+            send_message=self.send_message,
+            telegram_token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            now=int(self.now()),
+        ):
+            return True
 
         from mikroclear.telegram.unblock import consume_unblock_token, parse_unblock_callback
 

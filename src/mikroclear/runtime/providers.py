@@ -22,6 +22,7 @@ from mikroclear.suricata.ignore_rules import IgnoreRules
 from mikroclear.suricata.pipeline import AlertPipeline, AlertProcessorConfig
 from mikroclear.telegram.formatting import escape_html_safe
 from mikroclear.telegram.notify import TelegramNotifier
+from mikroclear.telegram.mangle_handler import TelegramMangleHandler
 from mikroclear.telegram.polling import TelegramUpdatePoller
 from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
 
@@ -72,6 +73,11 @@ class RuntimeProviders:
             get_router_client=self.get_router_client,
             log=log,
         )
+        self.mangle_handler = TelegramMangleHandler(
+            self.settings,
+            get_router_client=self.get_router_client,
+            log=log,
+        )
         self.pipeline = AlertPipeline(
             client_factory=self.get_router_client,
             config=self.alert_processor_config(),
@@ -92,6 +98,7 @@ class RuntimeProviders:
             send_system_notification=self.notifier.send_system_notification,
             log=log,
             now=time,
+            mangle_handler=self.mangle_handler,
         )
 
     def debug_log(self, message: str) -> None:

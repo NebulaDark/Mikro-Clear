@@ -11,6 +11,7 @@ class ProjectStructureTests(TestCase):
         import mikroclear.assets.resolver
         import mikroclear.bot.auth
         import mikroclear.bot.dispatcher
+        import mikroclear.bot.mangle_control
         import mikroclear.bot.modules.status
         import mikroclear.bot.settings
         import mikroclear.logging
@@ -25,8 +26,10 @@ class ProjectStructureTests(TestCase):
         import mikroclear.suricata.eve_tailer
         import mikroclear.telegram.formatting
         import mikroclear.telegram.notify
+        import mikroclear.telegram.mangle_handler
         import mikroclear.telegram.polling
         import mikroclear.telegram.unblock
+        import mikroclear.routeros.mangle
 
         self.assertEqual(mikroclear.app.__all__, ["build_service", "main"])
         self.assertEqual(mikroclear.settings.__all__, ["Settings", "load_settings"])
@@ -129,8 +132,10 @@ class ProjectStructureTests(TestCase):
         import mikroclear.runtime.status_snapshot
         import mikroclear.runtime.wiring
         import mikroclear.telegram.unblock_handler
+        import mikroclear.telegram.mangle_handler
 
         self.assertTrue(hasattr(mikroclear.runtime.providers, "RuntimeProviders"))
         self.assertTrue(hasattr(mikroclear.runtime.wiring, "build_runtime_service"))
         self.assertTrue(hasattr(mikroclear.runtime.status_snapshot, "build_status_snapshot"))
         self.assertTrue(hasattr(mikroclear.telegram.unblock_handler, "TelegramUnblockHandler"))
+        self.assertTrue(hasattr(mikroclear.telegram.mangle_handler, "TelegramMangleHandler"))
