@@ -60,6 +60,12 @@ class FakeClient:
         return func()
 
 
+class FakeSendResult:
+    def __init__(self, ok=True, response_text="ok"):
+        self.ok = ok
+        self.response_text = response_text
+
+
 def settings(tmp: str, **overrides):
     values = {
         "enable_telegram": True,
@@ -174,7 +180,8 @@ class TelegramMangleHandlerTests(TestCase):
     def test_mangle_authorized_returns_status_and_keyboard(self):
         with tempfile.TemporaryDirectory() as tmp:
             send = Mock()
-            handler = TelegramMangleHandler(settings(tmp), get_router_client=lambda: FakeClient(rows()), log=Mock())
+            log = Mock()
+            handler = TelegramMangleHandler(settings(tmp), get_router_client=lambda: FakeClient(rows()), log=log)
 
             handled = handler.handle_message(
                 text="/mangle",
@@ -190,8 +197,28 @@ class TelegramMangleHandlerTests(TestCase):
         self.assertTrue(handled)
         self.assertIn("Mangle Rules", send.call_args.kwargs["text"])
         self.assertEqual(send.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["text"], "Disable AI-Tunnel")
+        self.assertIn("Telegram /mangle received from chat chat-1", log.call_args_list[0].args[0])
         payload = next(iter(state.values()))
         self.assertEqual(payload["requester_user_id"], "user-1")
+
+    def test_mangle_status_send_failure_is_logged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Mock()
+            send = Mock(return_value=FakeSendResult(ok=False, response_text="HTTP 403: forbidden"))
+            handler = TelegramMangleHandler(settings(tmp), get_router_client=lambda: FakeClient(rows()), log=log)
+
+            handled = handler.handle_message(
+                text="/mangle",
+                chat_id="chat-1",
+                user_id="user-1",
+                auth=self.auth(),
+                send_message=send,
+                token="token",
+                timeout=7,
+            )
+
+        self.assertTrue(handled)
+        self.assertTrue(any("TELEGRAM MANGLE STATUS SEND FAILED" in call.args[0] for call in log.call_args_list))
 
     def test_request_returns_confirm_keyboard_without_routeros_update(self):
         with tempfile.TemporaryDirectory() as tmp:

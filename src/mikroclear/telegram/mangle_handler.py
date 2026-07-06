@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from mikroclear.bot.mangle_control import build_mangle_confirm_keyboard, build_mangle_keyboard, format_mangle_status
 from mikroclear.routeros.mangle import get_managed_mangle_rule, list_managed_mangle_rules, set_mangle_rule_disabled
-from mikroclear.security import sanitize_exception_text
+from mikroclear.security import mask_known_secret, sanitize_exception_text
 
 
 def _command_name(text: Any) -> str:
@@ -130,7 +130,8 @@ class TelegramMangleHandler:
         timeout: int,
     ) -> None:
         rules = list_managed_mangle_rules(self._api(), self.settings)
-        send_message(
+        self.log(f"Telegram /mangle managed rules: {len(rules)} for chat {chat_id}")
+        result = send_message(
             token=token,
             chat_id=chat_id,
             text=format_mangle_status(rules),
@@ -146,6 +147,9 @@ class TelegramMangleHandler:
             ),
             timeout=timeout,
         )
+        if getattr(result, "ok", True) is False:
+            response_text = mask_known_secret(str(getattr(result, "response_text", "")), token)
+            self.log(f"TELEGRAM MANGLE STATUS SEND FAILED: {response_text}")
 
     def _payload_matches_requester(self, payload: dict[str, Any], chat_id: str, user_id: str) -> bool:
         return (
@@ -166,6 +170,7 @@ class TelegramMangleHandler:
     ) -> bool:
         if _command_name(text) != "/mangle":
             return False
+        self.log(f"Telegram /mangle received from chat {chat_id}")
         if not auth.can_read(chat_id):
             self.log(f"Rejected Telegram /mangle from unauthorized chat {chat_id}")
             return True
