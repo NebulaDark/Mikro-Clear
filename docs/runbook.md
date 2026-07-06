@@ -2,6 +2,70 @@
 
 Operational procedures for the SELKS-hosted Mikro-Clear service.
 
+## Package Deploy From GitHub
+
+Current production runs the package entrypoint:
+
+```text
+/opt/mikroclear-venv/bin/python -m mikroclear
+```
+
+After a feature branch is merged, build and deploy the wheel from `main`:
+
+```bash
+git checkout main
+git pull --ff-only
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
+PYTHONPYCACHEPREFIX=/tmp/mikroclear-pycache git ls-files '*.py' | xargs .venv/bin/python -m py_compile
+rm -rf dist
+.venv/bin/python -m pip wheel --no-build-isolation --no-deps -w dist .
+.venv/bin/python scripts/validate_wheel_artifact.py dist/mikro_clear-0.1.0-py3-none-any.whl
+sha256sum dist/mikro_clear-0.1.0-py3-none-any.whl
+```
+
+Upload and install on SELKS:
+
+```bash
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'install -d -m 700 /var/tmp/mikroclear-deploy'
+
+scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new \
+  dist/mikro_clear-0.1.0-py3-none-any.whl \
+  selks:/var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl
+
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'sha256sum /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl'
+
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'sudo /opt/mikroclear-venv/bin/python -m pip install --no-deps --force-reinstall /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl'
+```
+
+Restart and verify:
+
+```bash
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'sudo systemctl restart mikroclear.service && systemctl status mikroclear.service --no-pager --lines=30'
+
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'systemctl show mikroclear.service --property=ActiveState,SubState,ExecStart,NRestarts --no-pager'
+
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'sudo journalctl -u mikroclear.service -n 100 --no-pager | sed -E "s#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g"'
+```
+
+Expected:
+
+```text
+ActiveState=active
+SubState=running
+NRestarts=0
+ExecStart=... /opt/mikroclear-venv/bin/python -m mikroclear ...
+```
+
+Legacy `/usr/local/bin/mikroclear.py` deployment is retained only as an
+emergency rollback path. Normal deploys should install a wheel into
+`/opt/mikroclear-venv`.
+
 ## Telegram Token Rotation
 
 Use this procedure after any suspected Telegram Bot token exposure, and after

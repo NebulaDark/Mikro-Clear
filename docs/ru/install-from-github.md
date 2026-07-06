@@ -65,7 +65,7 @@ git clone https://github.com/paveltarasov50-coder/Mikro-Clear.git
 cd Mikro-Clear
 ```
 
-Для установки конкретной feature-ветки:
+Для проверки конкретной feature-ветки до merge:
 
 ```bash
 git fetch origin
@@ -73,7 +73,7 @@ git checkout feature/canonical-module-ownership
 git pull --ff-only
 ```
 
-Для установки основной ветки после merge:
+Для production deploy после merge использовать только `main`:
 
 ```bash
 git checkout main

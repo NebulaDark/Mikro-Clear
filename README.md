@@ -2,21 +2,21 @@
 
 Local baseline and cleanup workspace for the Mikro-Clear service.
 
-The production script currently runs on `selks` as:
+Production on `selks` currently runs from the package entrypoint:
 
 ```text
-/usr/local/bin/mikroclear.py
+/opt/mikroclear-venv/bin/python -m mikroclear
 ```
 
-The copied baseline is stored at:
+The legacy script compatibility wrapper is stored at:
 
 ```text
 src/mikroclear/legacy.py
 ```
 
 This repository is intended to make changes testable before touching the running
-service. The first extracted module is pure alert decision logic for target IP,
-peer IP, port selection, and event deduplication.
+service. Runtime implementation lives in canonical package modules under
+`src/mikroclear/`.
 
 ## Architecture
 
@@ -42,8 +42,8 @@ docs/ru/deploy-2026-07-06.md
 ## Checks
 
 ```bash
-python -m unittest discover -s tests
-python -m py_compile src/mikroclear/legacy.py src/mikroclear/alert_logic.py
+PYTHONPATH=src python -m unittest discover -s tests
+git ls-files '*.py' | xargs python -m py_compile
 ```
 
 ## Operations
@@ -135,20 +135,25 @@ Read-only tools:
 ```text
 status_mikroclear
 tail_mikroclear_logs
-check_mikroclear_syntax
-compare_production_script
+check_mikroclear_import
 verify_systemd_unit
 ```
 
 Legacy `*_mikrocata` MCP tool names remain as compatibility aliases.
 
-Deploy flow for the production script:
+Target package deploy flow after merge to `main`:
+
+```text
+build wheel from main -> upload_wheel_candidate -> deploy_wheel_candidate(confirm=True)
+```
+
+Legacy single-file script deploy is an emergency rollback path only:
 
 ```text
 compare_production_script -> upload_candidate_script -> deploy_candidate_script(confirm=True)
 ```
 
-Deploy flow for the systemd unit:
+Systemd unit deploy remains a separate approved operation:
 
 ```text
 upload_unit_candidate -> deploy_unit_candidate(confirm=True)
