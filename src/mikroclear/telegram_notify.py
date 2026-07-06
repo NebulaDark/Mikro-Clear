@@ -6,6 +6,7 @@ from mikroclear.telegram.formatting import (
     format_alert_message,
     format_system_message,
     sanitize_text,
+    strip_asset_source_suffix,
 )
 from mikroclear.telegram.notify import TelegramNotifier, TelegramSendResult, send_telegram_message
 
@@ -18,4 +19,5 @@ __all__ = [
     "format_system_message",
     "sanitize_text",
     "send_telegram_message",
+    "strip_asset_source_suffix",
 ]

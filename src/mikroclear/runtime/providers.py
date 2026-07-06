@@ -221,7 +221,6 @@ class RuntimeProviders:
 
         asset = self.asset_resolver.resolve(str(ip_text))
         name = asset.get("name", "")
-        source = asset.get("source", "")
         mac = asset.get("mac", "")
         comment = asset.get("comment", "")
 
@@ -229,8 +228,6 @@ class RuntimeProviders:
             return f"<code>{escape_html_safe(ip_text)}</code>"
 
         result = f"<code>{escape_html_safe(ip_text)}</code> - <b>{escape_html_safe(name)}</b>"
-        if source:
-            result += f" <code>{escape_html_safe(source)}</code>"
 
         details = []
         if mac:

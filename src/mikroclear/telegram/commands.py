@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from mikroclear.telegram.formatting import escape_html_safe
+from mikroclear.telegram.unblock import build_unblock_confirm_keyboard
+
 
 def process_message_command(
     *,
@@ -46,6 +49,11 @@ def process_callback_update(
     answer_callback: Callable[[str, str, bool], None],
     send_system_notification: Callable[[str, str], Any],
     log: Callable[[str], None],
+    peek_unblock_token: Callable[..., Any] | None = None,
+    cancel_unblock_token: Callable[..., Any] | None = None,
+    send_message: Callable[..., Any] | None = None,
+    telegram_token: str = "",
+    telegram_timeout: int = 10,
 ) -> bool:
     callback_id = str(callback.get("id", ""))
     message = callback.get("message") or {}
@@ -56,8 +64,51 @@ def process_callback_update(
         log(f"Rejected Telegram callback from unauthorized chat {chat_id}")
         return True
 
-    token = parse_unblock_callback(callback.get("data"))
-    if not token:
+    parsed = parse_unblock_callback(callback.get("data"))
+    if not parsed:
+        return False
+
+    if isinstance(parsed, tuple):
+        action_name, token = parsed
+    else:
+        action_name, token = "execute", parsed
+
+    if action_name == "confirm":
+        if peek_unblock_token is None or send_message is None:
+            answer_callback(callback_id, "Confirm step unavailable", True)
+            log("TELEGRAM UNBLOCK CONFIRM UNAVAILABLE: callback dependencies missing")
+            return True
+
+        action = peek_unblock_token(state_file, token, now=now)
+        if not action:
+            answer_callback(callback_id, "Unblock request expired or already used", True)
+            log("TELEGRAM UNBLOCK EXPIRED: callback token expired or already used")
+            return True
+
+        wanted_ip = str(action.get("wanted_ip", "N/A"))
+        send_message(
+            token=telegram_token,
+            chat_id=chat_id,
+            text=f"Confirm unblock?\n\nTarget: <code>{escape_html_safe(wanted_ip)}</code>",
+            reply_markup=build_unblock_confirm_keyboard(token),
+            timeout=telegram_timeout,
+        )
+        answer_callback(callback_id, "Confirm unblock in chat", False)
+        return True
+
+    if action_name == "cancel":
+        if cancel_unblock_token is None:
+            answer_callback(callback_id, "Cancel unavailable", True)
+            log("TELEGRAM UNBLOCK CANCEL UNAVAILABLE: callback dependencies missing")
+            return True
+        if cancel_unblock_token(state_file, token, now=now):
+            answer_callback(callback_id, "Unblock cancelled", False)
+        else:
+            answer_callback(callback_id, "Unblock request expired or already used", True)
+            log("TELEGRAM UNBLOCK EXPIRED: callback token expired or already used")
+        return True
+
+    if action_name != "execute":
         return False
 
     action = consume_unblock_token(state_file, token, now=now)

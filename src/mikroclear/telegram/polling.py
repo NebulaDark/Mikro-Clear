@@ -179,7 +179,12 @@ class TelegramUpdatePoller:
         ):
             return True
 
-        from mikroclear.telegram.unblock import consume_unblock_token, parse_unblock_callback
+        from mikroclear.telegram.unblock import (
+            cancel_unblock_token,
+            consume_unblock_token,
+            parse_unblock_callback,
+            peek_unblock_token,
+        )
 
         return process_callback_update(
             callback=callback,
@@ -192,6 +197,11 @@ class TelegramUpdatePoller:
             answer_callback=self.answer_callback,
             send_system_notification=self.send_system_notification,
             log=self.log,
+            peek_unblock_token=peek_unblock_token,
+            cancel_unblock_token=cancel_unblock_token,
+            send_message=self.send_message,
+            telegram_token=self.settings.telegram_token,
+            telegram_timeout=self.settings.telegram_timeout,
         )
 
 

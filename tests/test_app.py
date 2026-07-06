@@ -100,6 +100,39 @@ class AppEntrypointTests(TestCase):
         self.assertEqual(type(service).__name__, "MikroClearService")
         self.assertTrue(hasattr(service, "run"))
 
+    def test_build_service_wires_notifier_poller_and_handlers(self):
+        with patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}):
+            from mikroclear import app
+            from mikroclear.telegram.mangle_handler import TelegramMangleHandler
+            from mikroclear.telegram.notify import TelegramNotifier
+            from mikroclear.telegram.polling import TelegramUpdatePoller
+            from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
+
+            service = app.build_service()
+
+        providers = service.deps.get_router_client.__self__
+        self.assertIsInstance(providers.notifier, TelegramNotifier)
+        self.assertIs(providers.pipeline.send_telegram.__self__, providers.notifier)
+        self.assertIs(providers.pipeline.send_telegram.__func__, providers.notifier.send_alert.__func__)
+        self.assertEqual(type(providers.unblock_handler).__name__, TelegramUnblockHandler.__name__)
+        self.assertEqual(type(providers.mangle_handler).__name__, TelegramMangleHandler.__name__)
+        self.assertEqual(type(providers.poller).__name__, TelegramUpdatePoller.__name__)
+        self.assertIs(providers.poller.mangle_handler, providers.mangle_handler)
+        self.assertIs(providers.poller.handle_unblock_action.__self__, providers.unblock_handler)
+        self.assertIs(
+            providers.poller.handle_unblock_action.__func__,
+            providers.unblock_handler.handle_unblock_action.__func__,
+        )
+        self.assertIs(providers.poller.send_system_notification.__self__, providers.notifier)
+        self.assertIs(
+            providers.poller.send_system_notification.__func__,
+            providers.notifier.send_system_notification.__func__,
+        )
+        providers.asset_resolver.resolve = lambda ip: {"name": "i5", "source": "dhcp", "mac": "", "comment": ""}
+        formatted_peer = providers.format_peer_with_asset("192.168.10.9")
+        self.assertEqual(formatted_peer, "<code>192.168.10.9</code> - <b>i5</b>")
+        self.assertNotIn("dhcp", formatted_peer)
+
     def test_build_service_is_import_safe_when_pyinotify_is_unavailable(self):
         original_legacy = sys.modules.pop("mikroclear.legacy", None)
         try:

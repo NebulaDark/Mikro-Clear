@@ -1,6 +1,7 @@
 import types
 import unittest
 from unittest.mock import Mock
+import json
 
 from mikroclear.bot.modules.status import StatusSnapshot
 from mikroclear.bot.settings import BotSettings
@@ -64,6 +65,25 @@ class TelegramCommandTests(unittest.TestCase):
 
         self.assertEqual(send.call_args.kwargs["chat_id"], "chat-1")
         self.assertIn("Mikro-Clear status", send.call_args.kwargs["text"])
+
+    def test_process_updates_requests_message_and_callback_updates(self):
+        http_get = Mock(return_value=FakeMessageResponse())
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=Mock(),
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            http_get=http_get,
+            send_message=Mock(return_value=types.SimpleNamespace(ok=True, response_text="ok")),
+        )
+
+        poller.process_updates()
+
+        allowed_updates = json.loads(http_get.call_args.kwargs["params"]["allowed_updates"])
+        self.assertEqual(allowed_updates, ["callback_query", "message"])
 
     def test_process_updates_rejects_status_from_unknown_chat(self):
         send = Mock(return_value=types.SimpleNamespace(ok=True, response_text="ok"))
