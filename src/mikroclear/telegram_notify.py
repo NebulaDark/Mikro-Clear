@@ -1,4 +1,4 @@
-"""Compatibility shim for Telegram notification helpers."""
+"""Deprecated compatibility shim for Telegram notification helpers."""
 
 from mikroclear.telegram.formatting import (
     default_peer_formatter,

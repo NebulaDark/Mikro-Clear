@@ -1,6 +1,6 @@
 # Политика systemd/env fallback
 
-Состояние после миграции 2026-07-06:
+Состояние production после миграции 2026-07-06:
 
 ```text
 ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
@@ -39,9 +39,18 @@ EnvironmentFile=-/etc/mikroclear/mikroclear.env
 6. Есть rollback artifact: предыдущий wheel или backup unit, который можно
    восстановить без обращения к `/etc/mikrocata`.
 
-## Будущий cleanup PR
+## Cleanup PR
 
-Отдельный PR должен:
+Этот cleanup подготовлен отдельно от production deploy. Tracked unit больше не
+содержит legacy fallback:
+
+```text
+EnvironmentFile=-/etc/mikroclear/mikroclear.env
+ReadWritePaths=/var/lib/mikroclear
+ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear
+```
+
+Изменения в PR:
 
 - удалить `EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env`;
 - удалить `/etc/mikrocata` из `ReadOnlyPaths`;
@@ -49,5 +58,7 @@ EnvironmentFile=-/etc/mikroclear/mikroclear.env
 - обновить tests, docs и rollback инструкции;
 - не удалять сам legacy env файл с SELKS до отдельного operator cleanup окна.
 
-До этого момента legacy paths считаются compatibility/rollback boundary, а не
-canonical runtime ownership.
+Production deploy этого unit разрешен только после root/operator state
+reconciliation из `docs/ru/project-status-plan-2026-07-06.md`. До deploy на
+SELKS legacy paths остаются production rollback boundary, но уже не являются
+canonical tracked unit ownership.

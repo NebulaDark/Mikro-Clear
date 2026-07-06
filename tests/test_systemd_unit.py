@@ -28,14 +28,13 @@ class SystemdUnitTests(TestCase):
         self.assertNotIn("StartLimitIntervalSec=300", service_lines)
         self.assertNotIn("StartLimitBurst=5", service_lines)
 
-    def test_mikroclear_env_overrides_legacy_env_temporarily(self):
+    def test_unit_uses_only_primary_mikroclear_env(self):
         service_lines = section_lines("Service")
         legacy = "EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env"
         current = "EnvironmentFile=-/etc/mikroclear/mikroclear.env"
 
-        self.assertIn(legacy, service_lines)
         self.assertIn(current, service_lines)
-        self.assertLess(service_lines.index(legacy), service_lines.index(current))
+        self.assertNotIn(legacy, service_lines)
 
     def test_service_uses_package_entrypoint(self):
         service_lines = section_lines("Service")
@@ -54,10 +53,13 @@ class SystemdUnitTests(TestCase):
             "RestrictSUIDSGID=true",
             "LockPersonality=true",
             "MemoryDenyWriteExecute=true",
-            "ReadWritePaths=/var/lib/mikroclear /var/lib/mikrocata",
-            "ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear /etc/mikrocata",
+            "ReadWritePaths=/var/lib/mikroclear",
+            "ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear",
         ):
             self.assertIn(directive, service_lines)
+
+        self.assertFalse(any("/var/lib/mikrocata" in line for line in service_lines))
+        self.assertFalse(any("/etc/mikrocata" in line for line in service_lines))
 
         self.assertIn("User=root", service_lines)
         self.assertIn("Group=root", service_lines)

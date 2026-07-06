@@ -76,8 +76,13 @@ rollback procedures no longer depend on them.
 
 4. Deprecate top-level shims.
 
-   Add deprecation notes or warnings only if they will not affect production
-   logs. Prefer docs/tests first.
+   Current status: top-level shims are marked as deprecated compatibility
+   shims in module docstrings. Runtime warnings are intentionally not emitted,
+   so production logs stay quiet. Details:
+
+   ```text
+   docs/ru/compatibility-shim-deprecation.md
+   ```
 
 5. Remove top-level shims and `src/mikrocata/*`.
 

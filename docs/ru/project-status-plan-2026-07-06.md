@@ -217,6 +217,7 @@ breakage.
 
 ```text
 docs/ru/legacy-compatibility-cleanup-plan.md
+docs/ru/compatibility-shim-deprecation.md
 ```
 
 ### E. Dedicated service user
@@ -233,6 +234,12 @@ docs/ru/legacy-compatibility-cleanup-plan.md
 - restart и проверка logs.
 
 Этот шаг не должен смешиваться с удалением legacy fallback.
+
+Подробный cutover checklist:
+
+```text
+docs/ru/dedicated-service-user-cutover.md
+```
 
 ## Текущий safe stop point
 
