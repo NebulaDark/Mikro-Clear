@@ -61,15 +61,16 @@ class FakeClient:
 
 
 def settings(tmp: str, **overrides):
-    return Settings(
-        enable_telegram=True,
-        telegram_token="token",
-        telegram_chatid="chat-1",
-        state_dir=tmp,
-        mangle_control_enable=True,
-        mangle_comment_prefix="MC:",
-        **overrides,
-    )
+    values = {
+        "enable_telegram": True,
+        "telegram_token": "token",
+        "telegram_chatid": "chat-1",
+        "state_dir": tmp,
+        "mangle_control_enable": True,
+        "mangle_comment_prefix": "MC:",
+    }
+    values.update(overrides)
+    return Settings(**values)
 
 
 def rows(disabled="false"):
@@ -148,6 +149,28 @@ class TelegramMangleHandlerTests(TestCase):
         self.assertTrue(handled)
         send.assert_not_called()
 
+    def test_mangle_disabled_reports_to_authorized_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            send = Mock()
+            handler = TelegramMangleHandler(
+                settings(tmp, mangle_control_enable=False),
+                get_router_client=lambda: FakeClient(rows()),
+                log=Mock(),
+            )
+
+            handled = handler.handle_message(
+                text="/mangle",
+                chat_id="chat-1",
+                user_id="user-1",
+                auth=self.auth(),
+                send_message=send,
+                token="token",
+                timeout=7,
+            )
+
+        self.assertTrue(handled)
+        send.assert_called_once_with(token="token", chat_id="chat-1", text="Mangle control is disabled", timeout=7)
+
     def test_mangle_authorized_returns_status_and_keyboard(self):
         with tempfile.TemporaryDirectory() as tmp:
             send = Mock()
@@ -192,6 +215,30 @@ class TelegramMangleHandlerTests(TestCase):
         self.assertEqual(client.api.mangle.updated, [])
         self.assertIn("Confirm mangle change?", send.call_args.kwargs["text"])
         self.assertIn("Action: Disable", send.call_args.kwargs["text"])
+
+    def test_callback_disabled_rejects_without_routeros_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(rows())
+            answer = Mock()
+            handler = TelegramMangleHandler(
+                settings(tmp, mangle_control_enable=False),
+                get_router_client=lambda: client,
+                log=Mock(),
+            )
+
+            handled = handler.handle_callback(
+                callback={"id": "cb-1", "data": "mangle:refresh", "message": {"chat": {"id": "chat-1"}}, "from": {"id": "user-1"}},
+                auth=self.auth(),
+                answer_callback=answer,
+                send_message=Mock(),
+                telegram_token="token",
+                timeout=7,
+                now=101,
+            )
+
+        self.assertTrue(handled)
+        answer.assert_called_once_with("cb-1", "Mangle control is disabled", True)
+        self.assertEqual(client.api.mangle.updated, [])
 
     def test_request_from_different_user_is_rejected_without_confirm_keyboard(self):
         with tempfile.TemporaryDirectory() as tmp:

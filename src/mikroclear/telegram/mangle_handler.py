@@ -166,10 +166,11 @@ class TelegramMangleHandler:
     ) -> bool:
         if _command_name(text) != "/mangle":
             return False
-        if not self.settings.mangle_control_enable:
-            return True
         if not auth.can_read(chat_id):
             self.log(f"Rejected Telegram /mangle from unauthorized chat {chat_id}")
+            return True
+        if not self.settings.mangle_control_enable:
+            send_message(token=token, chat_id=chat_id, text="Mangle control is disabled", timeout=timeout)
             return True
         try:
             self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=token, timeout=timeout)
@@ -203,6 +204,9 @@ class TelegramMangleHandler:
         if not auth.can_write(chat_id):
             answer_callback(callback_id, "Unauthorized", True)
             self.log(f"Rejected Telegram mangle callback from unauthorized chat {chat_id}")
+            return True
+        if not self.settings.mangle_control_enable:
+            answer_callback(callback_id, "Mangle control is disabled", True)
             return True
 
         parts = data.split(":", 2)
