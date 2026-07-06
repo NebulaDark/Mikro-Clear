@@ -7,7 +7,7 @@
 
 ## 1. State reconciliation
 
-Статус: blocked by operator sudo.
+Статус: operator reported done, service health verified.
 
 Что проверено:
 
@@ -32,22 +32,32 @@ sudo -n ls -la /var/lib/mikroclear /var/lib/mikrocata
 sudo: a password is required
 ```
 
-Вывод: перенос/ownership/chmod файлов в `/var/lib/*` должен выполнить
-sudo-capable operator. Команды остаются в
-`docs/ru/project-status-plan-2026-07-06.md`.
-
-## 2. Observation checks
-
-Статус: частично выполнено.
-
-После попытки reconciliation service был перезапущен через разрешенный
-`systemctl restart` и проверен:
+После operator run service был проверен:
 
 ```text
 ActiveState=active
 SubState=running
 NRestarts=0
-ExecMainStartTimestamp=Mon 2026-07-06 12:15:12 MSK
+ExecMainStartTimestamp=Mon 2026-07-06 14:33:25 MSK
+ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
+```
+
+Ограничение остается: текущий SSH/MCP пользователь не может напрямую
+подтвердить содержимое `/var/lib/mikroclear` через `sudo -n stat`, потому что
+sudo все еще требует пароль. Фактический file listing/mode check должен быть
+снят sudo-capable operator output.
+
+## 2. Observation checks
+
+Статус: service health verified, journal visibility limited.
+
+После operator reconciliation service был перезапущен и проверен:
+
+```text
+ActiveState=active
+SubState=running
+NRestarts=0
+ExecMainStartTimestamp=Mon 2026-07-06 14:33:25 MSK
 ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
 ```
 
