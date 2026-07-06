@@ -61,8 +61,6 @@ class Settings:
     asset_resolver_cache_ttl: int = 3600
     mangle_control_enable: bool = False
     mangle_comment_prefix: str = "MC:"
-    mangle_allowed_chains: tuple[str, ...] = ("prerouting", "forward", "output")
-    mangle_allowed_actions: tuple[str, ...] = ("mark-routing", "mark-connection", "mark-packet", "accept")
     mangle_require_confirmation: bool = True
 
     @classmethod
@@ -173,11 +171,6 @@ class Settings:
             asset_resolver_cache_ttl=env_int("MIKROCLEAR_ASSET_RESOLVER_CACHE_TTL", 3600),
             mangle_control_enable=env_bool("MIKROCLEAR_MANGLE_CONTROL_ENABLE", False),
             mangle_comment_prefix=env_str("MIKROCLEAR_MANGLE_COMMENT_PREFIX", "MC:"),
-            mangle_allowed_chains=env_csv("MIKROCLEAR_MANGLE_ALLOWED_CHAINS", ("prerouting", "forward", "output")),
-            mangle_allowed_actions=env_csv(
-                "MIKROCLEAR_MANGLE_ALLOWED_ACTIONS",
-                ("mark-routing", "mark-connection", "mark-packet", "accept"),
-            ),
             mangle_require_confirmation=env_bool("MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION", True),
         )
 

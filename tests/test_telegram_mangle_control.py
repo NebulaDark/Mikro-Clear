@@ -68,8 +68,6 @@ def settings(tmp: str, **overrides):
         state_dir=tmp,
         mangle_control_enable=True,
         mangle_comment_prefix="MC:",
-        mangle_allowed_chains=("prerouting", "forward", "output"),
-        mangle_allowed_actions=("mark-routing", "mark-connection", "mark-packet", "accept"),
         **overrides,
     )
 

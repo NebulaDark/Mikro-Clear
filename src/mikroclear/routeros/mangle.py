@@ -50,10 +50,6 @@ def _row_to_rule(row: dict[str, Any], settings: Any) -> MangleRule | None:
 
     if not rule_id or not comment.startswith(prefix):
         return None
-    if chain not in set(settings.mangle_allowed_chains):
-        return None
-    if action not in set(settings.mangle_allowed_actions):
-        return None
 
     return MangleRule(
         rule_id=rule_id,

@@ -138,9 +138,9 @@ Read/write module for managed Mangle rules only.
 
 Allowed scope:
 
-- `/ip firewall mangle` rules where `comment` starts with `MC:`;
-- only chains listed in `MIKROCLEAR_MANGLE_ALLOWED_CHAINS`;
-- only actions listed in `MIKROCLEAR_MANGLE_ALLOWED_ACTIONS`.
+- `/ip firewall mangle` rules where `comment` starts with `MC:`.
+- The rule chain/action can be any RouterOS-supported value; Mikro-Clear uses only
+  the `comment` prefix to decide whether the rule is managed.
 
 Operations:
 
@@ -186,8 +186,6 @@ MIKROCLEAR_BOT_ALLOWED_CHAT_IDS=
 MIKROCLEAR_BOT_MODULES=status,asset_resolver,mangle_control,parental_control
 
 MIKROCLEAR_MANGLE_COMMENT_PREFIX=MC:
-MIKROCLEAR_MANGLE_ALLOWED_CHAINS=prerouting,forward,postrouting
-MIKROCLEAR_MANGLE_ALLOWED_ACTIONS=mark-routing,mark-connection,change-mss,accept,drop
 
 MIKROCLEAR_PARENTAL_ADDRESS_LIST=MC-Parental-Blocked
 MIKROCLEAR_PARENTAL_ALLOWED_TIMEOUTS=15m,30m,60m
@@ -222,7 +220,7 @@ explicit confirmation workflow outside v1.
 ### Mangle Rules
 
 Managed Mangle rules must have comments starting with `MC:`. Rules without that
-prefix are out of scope even if they otherwise match an allowed chain/action.
+prefix are out of scope regardless of chain/action.
 
 ### DHCP Leases
 
@@ -236,7 +234,7 @@ allow reading DHCP leases. PTR fallback may use DNS lookups where available.
 - Every write action is audited.
 - Dry-run mode defaults to enabled.
 - Write handlers must check managed scope before checking requested action.
-- `mangle_control` may modify only `MC:` Mangle rules with allowed chains/actions.
+- `mangle_control` may modify only `MC:` Mangle rules.
 - `parental_control` may modify only `MC-Parental-Blocked` entries.
 - No module may change NAT, routes, RouterOS users, RouterOS services, or global
   firewall rules.
@@ -298,5 +296,5 @@ audit, and Telegram I/O only.
 - Write-capable modules cannot be invoked by non-admin chats.
 - Dry-run mode prevents RouterOS writes while still logging intended actions.
 - Parental control writes are limited to `MC-Parental-Blocked`.
-- Mangle writes are limited to `MC:` rules with allowed chains/actions.
+- Mangle writes are limited to `MC:` rules.
 - Unit tests cover allowed and rejected operations for every module.
