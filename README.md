@@ -18,6 +18,18 @@ This repository is intended to make changes testable before touching the running
 service. The first extracted module is pure alert decision logic for target IP,
 peer IP, port selection, and event deduplication.
 
+## Architecture
+
+The current canonical module ownership map is documented in:
+
+```text
+docs/architecture.md
+```
+
+New production code should import canonical package modules under
+`src/mikroclear/`. Old top-level modules are compatibility shims for legacy
+imports.
+
 ## Checks
 
 ```bash
