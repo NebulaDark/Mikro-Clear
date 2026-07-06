@@ -35,5 +35,5 @@ class VenvPathMigrationTests(TestCase):
         production = (ROOT / "systemd" / "mikroclear.service").read_text(encoding="utf-8")
         candidate = (ROOT / "deploy" / "systemd" / "mikroclear.service.candidate").read_text(encoding="utf-8")
 
-        self.assertIn(f"ExecStart={NEW_VENV}/bin/python /usr/local/bin/mikroclear.py", production)
+        self.assertIn(f"ExecStart={NEW_VENV}/bin/python -m mikroclear", production)
         self.assertIn(f"ExecStart={NEW_VENV}/bin/python -m mikroclear", candidate)

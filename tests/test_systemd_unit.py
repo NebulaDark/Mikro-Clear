@@ -37,6 +37,12 @@ class SystemdUnitTests(TestCase):
         self.assertIn(current, service_lines)
         self.assertLess(service_lines.index(legacy), service_lines.index(current))
 
+    def test_service_uses_package_entrypoint(self):
+        service_lines = section_lines("Service")
+
+        self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", service_lines)
+        self.assertNotIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
+
     def test_service_has_incremental_sandbox_hardening(self):
         service_lines = section_lines("Service")
 
