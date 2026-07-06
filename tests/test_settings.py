@@ -79,6 +79,8 @@ class SettingsTests(TestCase):
             {
                 "MIKROCLEAR_MANGLE_CONTROL_ENABLE": "true",
                 "MIKROCLEAR_MANGLE_COMMENT_PREFIX": "MC:",
+                "MIKROCLEAR_MANGLE_ALLOWED_CHAINS": "prerouting,forward",
+                "MIKROCLEAR_MANGLE_ALLOWED_ACTIONS": "mark-routing,accept",
                 "MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION": "false",
             },
             clear=True,
@@ -87,4 +89,12 @@ class SettingsTests(TestCase):
 
         self.assertTrue(settings.mangle_control_enable)
         self.assertEqual(settings.mangle_comment_prefix, "MC:")
+        self.assertEqual(settings.mangle_allowed_chains, ("prerouting", "forward"))
+        self.assertEqual(settings.mangle_allowed_actions, ("mark-routing", "accept"))
         self.assertFalse(settings.mangle_require_confirmation)
+
+    def test_mangle_control_settings_default_allowlist_is_narrow(self):
+        settings = Settings()
+
+        self.assertEqual(settings.mangle_allowed_chains, ("prerouting",))
+        self.assertEqual(settings.mangle_allowed_actions, ("mark-routing",))

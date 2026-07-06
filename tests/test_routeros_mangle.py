@@ -48,12 +48,14 @@ def settings(**overrides):
     return Settings(
         mangle_control_enable=True,
         mangle_comment_prefix="MC:",
+        mangle_allowed_chains=("prerouting",),
+        mangle_allowed_actions=("mark-routing",),
         **overrides,
     )
 
 
 class RouterOsMangleTests(TestCase):
-    def test_list_managed_rules_filters_only_by_comment_prefix(self):
+    def test_list_managed_rules_filters_prefix_chain_and_action(self):
         api = FakeApi(
             [
                 {
@@ -67,7 +69,7 @@ class RouterOsMangleTests(TestCase):
                 },
                 {".id": "*2", "comment": "manual", "chain": "prerouting", "action": "mark-routing"},
                 {".id": "*3", "comment": "MC:Postrouting", "chain": "postrouting", "action": "mark-routing"},
-                {".id": "*4", "comment": "MC:Masquerade", "chain": "forward", "action": "masquerade"},
+                {".id": "*4", "comment": "MC:Masquerade", "chain": "prerouting", "action": "masquerade"},
             ]
         )
 
@@ -85,23 +87,7 @@ class RouterOsMangleTests(TestCase):
                     disabled=False,
                     packets=4516,
                     bytes=3615163,
-                ),
-                MangleRule(
-                    rule_id="*3",
-                    name="Postrouting",
-                    comment="MC:Postrouting",
-                    chain="postrouting",
-                    action="mark-routing",
-                    disabled=False,
-                ),
-                MangleRule(
-                    rule_id="*4",
-                    name="Masquerade",
-                    comment="MC:Masquerade",
-                    chain="forward",
-                    action="masquerade",
-                    disabled=False,
-                ),
+                )
             ],
         )
 
@@ -131,20 +117,16 @@ class RouterOsMangleTests(TestCase):
 
         self.assertEqual(api.mangle.updated, [])
 
-    def test_changed_comment_is_rejected(self):
-        api = FakeApi([{".id": "*1", "comment": "manual", "chain": "prerouting", "action": "mark-routing"}])
-
-        with self.assertRaises(PermissionError):
-            set_mangle_rule_disabled(api, "*1", False, settings())
-
-        self.assertEqual(api.mangle.updated, [])
-
-    def test_any_chain_or_action_is_managed_when_comment_has_prefix(self):
-        api = FakeApi([{".id": "*1", "comment": "MC:Any", "chain": "custom-chain", "action": "custom-action"}])
-
-        set_mangle_rule_disabled(api, "*1", True, settings())
-
-        self.assertEqual(api.mangle.updated, [("*1", {"disabled": "yes"})])
+    def test_changed_comment_chain_or_action_is_rejected(self):
+        for row in (
+            {".id": "*1", "comment": "manual", "chain": "prerouting", "action": "mark-routing"},
+            {".id": "*1", "comment": "MC:AI-Tunnel", "chain": "postrouting", "action": "mark-routing"},
+            {".id": "*1", "comment": "MC:AI-Tunnel", "chain": "prerouting", "action": "masquerade"},
+        ):
+            api = FakeApi([row])
+            with self.assertRaises(PermissionError):
+                set_mangle_rule_disabled(api, "*1", False, settings())
+            self.assertEqual(api.mangle.updated, [])
 
     def test_get_managed_rule_returns_none_for_missing_or_unmanaged(self):
         api = FakeApi([{".id": "*1", "comment": "manual", "chain": "prerouting", "action": "mark-routing"}])

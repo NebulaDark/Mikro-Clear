@@ -158,6 +158,12 @@ limits.
 : Prefix комментария RouterOS mangle rules, которые Mikro-Clear имеет право
 показывать и переключать. По умолчанию `MC:`.
 
+`MIKROCLEAR_MANGLE_ALLOWED_CHAINS`
+: CSV allowlist chain для управляемых rules. По умолчанию `prerouting`.
+
+`MIKROCLEAR_MANGLE_ALLOWED_ACTIONS`
+: CSV allowlist action для управляемых rules. По умолчанию `mark-routing`.
+
 `MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION`
 : Требовать подтверждение перед изменением `disabled`. По умолчанию `true`.
 Текущий Telegram workflow всегда использует подтверждение.
