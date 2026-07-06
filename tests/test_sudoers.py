@@ -17,6 +17,11 @@ class SudoersPolicyTests(TestCase):
         self.assertIn("mcp-selks ALL=(root) NOPASSWD:", text)
         self.assertIn("/usr/bin/systemctl enable mikroclear.service", text)
         self.assertIn("/usr/bin/systemctl restart mikroclear.service", text)
+        self.assertIn("/usr/bin/systemctl status mikroclear.service --no-pager --lines=30", text)
+        self.assertIn(
+            "/opt/mikroclear-venv/bin/python -m pip install --no-deps --force-reinstall /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl",
+            text,
+        )
         self.assertNotIn("mikrocataTZSP0.service", text)
         self.assertIn(
             "/usr/bin/install -o root -g root -m 755 /var/tmp/mikroclear-deploy/mikroclear.py.codex-candidate /usr/local/bin/mikroclear.py",

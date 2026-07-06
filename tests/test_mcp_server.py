@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -49,14 +50,71 @@ class McpServerSshTests(TestCase):
         self.assertIn("confirm=True", output)
         run_ssh.assert_not_called()
 
-    def test_syntax_check_does_not_write_pycache(self):
+    def test_syntax_check_is_package_import_compatibility_alias(self):
+        server = load_server()
+
+        with patch.object(server, "check_mikroclear_import") as check_import:
+            check_import.return_value = "import-ok"
+            output = server.check_mikroclear_syntax()
+
+        self.assertEqual(output, "import-ok")
+        check_import.assert_called_once_with()
+
+    def test_import_check_uses_package_entrypoint_without_runtime_loop(self):
         server = load_server()
 
         with patch.object(server, "run_ssh") as run_ssh:
-            server.check_mikroclear_syntax()
+            server.check_mikroclear_import()
 
-        self.assertIn("compile(open(", run_ssh.call_args.args[0])
-        self.assertNotIn("py_compile", run_ssh.call_args.args[0])
+        command = run_ssh.call_args.args[0]
+        self.assertIn("import mikroclear.app as app", command)
+        self.assertIn("app.build_service()", command)
+        self.assertNotIn("app.main()", command)
+        self.assertNotIn("compile(open(", command)
+
+    def test_upload_wheel_candidate_streams_b64_wheel_to_private_staging_dir(self):
+        server = load_server()
+
+        with TemporaryDirectory() as tmpdir:
+            wheel_path = Path(tmpdir) / "mikro_clear-0.1.0-py3-none-any.whl"
+            wheel_path.write_bytes(b"fake-wheel")
+
+            with patch.object(server, "LOCAL_WHEEL", wheel_path), patch.object(server, "run_ssh") as run_ssh:
+                run_ssh.return_value = "wheel-uploaded"
+                result = server.upload_wheel_candidate()
+
+        self.assertEqual(result, "wheel-uploaded")
+        self.assertEqual(server.CANDIDATE_WHEEL, "/var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl")
+        command = run_ssh.call_args.args[0]
+        self.assertIn("/usr/bin/install -d -m 700 /var/tmp/mikroclear-deploy", command)
+        self.assertIn("base64 -d", command)
+        self.assertIn("chmod 600 /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl", command)
+        self.assertIn("sha256sum /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl", command)
+        self.assertIsInstance(run_ssh.call_args.kwargs["stdin"], str)
+
+    def test_deploy_wheel_candidate_requires_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.deploy_wheel_candidate()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_deploy_wheel_candidate_installs_package_restarts_and_verifies(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "wheel-deployed"
+            output = server.deploy_wheel_candidate(confirm=True)
+
+        self.assertEqual(output, "wheel-deployed")
+        command = run_ssh.call_args.args[0]
+        self.assertIn("sudo -n /opt/mikroclear-venv/bin/python -m pip install --no-deps --force-reinstall", command)
+        self.assertIn("/var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl", command)
+        self.assertIn("import mikroclear.app as app", command)
+        self.assertIn("sudo -n /usr/bin/systemctl restart mikroclear.service", command)
+        self.assertIn("systemctl show mikroclear.service --property=ActiveState,SubState,ExecStart,NRestarts --no-pager", command)
 
     def test_compare_production_reports_match(self):
         server = load_server()

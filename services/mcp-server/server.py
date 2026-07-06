@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import base64
 import difflib
+import hashlib
 import os
 from pathlib import Path
 import shlex
@@ -20,10 +22,12 @@ SSH_COMMAND = shlex.split(
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_SCRIPT = REPO_ROOT / "src" / "mikroclear" / "legacy.py"
 LOCAL_UNIT = REPO_ROOT / "systemd" / "mikroclear.service"
+LOCAL_WHEEL = REPO_ROOT / "dist" / "mikro_clear-0.1.0-py3-none-any.whl"
 REMOTE_SCRIPT = "/usr/local/bin/mikroclear.py"
 LEGACY_REMOTE_SCRIPT = "/usr/local/bin/mikrocataTZSP0.py"
 CANDIDATE_DIR = "/var/tmp/mikroclear-deploy"
 CANDIDATE_SCRIPT = f"{CANDIDATE_DIR}/mikroclear.py.codex-candidate"
+CANDIDATE_WHEEL = f"{CANDIDATE_DIR}/mikro_clear-0.1.0-py3-none-any.whl"
 REMOTE_UNIT = "/etc/systemd/system/mikroclear.service"
 CANDIDATE_UNIT = f"{CANDIDATE_DIR}/mikroclear-codex.service"
 MASK_ENV_HELPER = "/usr/local/sbin/mikroclear-mask-env"
@@ -97,11 +101,18 @@ def tail_mikrocata_logs(lines: int = 100) -> str:
 
 @mcp.tool()
 def check_mikroclear_syntax() -> str:
+    return check_mikroclear_import()
+
+
+@mcp.tool()
+def check_mikroclear_import() -> str:
     return run_ssh(
         "/opt/mikroclear-venv/bin/python -c "
-        f"\"path='{REMOTE_SCRIPT}'; "
-        "compile(open(path, encoding='utf-8').read(), path, 'exec'); "
-        "print('OK')\"",
+        "\"import mikroclear; "
+        "import mikroclear.app as app; "
+        "svc = app.build_service(); "
+        "print(mikroclear.__file__); "
+        "print(type(svc).__name__)\"",
         30,
     )
 
@@ -134,6 +145,44 @@ def tail_suricata_eve(lines: int = 20) -> str:
     return run_ssh(
         f"sudo -n tail -n {lines} {SURICATA_EVE_JSON}",
         30,
+    )
+
+
+@mcp.tool()
+def upload_wheel_candidate() -> str:
+    wheel_bytes = LOCAL_WHEEL.read_bytes()
+    wheel_b64 = base64.b64encode(wheel_bytes).decode("ascii")
+    wheel_sha256 = hashlib.sha256(wheel_bytes).hexdigest()
+    return run_ssh(
+        f"/usr/bin/install -d -m 700 {CANDIDATE_DIR} && "
+        f"cat > {CANDIDATE_WHEEL}.b64 && "
+        f"base64 -d {CANDIDATE_WHEEL}.b64 > {CANDIDATE_WHEEL} && "
+        f"rm -f {CANDIDATE_WHEEL}.b64 && "
+        f"chmod 600 {CANDIDATE_WHEEL} && "
+        f"test \"$(sha256sum {CANDIDATE_WHEEL} | cut -d' ' -f1)\" = \"{wheel_sha256}\" && "
+        f"sha256sum {CANDIDATE_WHEEL} && "
+        f"stat -c '%U:%G %a %s %y %n' {CANDIDATE_WHEEL}",
+        30,
+        stdin=wheel_b64,
+    )
+
+
+@mcp.tool()
+def deploy_wheel_candidate(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to deploy wheel candidate without confirm=True."
+    return run_ssh(
+        f"sudo -n /opt/mikroclear-venv/bin/python -m pip install --no-deps --force-reinstall {CANDIDATE_WHEEL} && "
+        "/opt/mikroclear-venv/bin/python -c "
+        "\"import mikroclear; "
+        "import mikroclear.app as app; "
+        "svc = app.build_service(); "
+        "print(mikroclear.__file__); "
+        "print(type(svc).__name__)\" && "
+        f"sudo -n /usr/bin/systemctl restart {SERVICE_NAME} && "
+        f"systemctl show {SERVICE_NAME} --property=ActiveState,SubState,ExecStart,NRestarts --no-pager && "
+        f"sudo -n /usr/bin/systemctl status {SERVICE_NAME} --no-pager --lines=30",
+        90,
     )
 
 
