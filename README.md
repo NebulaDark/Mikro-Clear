@@ -37,6 +37,7 @@ docs/ru/install-from-github.md
 docs/ru/env-reference.md
 docs/ru/architecture.md
 docs/ru/deploy-2026-07-06.md
+docs/ru/systemd-env-fallback-policy.md
 ```
 
 ## Checks

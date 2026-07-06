@@ -7,6 +7,7 @@ CANDIDATE_UNIT = ROOT / "deploy" / "systemd" / "mikroclear.service.candidate"
 PRODUCTION_UNIT = ROOT / "systemd" / "mikroclear.service"
 PLAN = ROOT / "docs" / "superpowers" / "plans" / "2026-07-05-systemd-package-entrypoint-plan.md"
 PREFLIGHT = ROOT / "docs" / "superpowers" / "preflight" / "2026-07-05-selks-readonly-preflight.md"
+FALLBACK_POLICY = ROOT / "docs" / "ru" / "systemd-env-fallback-policy.md"
 
 
 def section_lines(path: Path, section_name: str) -> list[str]:
@@ -23,10 +24,11 @@ def section_lines(path: Path, section_name: str) -> list[str]:
 
 
 class SystemdCandidateUnitTests(TestCase):
-    def test_current_production_unit_keeps_legacy_execstart(self):
+    def test_current_production_unit_uses_package_entrypoint(self):
         service_lines = section_lines(PRODUCTION_UNIT, "Service")
 
-        self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
+        self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", service_lines)
+        self.assertNotIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
 
     def test_candidate_execstart_uses_package_entrypoint(self):
         service_lines = section_lines(CANDIDATE_UNIT, "Service")
@@ -72,3 +74,11 @@ class SystemdCandidateUnitTests(TestCase):
         self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", text)
         self.assertNotIn("systemctl cat mikrocataTZSP0.service", text)
         self.assertNotIn("journalctl -u mikrocataTZSP0.service", text)
+
+    def test_env_fallback_policy_documents_removal_criteria(self):
+        text = FALLBACK_POLICY.read_text(encoding="utf-8")
+
+        self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", text)
+        self.assertIn("Условия удаления legacy env fallback", text)
+        self.assertIn("EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env", text)
+        self.assertIn("EnvironmentFile=-/etc/mikroclear/mikroclear.env", text)
