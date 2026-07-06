@@ -66,3 +66,9 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.router_ip, "10.9.0.1")
         self.assertEqual(settings.block_list_name, "Threats")
         self.assertEqual(settings.filepath, "/tmp/eve.json")
+
+    def test_settings_loader_uses_canonical_mikroclear_names(self):
+        source = Path("src/mikroclear/settings.py").read_text(encoding="utf-8")
+
+        self.assertIn("MIKROCLEAR_ROUTER_IP", source)
+        self.assertNotIn("MIKROCATA_ROUTER_IP", source)
