@@ -38,6 +38,8 @@ docs/ru/env-reference.md
 docs/ru/architecture.md
 docs/ru/deploy-2026-07-06.md
 docs/ru/systemd-env-fallback-policy.md
+docs/ru/selks-migration-followup-2026-07-06.md
+docs/ru/legacy-compatibility-cleanup-plan.md
 ```
 
 ## Checks
