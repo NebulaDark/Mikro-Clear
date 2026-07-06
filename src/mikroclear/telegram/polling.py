@@ -137,10 +137,13 @@ class TelegramUpdatePoller:
 
         chat = message_update.get("chat") or {}
         chat_id = str(chat.get("id", ""))
+        user = message_update.get("from") or {}
+        user_id = str(user.get("id", ""))
         auth = BotAuth(BotSettings.from_env(), legacy_chat_id=str(self.settings.telegram_chatid))
         if self.mangle_handler is not None and self.mangle_handler.handle_message(
             text=message_update.get("text", ""),
             chat_id=chat_id,
+            user_id=user_id,
             auth=auth,
             send_message=self.send_message,
             token=self.settings.telegram_token,

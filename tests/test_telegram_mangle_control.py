@@ -1,4 +1,5 @@
 import tempfile
+import json
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock
@@ -139,6 +140,7 @@ class TelegramMangleHandlerTests(TestCase):
             handled = handler.handle_message(
                 text="/mangle",
                 chat_id="unknown",
+                user_id="user-1",
                 auth=self.auth(),
                 send_message=send,
                 token="token",
@@ -156,15 +158,19 @@ class TelegramMangleHandlerTests(TestCase):
             handled = handler.handle_message(
                 text="/mangle",
                 chat_id="chat-1",
+                user_id="user-1",
                 auth=self.auth(),
                 send_message=send,
                 token="token",
                 timeout=7,
             )
+            state = json.loads(Path(tmp, "telegram-mangle-actions.json").read_text(encoding="utf-8"))
 
         self.assertTrue(handled)
         self.assertIn("Mangle Rules", send.call_args.kwargs["text"])
         self.assertEqual(send.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["text"], "Disable AI-Tunnel")
+        payload = next(iter(state.values()))
+        self.assertEqual(payload["requester_user_id"], "user-1")
 
     def test_request_returns_confirm_keyboard_without_routeros_update(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -188,6 +194,29 @@ class TelegramMangleHandlerTests(TestCase):
         self.assertEqual(client.api.mangle.updated, [])
         self.assertIn("Confirm mangle change?", send.call_args.kwargs["text"])
         self.assertIn("Action: Disable", send.call_args.kwargs["text"])
+
+    def test_request_from_different_user_is_rejected_without_confirm_keyboard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(rows())
+            send = Mock()
+            answer = Mock()
+            handler = TelegramMangleHandler(settings(tmp), get_router_client=lambda: client, log=Mock())
+            token = handler.create_action_token("*1", "disable", "chat-1", "user-1", now=100)
+
+            handled = handler.handle_callback(
+                callback={"id": "cb-1", "data": f"mangle:request:{token}", "message": {"chat": {"id": "chat-1"}}, "from": {"id": "user-2"}},
+                auth=self.auth(),
+                answer_callback=answer,
+                send_message=send,
+                telegram_token="token",
+                timeout=7,
+                now=101,
+            )
+
+        self.assertTrue(handled)
+        send.assert_not_called()
+        answer.assert_called_once_with("cb-1", "Unauthorized", True)
+        self.assertEqual(client.api.mangle.updated, [])
 
     def test_confirm_updates_exactly_once_and_shows_refreshed_status(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,6 +246,35 @@ class TelegramMangleHandlerTests(TestCase):
 
         self.assertTrue(handled)
         self.assertTrue(repeated)
+        self.assertEqual(client.api.mangle.updated, [("*1", {"disabled": "yes"})])
+
+    def test_confirm_from_different_user_does_not_update_or_consume_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(rows())
+            handler = TelegramMangleHandler(settings(tmp), get_router_client=lambda: client, log=Mock())
+            token = handler.create_action_token("*1", "disable", "chat-1", "user-1", now=100)
+
+            rejected = handler.handle_callback(
+                callback={"id": "cb-1", "data": f"mangle:confirm:{token}", "message": {"chat": {"id": "chat-1"}}, "from": {"id": "user-2"}},
+                auth=self.auth(),
+                answer_callback=Mock(),
+                send_message=Mock(),
+                telegram_token="token",
+                timeout=7,
+                now=101,
+            )
+            accepted = handler.handle_callback(
+                callback={"id": "cb-2", "data": f"mangle:confirm:{token}", "message": {"chat": {"id": "chat-1"}}, "from": {"id": "user-1"}},
+                auth=self.auth(),
+                answer_callback=Mock(),
+                send_message=Mock(),
+                telegram_token="token",
+                timeout=7,
+                now=102,
+            )
+
+        self.assertTrue(rejected)
+        self.assertTrue(accepted)
         self.assertEqual(client.api.mangle.updated, [("*1", {"disabled": "yes"})])
 
     def test_cancel_and_expired_token_do_not_update(self):

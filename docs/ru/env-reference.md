@@ -149,6 +149,27 @@ limits.
 `MIKROCLEAR_BOT_AUDIT_LOG`
 : Путь к audit log для Telegram control-plane действий.
 
+## Telegram Mangle Control
+
+`MIKROCLEAR_MANGLE_CONTROL_ENABLE`
+: Включает команду `/mangle`. По умолчанию `false`.
+
+`MIKROCLEAR_MANGLE_COMMENT_PREFIX`
+: Prefix комментария RouterOS mangle rules, которые Mikro-Clear имеет право
+показывать и переключать. По умолчанию `MC:`.
+
+`MIKROCLEAR_MANGLE_ALLOWED_CHAINS`
+: CSV allowlist chain для управляемых rules. По умолчанию
+`prerouting,forward,output`.
+
+`MIKROCLEAR_MANGLE_ALLOWED_ACTIONS`
+: CSV allowlist action для управляемых rules. По умолчанию
+`mark-routing,mark-connection,mark-packet,accept`.
+
+`MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION`
+: Требовать подтверждение перед изменением `disabled`. По умолчанию `true`.
+Текущий Telegram workflow всегда использует подтверждение.
+
 ## Local Network And Whitelist
 
 `MIKROCLEAR_WAN_IP`

@@ -12,9 +12,10 @@ class FakeMessageResponse:
     status_code = 200
     text = "{}"
 
-    def __init__(self, chat_id="chat-1", text="/status"):
+    def __init__(self, chat_id="chat-1", text="/status", user_id="user-1"):
         self.chat_id = chat_id
         self.message_text = text
+        self.user_id = user_id
 
     def json(self):
         return {
@@ -25,6 +26,7 @@ class FakeMessageResponse:
                     "message": {
                         "text": self.message_text,
                         "chat": {"id": self.chat_id},
+                        "from": {"id": self.user_id},
                     },
                 }
             ],
@@ -81,6 +83,89 @@ class TelegramCommandTests(unittest.TestCase):
 
         send.assert_not_called()
         self.assertIn("Rejected Telegram command from unauthorized chat unknown", log.call_args[0][0])
+
+    def test_process_updates_routes_mangle_command_to_existing_polling_loop(self):
+        class MangleHandler:
+            def __init__(self):
+                self.messages = []
+
+            def handle_message(self, **kwargs):
+                self.messages.append(kwargs)
+                return True
+
+            def handle_callback(self, **kwargs):
+                return False
+
+        handler = MangleHandler()
+        send = Mock(return_value=types.SimpleNamespace(ok=True, response_text="ok"))
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=Mock(),
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=FakeMessageResponse(text="/mangle")),
+            send_message=send,
+            mangle_handler=handler,
+        )
+
+        poller.process_updates()
+
+        self.assertEqual(len(handler.messages), 1)
+        self.assertEqual(handler.messages[0]["text"], "/mangle")
+        self.assertEqual(handler.messages[0]["user_id"], "user-1")
+
+    def test_process_updates_routes_mangle_callback_before_unblock_callback(self):
+        class FakeCallbackResponse:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 100,
+                            "callback_query": {
+                                "id": "cb-1",
+                                "data": "mangle:refresh",
+                                "message": {"chat": {"id": "chat-1"}},
+                            },
+                        }
+                    ],
+                }
+
+        class MangleHandler:
+            def __init__(self):
+                self.callbacks = []
+
+            def handle_message(self, **kwargs):
+                return False
+
+            def handle_callback(self, **kwargs):
+                self.callbacks.append(kwargs)
+                return True
+
+        handler = MangleHandler()
+        handle_unblock_action = Mock()
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=handle_unblock_action,
+            answer_callback=Mock(),
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=FakeCallbackResponse()),
+            mangle_handler=handler,
+        )
+
+        poller.process_updates()
+
+        self.assertEqual(len(handler.callbacks), 1)
+        handle_unblock_action.assert_not_called()
 
 
 if __name__ == "__main__":
