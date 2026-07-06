@@ -1,11 +1,8 @@
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
-from mikroclear.telegram_notify import (
-    format_alert_message,
-    format_system_message,
-    send_telegram_message,
-)
+from mikroclear.telegram.formatting import format_alert_message, format_system_message
+from mikroclear.telegram.notify import send_telegram_message
 
 
 class TelegramNotifyFormattingTests(TestCase):

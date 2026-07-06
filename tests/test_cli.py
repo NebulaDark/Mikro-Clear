@@ -32,13 +32,23 @@ class CliEntrypointTests(TestCase):
 
         app_main.assert_called_once_with()
 
+    def test_cli_help_does_not_start_runtime(self):
+        with patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}):
+            from mikroclear import cli
+
+        with patch.object(cli.app, "main", return_value=7) as app_main:
+            self.assertEqual(cli.main(["--help"]), 0)
+
+        app_main.assert_not_called()
+
     def test_python_module_entrypoint_delegates_to_cli_main(self):
         with (
             patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}),
             patch("mikroclear.cli.main", return_value=0) as cli_main,
+            patch.object(sys, "argv", ["mikroclear"]),
         ):
             with self.assertRaises(SystemExit) as exit_context:
                 runpy.run_module("mikroclear", run_name="__main__")
 
-        cli_main.assert_called_once_with()
+        cli_main.assert_called_once_with([])
         self.assertEqual(exit_context.exception.code, 0)

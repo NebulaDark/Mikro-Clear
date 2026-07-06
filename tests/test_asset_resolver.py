@@ -1,6 +1,6 @@
 from unittest import TestCase
 
-from mikroclear.asset_resolver import AssetResolver, AssetResolverConfig, sanitize_asset_value
+from mikroclear.assets.resolver import AssetResolver, AssetResolverConfig, sanitize_asset_value
 
 
 class FakeWhere:

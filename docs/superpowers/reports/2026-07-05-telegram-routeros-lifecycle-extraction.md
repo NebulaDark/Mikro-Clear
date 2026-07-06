@@ -19,8 +19,8 @@ control flow for Telegram unblock actions:
 - calling the injected unblock action handler;
 - sending the success system notification only after successful unblock.
 
-`legacy_runtime.py` keeps the polling loop and delegates callback processing to
-this boundary.
+The package runtime now keeps the polling loop in `mikroclear.telegram.polling`
+and delegates callback processing to this boundary.
 
 ## RouterOS Lifecycle Boundary
 
@@ -34,15 +34,14 @@ state helpers:
 - RouterOS path construction;
 - lifecycle-level reconnect helper for future adapters.
 
-`legacy_runtime.RouterOSClient` still owns the production credential checks,
-retry loop, connection logging, and notification behavior. This is intentional:
-it avoids changing outage/retry semantics during a structural refactor.
+`mikroclear.routeros.client.RouterOSClient` now owns the production credential
+checks, retry loop, connection logging, and notification behavior behind
+runtime-injected settings and callbacks.
 
 ## Deferred
 
-- Move the full `RouterOSClient.connect()` retry loop into an injected adapter
-  after dedicated tests cover every exception branch.
-- Move Telegram polling HTTP getUpdates handling after callback and message
-  boundaries remain stable.
+- Keep RouterOS write actions covered by adapter tests before any future behavior
+  change.
+- Keep Telegram polling HTTP getUpdates covered by mocked request tests.
 - Keep new control-plane write-actions out of scope until dry-run, allowlist, and
   audit logging are implemented.

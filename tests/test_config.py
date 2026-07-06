@@ -12,6 +12,10 @@ ENV_EXAMPLE = Path(__file__).resolve().parents[1] / "config" / "mikroclear.env.e
 class ConfigEnvTests(TestCase):
     def test_mikroclear_name_precedes_legacy_mikrocata_name(self):
         self.assertEqual(
+            env_name_candidates("MIKROCLEAR_ROUTER_IP"),
+            ("MIKROCLEAR_ROUTER_IP", "MIKROCATA_ROUTER_IP"),
+        )
+        self.assertEqual(
             env_name_candidates("MIKROCATA_ROUTER_IP"),
             ("MIKROCLEAR_ROUTER_IP", "MIKROCATA_ROUTER_IP"),
         )
@@ -27,6 +31,10 @@ class ConfigEnvTests(TestCase):
             clear=True,
         ):
             self.assertEqual(env_str("MIKROCATA_ROUTER_IP", "default"), "10.0.0.1")
+
+    def test_env_str_keeps_legacy_fallback_for_mikroclear_name(self):
+        with patch.dict(os.environ, {"MIKROCATA_ROUTER_IP": "192.0.2.1"}, clear=True):
+            self.assertEqual(env_str("MIKROCLEAR_ROUTER_IP", "default"), "192.0.2.1")
 
     def test_env_bool_parses_truthy_values_and_default(self):
         with patch.dict(os.environ, {"MIKROCLEAR_TELEGRAM_ENABLE": " yes "}, clear=True):

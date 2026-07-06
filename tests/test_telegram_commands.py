@@ -1,10 +1,11 @@
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock
 
-
-def fake_pyinotify_module() -> types.SimpleNamespace:
-    return types.SimpleNamespace(ProcessEvent=object)
+from mikroclear.bot.modules.status import StatusSnapshot
+from mikroclear.bot.settings import BotSettings
+from mikroclear.settings import Settings
+from mikroclear.telegram.polling import TelegramUpdatePoller
 
 
 class FakeMessageResponse:
@@ -30,52 +31,53 @@ class FakeMessageResponse:
         }
 
 
-class LegacyTelegramCommandTests(unittest.TestCase):
-    def import_legacy(self):
-        with patch.dict("sys.modules", {"pyinotify": fake_pyinotify_module()}):
-            from mikroclear import legacy
-
-        return legacy
+class TelegramCommandTests(unittest.TestCase):
+    def status_snapshot(self):
+        return StatusSnapshot(
+            uptime_seconds=10,
+            routeros_connected=True,
+            routeros_connected_seconds=5,
+            eve_path="/tmp/eve.json",
+            block_list_name="Suricata",
+            monitor_only=False,
+            telegram_unblock_enabled=True,
+            state_dir="/tmp/state",
+            bot_settings=BotSettings(),
+        )
 
     def test_process_updates_sends_status_to_allowed_chat(self):
-        legacy = self.import_legacy()
-
-        with (
-            patch.object(legacy, "ENABLE_TELEGRAM", True),
-            patch.object(legacy, "TELEGRAM_UNBLOCK_ENABLE", True),
-            patch.object(legacy, "TELEGRAM_TOKEN", "token"),
-            patch.object(legacy, "TELEGRAM_CHATID", "chat-1"),
-            patch.object(legacy, "telegram_update_offset", 0),
-            patch.object(legacy.requests, "get", return_value=FakeMessageResponse()),
-            patch.object(
-                legacy,
-                "send_telegram_message",
-                return_value=types.SimpleNamespace(ok=True, response_text="ok"),
-            ) as send,
-        ):
-            legacy.process_telegram_updates()
+        send = Mock(return_value=types.SimpleNamespace(ok=True, response_text="ok"))
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=Mock(),
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=FakeMessageResponse()),
+            send_message=send,
+        )
+        poller.process_updates()
 
         self.assertEqual(send.call_args.kwargs["chat_id"], "chat-1")
         self.assertIn("Mikro-Clear status", send.call_args.kwargs["text"])
 
     def test_process_updates_rejects_status_from_unknown_chat(self):
-        legacy = self.import_legacy()
-
-        with (
-            patch.object(legacy, "ENABLE_TELEGRAM", True),
-            patch.object(legacy, "TELEGRAM_UNBLOCK_ENABLE", True),
-            patch.object(legacy, "TELEGRAM_TOKEN", "token"),
-            patch.object(legacy, "TELEGRAM_CHATID", "chat-1"),
-            patch.object(legacy, "telegram_update_offset", 0),
-            patch.object(legacy.requests, "get", return_value=FakeMessageResponse(chat_id="unknown")),
-            patch.object(
-                legacy,
-                "send_telegram_message",
-                return_value=types.SimpleNamespace(ok=True, response_text="ok"),
-            ) as send,
-            patch.object(legacy, "log") as log,
-        ):
-            legacy.process_telegram_updates()
+        send = Mock(return_value=types.SimpleNamespace(ok=True, response_text="ok"))
+        log = Mock()
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=Mock(),
+            send_system_notification=Mock(),
+            log=log,
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=FakeMessageResponse(chat_id="unknown")),
+            send_message=send,
+        )
+        poller.process_updates()
 
         send.assert_not_called()
         self.assertIn("Rejected Telegram command from unauthorized chat unknown", log.call_args[0][0])

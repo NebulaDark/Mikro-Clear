@@ -3,6 +3,8 @@ from typing import Sequence
 
 
 def env_name_candidates(name: str) -> tuple[str, ...]:
+    if name.startswith("MIKROCLEAR_"):
+        return (name, "MIKROCATA_" + name.removeprefix("MIKROCLEAR_"))
     if name.startswith("MIKROCATA_"):
         return ("MIKROCLEAR_" + name.removeprefix("MIKROCATA_"), name)
     return (name,)

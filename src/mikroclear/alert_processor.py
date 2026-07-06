@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover
 from mikroclear.routeros.address_list import add_to_address_list
 from mikroclear.suricata.alert_logic import is_ip_in_whitelist
 from mikroclear.suricata.events import should_process_event
-from mikroclear.telegram.notify import sanitize_text
+from mikroclear.telegram.formatting import sanitize_text
 
 
 @dataclass(frozen=True)

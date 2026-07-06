@@ -1,18 +1,9 @@
 import os
 from pathlib import Path
-import sys
-import types
 from unittest import TestCase
 from unittest.mock import patch
 
 from mikroclear.settings import Settings, load_settings
-
-
-def load_legacy():
-    fake_pyinotify = types.SimpleNamespace(ProcessEvent=object)
-    with patch.dict(sys.modules, {"pyinotify": fake_pyinotify}):
-        from mikroclear import legacy
-    return legacy
 
 
 class SettingsTests(TestCase):
@@ -69,10 +60,15 @@ class SettingsTests(TestCase):
         self.assertIn("10.7.0.0/16", settings.whitelist_ips)
         self.assertIn("127.0.0.1", settings.whitelist_ips)
 
-    def test_legacy_constants_are_assigned_from_settings(self):
-        legacy = load_legacy()
+    def test_settings_object_is_runtime_config_boundary(self):
+        settings = Settings(router_ip="10.9.0.1", block_list_name="Threats", filepath="/tmp/eve.json")
 
-        self.assertIsInstance(legacy.SETTINGS, Settings)
-        self.assertEqual(legacy.ROUTER_IP, legacy.SETTINGS.router_ip)
-        self.assertEqual(legacy.BLOCK_LIST_NAME, legacy.SETTINGS.block_list_name)
-        self.assertEqual(legacy.FILEPATH, legacy.SETTINGS.filepath)
+        self.assertEqual(settings.router_ip, "10.9.0.1")
+        self.assertEqual(settings.block_list_name, "Threats")
+        self.assertEqual(settings.filepath, "/tmp/eve.json")
+
+    def test_settings_loader_uses_canonical_mikroclear_names(self):
+        source = Path("src/mikroclear/settings.py").read_text(encoding="utf-8")
+
+        self.assertIn("MIKROCLEAR_ROUTER_IP", source)
+        self.assertNotIn("MIKROCATA_ROUTER_IP", source)

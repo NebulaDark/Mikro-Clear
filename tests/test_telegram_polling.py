@@ -1,6 +1,6 @@
 from unittest import TestCase
 
-from mikroclear.telegram_polling import TelegramPollingBackoff
+from mikroclear.telegram.polling import TelegramPollingBackoff
 
 
 class TelegramPollingBackoffTests(TestCase):

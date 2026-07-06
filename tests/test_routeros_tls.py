@@ -1,7 +1,7 @@
 import ssl
 import unittest
 
-from mikroclear.routeros_tls import build_routeros_ssl_context, make_routeros_ssl_wrapper
+from mikroclear.routeros.ssl_context import build_routeros_ssl_context, make_routeros_ssl_wrapper
 
 
 class FakeContext:
