@@ -247,6 +247,7 @@ class RuntimeProviders:
             router_client=self.router_client,
             service_start_time=self.service_start_time,
             now=time,
+            bot_settings_factory=lambda: self.bot_settings,
         )
 
 

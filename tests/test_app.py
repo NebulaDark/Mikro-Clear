@@ -2,6 +2,7 @@ import sys
 import types
 import importlib
 import builtins
+import os
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
@@ -133,6 +134,27 @@ class AppEntrypointTests(TestCase):
         formatted_peer = providers.format_peer_with_asset("192.168.10.9")
         self.assertEqual(formatted_peer, "<code>192.168.10.9</code> - <b>i5</b>")
         self.assertNotIn("dhcp", formatted_peer)
+
+    def test_build_status_snapshot_uses_runtime_bot_settings_when_environment_changes(self):
+        env = {
+            "MIKROCLEAR_BOT_DRY_RUN": "false",
+            "MIKROCLEAR_BOT_MODULES": "status,asset_resolver",
+        }
+        with (
+            patch.dict(sys.modules, {"pyinotify": fake_pyinotify_module()}),
+            patch.dict(os.environ, env, clear=True),
+        ):
+            from mikroclear import app
+
+            service = app.build_service()
+
+        providers = service.deps.get_router_client.__self__
+        with patch.dict(os.environ, {}, clear=True):
+            snapshot = providers.build_status_snapshot()
+
+        self.assertIs(snapshot.bot_settings, providers.bot_settings)
+        self.assertFalse(snapshot.bot_settings.dry_run)
+        self.assertEqual(snapshot.bot_settings.modules, ("status", "asset_resolver"))
 
     def test_build_service_is_import_safe_when_pyinotify_is_unavailable(self):
         original_legacy = sys.modules.pop("mikroclear.legacy", None)
