@@ -7,7 +7,6 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env
 EnvironmentFile=-/etc/mikroclear/mikroclear.env
 ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
 Restart=on-failure
@@ -23,8 +22,8 @@ ProtectSystem=strict
 RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
-ReadWritePaths=/var/lib/mikroclear /var/lib/mikrocata
-ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear /etc/mikrocata
+ReadWritePaths=/var/lib/mikroclear
+ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear
 
 [Install]
 WantedBy=multi-user.target

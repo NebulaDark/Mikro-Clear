@@ -224,6 +224,32 @@ class McpServerSshTests(TestCase):
             "sudo -n /usr/bin/systemd-analyze verify /etc/systemd/system/mikroclear.service",
         )
 
+    def test_read_mikroclear_env_reads_primary_env_only(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "masked-primary"
+            output = server.read_mikroclear_env()
+
+        self.assertEqual(output, "masked-primary")
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "sudo -n /usr/local/sbin/mikroclear-mask-env /etc/mikroclear/mikroclear.env",
+        )
+
+    def test_read_mikrocata_env_reads_legacy_env_explicitly(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "masked-legacy"
+            output = server.read_mikrocata_env()
+
+        self.assertEqual(output, "masked-legacy")
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "sudo -n /usr/local/sbin/mikroclear-mask-env /etc/mikrocata/mikrocataTZSP0.env",
+        )
+
     def test_daemon_reload_requires_confirmation(self):
         server = load_server()
 
@@ -279,6 +305,7 @@ class McpServerSshTests(TestCase):
             syntax.return_value = "OK"
             self.assertEqual(server.check_mikrocata_syntax(), "OK")
 
-        with patch.object(server, "read_mikroclear_env") as read_env:
-            read_env.return_value = "masked"
-            self.assertEqual(server.read_mikrocata_env(), "masked")
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "masked-legacy"
+            self.assertEqual(server.read_mikrocata_env(), "masked-legacy")
+            self.assertIn("/etc/mikrocata/mikrocataTZSP0.env", run_ssh.call_args.args[0])

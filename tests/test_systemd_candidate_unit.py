@@ -36,23 +36,20 @@ class SystemdCandidateUnitTests(TestCase):
         self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", service_lines)
         self.assertNotIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
 
-    def test_candidate_keeps_legacy_env_fallback_order(self):
+    def test_candidate_uses_primary_mikroclear_env_only(self):
         service_lines = section_lines(CANDIDATE_UNIT, "Service")
-        legacy = "EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env"
         current = "EnvironmentFile=-/etc/mikroclear/mikroclear.env"
 
-        self.assertIn(legacy, service_lines)
         self.assertIn(current, service_lines)
-        self.assertLess(service_lines.index(legacy), service_lines.index(current))
+        self.assertNotIn("EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env", service_lines)
 
-    def test_candidate_preserves_legacy_state_paths_during_transition(self):
+    def test_candidate_uses_primary_state_and_config_paths_only(self):
         service_lines = section_lines(CANDIDATE_UNIT, "Service")
 
-        self.assertIn("ReadWritePaths=/var/lib/mikroclear /var/lib/mikrocata", service_lines)
-        self.assertIn(
-            "ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear /etc/mikrocata",
-            service_lines,
-        )
+        self.assertIn("ReadWritePaths=/var/lib/mikroclear", service_lines)
+        self.assertIn("ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear", service_lines)
+        self.assertNotIn("/var/lib/mikrocata", "\n".join(service_lines))
+        self.assertNotIn("/etc/mikrocata", "\n".join(service_lines))
 
     def test_plan_documents_rollback_and_safety_notes(self):
         text = PLAN.read_text(encoding="utf-8")
@@ -80,5 +77,4 @@ class SystemdCandidateUnitTests(TestCase):
 
         self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", text)
         self.assertIn("Условия удаления legacy env fallback", text)
-        self.assertIn("EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env", text)
         self.assertIn("EnvironmentFile=-/etc/mikroclear/mikroclear.env", text)

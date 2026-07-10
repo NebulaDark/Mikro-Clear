@@ -124,19 +124,12 @@ def check_mikrocata_syntax() -> str:
 
 @mcp.tool()
 def read_mikroclear_env() -> str:
-    return run_ssh(
-        r"if [ -f /etc/mikroclear/mikroclear.env ]; then "
-        rf"sudo -n {MASK_ENV_HELPER} /etc/mikroclear/mikroclear.env; "
-        r"else "
-        rf"sudo -n {MASK_ENV_HELPER} /etc/mikrocata/mikrocataTZSP0.env; "
-        r"fi",
-        20,
-    )
+    return run_ssh(f"sudo -n {MASK_ENV_HELPER} /etc/mikroclear/mikroclear.env", 20)
 
 
 @mcp.tool()
 def read_mikrocata_env() -> str:
-    return read_mikroclear_env()
+    return run_ssh(f"sudo -n {MASK_ENV_HELPER} /etc/mikrocata/mikrocataTZSP0.env", 20)
 
 
 @mcp.tool()
