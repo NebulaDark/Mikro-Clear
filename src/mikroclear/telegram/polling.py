@@ -120,7 +120,14 @@ class TelegramUpdatePoller:
             self._record_failure(sanitize_exception_text(exc, self.settings.telegram_token))
             return
 
-        for update in body.get("result", []):
+        updates = body.get("result", [])
+        if updates:
+            self.log(
+                "Telegram updates received: "
+                f"{len(updates)} item(s), current offset={self.update_offset}"
+            )
+
+        for update in updates:
             update_id = int(update.get("update_id", 0))
             self.update_offset = max(self.update_offset, update_id + 1)
             if self._process_message(update):
@@ -141,9 +148,13 @@ class TelegramUpdatePoller:
         chat_id = str(chat.get("id", ""))
         user = message_update.get("from") or {}
         user_id = str(user.get("id", ""))
+        text = message_update.get("text", "")
+        command_name = _command_name(text)
+        if command_name:
+            self.log(f"Telegram command update: command={command_name} chat={chat_id} user={user_id}")
         auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
         if self.mangle_handler is not None and self.mangle_handler.handle_message(
-            text=message_update.get("text", ""),
+            text=text,
             chat_id=chat_id,
             user_id=user_id,
             auth=auth,
@@ -153,7 +164,7 @@ class TelegramUpdatePoller:
         ):
             return True
         return process_message_command(
-            text=message_update.get("text", ""),
+            text=text,
             chat_id=chat_id,
             auth=auth,
             status_snapshot_factory=self.status_snapshot_factory,
@@ -168,6 +179,19 @@ class TelegramUpdatePoller:
         callback = update.get("callback_query") or {}
         if not callback:
             return False
+
+        callback_id = str(callback.get("id", ""))
+        callback_data = str(callback.get("data", ""))
+        callback_action = _callback_action_name(callback_data)
+        message = callback.get("message") or {}
+        chat = message.get("chat") or {}
+        chat_id = str(chat.get("id", ""))
+        user = callback.get("from") or {}
+        user_id = str(user.get("id", ""))
+        self.log(
+            "Telegram callback update: "
+            f"id={callback_id} action={callback_action} chat={chat_id} user={user_id}"
+        )
 
         auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
         if self.mangle_handler is not None and self.mangle_handler.handle_callback(
@@ -208,3 +232,20 @@ class TelegramUpdatePoller:
 
 
 __all__ = ["TelegramPollingBackoff", "TelegramUpdatePoller"]
+
+
+def _command_name(text: Any) -> str:
+    value = str(text or "").strip()
+    if not value.startswith("/"):
+        return ""
+    return value.split()[0].split("@", 1)[0].lower()
+
+
+def _callback_action_name(data: Any) -> str:
+    value = str(data or "")
+    if not value:
+        return ""
+    parts = value.split(":", 2)
+    if len(parts) >= 2:
+        return ":".join(parts[:2])
+    return value

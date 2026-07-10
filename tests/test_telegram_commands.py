@@ -141,13 +141,14 @@ class TelegramCommandTests(unittest.TestCase):
 
         handler = MangleHandler()
         send = Mock(return_value=types.SimpleNamespace(ok=True, response_text="ok"))
+        log = Mock()
         poller = TelegramUpdatePoller(
             Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
             status_snapshot_factory=self.status_snapshot,
             handle_unblock_action=Mock(),
             answer_callback=Mock(),
             send_system_notification=Mock(),
-            log=Mock(),
+            log=log,
             now=Mock(return_value=100.0),
             http_get=Mock(return_value=FakeMessageResponse(text="/mangle")),
             send_message=send,
@@ -159,6 +160,8 @@ class TelegramCommandTests(unittest.TestCase):
         self.assertEqual(len(handler.messages), 1)
         self.assertEqual(handler.messages[0]["text"], "/mangle")
         self.assertEqual(handler.messages[0]["user_id"], "user-1")
+        self.assertIn("Telegram updates received: 1 item(s), current offset=0", log.call_args_list[0].args[0])
+        self.assertIn("Telegram command update: command=/mangle chat=chat-1 user=user-1", log.call_args_list[1].args[0])
 
     def test_process_updates_routes_mangle_callback_before_unblock_callback(self):
         class FakeCallbackResponse:
@@ -193,13 +196,14 @@ class TelegramCommandTests(unittest.TestCase):
 
         handler = MangleHandler()
         handle_unblock_action = Mock()
+        log = Mock()
         poller = TelegramUpdatePoller(
             Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
             status_snapshot_factory=self.status_snapshot,
             handle_unblock_action=handle_unblock_action,
             answer_callback=Mock(),
             send_system_notification=Mock(),
-            log=Mock(),
+            log=log,
             now=Mock(return_value=100.0),
             http_get=Mock(return_value=FakeCallbackResponse()),
             mangle_handler=handler,
@@ -209,6 +213,11 @@ class TelegramCommandTests(unittest.TestCase):
 
         self.assertEqual(len(handler.callbacks), 1)
         handle_unblock_action.assert_not_called()
+        self.assertIn("Telegram updates received: 1 item(s), current offset=0", log.call_args_list[0].args[0])
+        self.assertIn(
+            "Telegram callback update: id=cb-1 action=mangle:refresh chat=chat-1 user=",
+            log.call_args_list[1].args[0],
+        )
 
 
 if __name__ == "__main__":
