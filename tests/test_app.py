@@ -117,6 +117,7 @@ class AppEntrypointTests(TestCase):
         self.assertEqual(type(providers.unblock_handler).__name__, TelegramUnblockHandler.__name__)
         self.assertEqual(type(providers.mangle_handler).__name__, TelegramMangleHandler.__name__)
         self.assertEqual(type(providers.poller).__name__, TelegramUpdatePoller.__name__)
+        self.assertIs(providers.poller.bot_settings, providers.bot_settings)
         self.assertIs(providers.poller.mangle_handler, providers.mangle_handler)
         self.assertIs(providers.poller.handle_unblock_action.__self__, providers.unblock_handler)
         self.assertIs(

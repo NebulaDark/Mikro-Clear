@@ -7,6 +7,7 @@ from time import sleep, time
 from typing import Any
 
 from mikroclear.assets.resolver import AssetResolver, AssetResolverConfig
+from mikroclear.bot.settings import BotSettings
 from mikroclear.runtime import MikroClearService
 from mikroclear.runtime.status_snapshot import build_status_snapshot
 from mikroclear.routeros.client import RouterOSClient
@@ -40,6 +41,7 @@ class RuntimeProviders:
     service: MikroClearService | None = None
 
     def __post_init__(self) -> None:
+        self.bot_settings = BotSettings.from_env()
         self.ignore_rules = IgnoreRules(log=log, debug_log=self.debug_log)
         self.tailer = EveJsonTailer(
             add_on_start=self.settings.add_on_start,
@@ -92,6 +94,7 @@ class RuntimeProviders:
         )
         self.poller = TelegramUpdatePoller(
             self.settings,
+            bot_settings=self.bot_settings,
             status_snapshot_factory=self.build_status_snapshot,
             handle_unblock_action=self.unblock_handler.handle_unblock_action,
             answer_callback=self.unblock_handler.answer_telegram_callback,

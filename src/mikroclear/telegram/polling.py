@@ -54,6 +54,7 @@ class TelegramUpdatePoller:
         self,
         settings: Any,
         *,
+        bot_settings: BotSettings | None = None,
         status_snapshot_factory: Callable[[], Any],
         handle_unblock_action: Callable[[dict[str, Any]], Any],
         answer_callback: Callable[[str, str, bool], None],
@@ -66,6 +67,7 @@ class TelegramUpdatePoller:
         backoff: TelegramPollingBackoff | None = None,
     ) -> None:
         self.settings = settings
+        self.bot_settings = bot_settings or BotSettings.from_env()
         self.status_snapshot_factory = status_snapshot_factory
         self.handle_unblock_action = handle_unblock_action
         self.answer_callback = answer_callback
@@ -139,7 +141,7 @@ class TelegramUpdatePoller:
         chat_id = str(chat.get("id", ""))
         user = message_update.get("from") or {}
         user_id = str(user.get("id", ""))
-        auth = BotAuth(BotSettings.from_env(), legacy_chat_id=str(self.settings.telegram_chatid))
+        auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
         if self.mangle_handler is not None and self.mangle_handler.handle_message(
             text=message_update.get("text", ""),
             chat_id=chat_id,
@@ -167,7 +169,7 @@ class TelegramUpdatePoller:
         if not callback:
             return False
 
-        auth = BotAuth(BotSettings.from_env(), legacy_chat_id=str(self.settings.telegram_chatid))
+        auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
         if self.mangle_handler is not None and self.mangle_handler.handle_callback(
             callback=callback,
             auth=auth,

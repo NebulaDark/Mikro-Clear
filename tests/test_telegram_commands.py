@@ -2,6 +2,8 @@ import types
 import unittest
 from unittest.mock import Mock
 import json
+import os
+from unittest.mock import patch
 
 from mikroclear.bot.modules.status import StatusSnapshot
 from mikroclear.bot.settings import BotSettings
@@ -103,6 +105,27 @@ class TelegramCommandTests(unittest.TestCase):
 
         send.assert_not_called()
         self.assertIn("Rejected Telegram command from unauthorized chat unknown", log.call_args[0][0])
+
+    def test_process_updates_uses_injected_bot_settings_when_environment_differs(self):
+        send = Mock(return_value=types.SimpleNamespace(ok=True, response_text="ok"))
+        with patch.dict(os.environ, {}, clear=True):
+            poller = TelegramUpdatePoller(
+                Settings(enable_telegram=True, telegram_token="token", telegram_chatid="legacy-chat"),
+                status_snapshot_factory=self.status_snapshot,
+                handle_unblock_action=Mock(),
+                answer_callback=Mock(),
+                send_system_notification=Mock(),
+                log=Mock(),
+                now=Mock(return_value=100.0),
+                http_get=Mock(return_value=FakeMessageResponse(chat_id="chat-1")),
+                send_message=send,
+                bot_settings=BotSettings(allowed_chat_ids=("chat-1",)),
+            )
+
+            poller.process_updates()
+
+        self.assertEqual(send.call_args.kwargs["chat_id"], "chat-1")
+        self.assertIn("Mikro-Clear status", send.call_args.kwargs["text"])
 
     def test_process_updates_routes_mangle_command_to_existing_polling_loop(self):
         class MangleHandler:
