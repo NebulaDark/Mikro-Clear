@@ -31,6 +31,8 @@ CANDIDATE_WHEEL = f"{CANDIDATE_DIR}/mikro_clear-0.1.0-py3-none-any.whl"
 REMOTE_UNIT = "/etc/systemd/system/mikroclear.service"
 CANDIDATE_UNIT = f"{CANDIDATE_DIR}/mikroclear-codex.service"
 MASK_ENV_HELPER = "/usr/local/sbin/mikroclear-mask-env"
+RUNTIME_ENV_HELPER = "/usr/local/sbin/mikroclear-service-env"
+TELEGRAM_UPDATES_PROBE = "/usr/local/sbin/mikroclear-telegram-getupdates-probe"
 SURICATA_EVE_JSON = "/opt/SELKS/docker/containers-data/suricata/logs/eve.json"
 
 
@@ -89,6 +91,28 @@ def restart_mikrocata(confirm: bool = False) -> str:
 
 
 @mcp.tool()
+def start_mikroclear(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to start service without confirm=True."
+    return run_ssh(
+        f"sudo -n /usr/bin/systemctl start {SERVICE_NAME} && "
+        f"sudo -n /usr/bin/systemctl status {SERVICE_NAME} --no-pager",
+        40,
+    )
+
+
+@mcp.tool()
+def stop_mikroclear(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to stop service without confirm=True."
+    return run_ssh(
+        f"sudo -n /usr/bin/systemctl stop {SERVICE_NAME} && "
+        f"sudo -n /usr/bin/systemctl status {SERVICE_NAME} --no-pager",
+        40,
+    )
+
+
+@mcp.tool()
 def tail_mikroclear_logs(lines: int = 100) -> str:
     lines = _fixed_size(lines, (100, 300, 500))
     return run_ssh(f"sudo -n journalctl -u {SERVICE_NAME} -n {lines} --no-pager", 30)
@@ -130,6 +154,25 @@ def read_mikroclear_env() -> str:
 @mcp.tool()
 def read_mikrocata_env() -> str:
     return run_ssh(f"sudo -n {MASK_ENV_HELPER} /etc/mikrocata/mikrocataTZSP0.env", 20)
+
+
+@mcp.tool()
+def show_mikroclear_startup() -> str:
+    return run_ssh(
+        f"systemctl show {SERVICE_NAME} "
+        "--property=MainPID,ExecStart,EnvironmentFiles,FragmentPath,DropInPaths,ActiveState,SubState --no-pager",
+        20,
+    )
+
+
+@mcp.tool()
+def read_mikroclear_runtime_env() -> str:
+    return run_ssh(f"sudo -n {RUNTIME_ENV_HELPER}", 20)
+
+
+@mcp.tool()
+def probe_mikroclear_telegram_updates() -> str:
+    return run_ssh(f"sudo -n {TELEGRAM_UPDATES_PROBE}", 30)
 
 
 @mcp.tool()

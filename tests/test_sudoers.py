@@ -16,6 +16,8 @@ class SudoersPolicyTests(TestCase):
 
         self.assertIn("mcp-selks ALL=(root) NOPASSWD:", text)
         self.assertIn("/usr/bin/systemctl enable mikroclear.service", text)
+        self.assertIn("/usr/bin/systemctl start mikroclear.service", text)
+        self.assertIn("/usr/bin/systemctl stop mikroclear.service", text)
         self.assertIn("/usr/bin/systemctl restart mikroclear.service", text)
         self.assertIn("/usr/bin/systemctl status mikroclear.service --no-pager --lines=30", text)
         self.assertIn(
@@ -47,6 +49,8 @@ class SudoersPolicyTests(TestCase):
         self.assertNotIn("/usr/bin/journalctl -u mikroclear.service -n *", text)
         self.assertNotIn("/usr/bin/journalctl -u mikrocataTZSP0.service -n *", text)
         self.assertIn("/usr/local/sbin/mikroclear-mask-env /etc/mikroclear/mikroclear.env", text)
+        self.assertIn("/usr/local/sbin/mikroclear-service-env", text)
+        self.assertIn("/usr/local/sbin/mikroclear-telegram-getupdates-probe", text)
         self.assertIn("/usr/bin/journalctl -u mikroclear.service -n 100 --no-pager", text)
         self.assertIn("/usr/bin/journalctl -u mikroclear.service -n 300 --no-pager", text)
         self.assertIn("/usr/bin/journalctl -u mikroclear.service -n 500 --no-pager", text)

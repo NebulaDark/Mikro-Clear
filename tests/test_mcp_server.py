@@ -50,6 +50,24 @@ class McpServerSshTests(TestCase):
         self.assertIn("confirm=True", output)
         run_ssh.assert_not_called()
 
+    def test_start_requires_explicit_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.start_mikroclear()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_stop_requires_explicit_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.stop_mikroclear()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
     def test_syntax_check_is_package_import_compatibility_alias(self):
         server = load_server()
 
@@ -249,6 +267,37 @@ class McpServerSshTests(TestCase):
             run_ssh.call_args.args[0],
             "sudo -n /usr/local/sbin/mikroclear-mask-env /etc/mikrocata/mikrocataTZSP0.env",
         )
+
+    def test_show_mikroclear_startup_reports_runtime_shape(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            server.show_mikroclear_startup()
+
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "systemctl show mikroclear.service --property=MainPID,ExecStart,EnvironmentFiles,FragmentPath,DropInPaths,ActiveState,SubState --no-pager",
+        )
+
+    def test_read_mikroclear_runtime_env_uses_helper(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "runtime-env"
+            output = server.read_mikroclear_runtime_env()
+
+        self.assertEqual(output, "runtime-env")
+        self.assertEqual(run_ssh.call_args.args[0], "sudo -n /usr/local/sbin/mikroclear-service-env")
+
+    def test_probe_mikroclear_telegram_updates_uses_helper(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "telegram-probe"
+            output = server.probe_mikroclear_telegram_updates()
+
+        self.assertEqual(output, "telegram-probe")
+        self.assertEqual(run_ssh.call_args.args[0], "sudo -n /usr/local/sbin/mikroclear-telegram-getupdates-probe")
 
     def test_daemon_reload_requires_confirmation(self):
         server = load_server()

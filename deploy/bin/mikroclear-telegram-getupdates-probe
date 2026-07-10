@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+import json
+from pathlib import Path
+import sys
+
+import requests
+
+
+ENV_PATH = Path("/etc/mikroclear/mikroclear.env")
+ALLOWED_UPDATES = ["message", "callback_query"]
+
+
+def load_env() -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in ENV_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+        value = line.strip()
+        if not value or value.startswith("#") or "=" not in value:
+            continue
+        key, item = value.split("=", 1)
+        result[key.strip()] = item.strip().strip('"').strip("'")
+    return result
+
+
+def main() -> int:
+    env = load_env()
+    token = env.get("MIKROCLEAR_TELEGRAM_TOKEN", "")
+    if not token:
+        print("MIKROCLEAR_TELEGRAM_TOKEN is empty", file=sys.stderr)
+        return 2
+
+    base_url = f"https://api.telegram.org/bot{token}"
+    webhook = requests.get(f"{base_url}/getWebhookInfo", timeout=10)
+    updates = requests.get(
+        f"{base_url}/getUpdates",
+        params={"offset": 0, "timeout": 0, "allowed_updates": json.dumps(ALLOWED_UPDATES)},
+        timeout=10,
+    )
+
+    print(f"webhook_status={webhook.status_code}")
+    print(json.dumps(webhook.json(), indent=2, ensure_ascii=False))
+    print(f"updates_status={updates.status_code}")
+    print(json.dumps(updates.json(), indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
