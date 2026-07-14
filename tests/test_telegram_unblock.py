@@ -138,6 +138,43 @@ class TelegramUnblockTests(unittest.TestCase):
 
 
 class TelegramUnblockFlowTests(unittest.TestCase):
+    def test_answer_callback_reports_retryable_transport_failures(self):
+        from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
+
+        handler = TelegramUnblockHandler(
+            Settings(telegram_token="secret-token", telegram_timeout=7),
+            get_router_client=Mock(),
+            log=Mock(),
+            http_post=Mock(side_effect=RuntimeError("secret-token unavailable")),
+        )
+
+        result = handler.answer_telegram_callback("callback-1", "Try again")
+
+        self.assertFalse(result.ok)
+        self.assertTrue(result.retryable)
+        self.assertNotIn("secret-token", result.response_text)
+
+    def test_answer_callback_reports_retryable_server_response(self):
+        from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
+
+        handler = TelegramUnblockHandler(
+            Settings(telegram_token="secret-token", telegram_timeout=7),
+            get_router_client=Mock(),
+            log=Mock(),
+            http_post=Mock(
+                return_value=types.SimpleNamespace(
+                    status_code=503,
+                    text="temporary failure",
+                )
+            ),
+        )
+
+        result = handler.answer_telegram_callback("callback-1", "Try again")
+
+        self.assertFalse(result.ok)
+        self.assertTrue(result.retryable)
+        self.assertEqual(result.status_code, 503)
+
     def test_routeros_failure_returns_callback_text_and_logs_result(self):
         class FailingClient:
             def run_with_reconnect(self, operation_name, func):

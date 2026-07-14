@@ -8,7 +8,11 @@ from mikroclear.bot.auth import BotAuth
 from mikroclear.bot.dispatcher import dispatch_message
 from mikroclear.bot.settings import BotSettings
 from mikroclear.security import mask_known_secret, sanitize_exception_text
-from mikroclear.telegram.commands import process_callback_update, process_message_command
+from mikroclear.telegram.commands import (
+    process_callback_update,
+    process_message_command,
+    raise_for_retryable_delivery,
+)
 from mikroclear.telegram.notify import send_telegram_message
 
 try:
@@ -160,6 +164,16 @@ class TelegramUpdatePoller:
         update_id = int(update["update_id"])
         self.update_offset = max(self.update_offset, update_id + 1)
 
+    def _send_message(self, **kwargs: Any) -> Any:
+        response = self.send_message(**kwargs)
+        raise_for_retryable_delivery(response)
+        return response
+
+    def _answer_callback(self, callback_id: str, text: str, alert: bool) -> Any:
+        response = self.answer_callback(callback_id, text, alert)
+        raise_for_retryable_delivery(response)
+        return response
+
     def _record_failure(self, error_text: str) -> None:
         should_log, delay = self.backoff.record_failure(self.now(), error_text)
         if should_log:
@@ -184,7 +198,7 @@ class TelegramUpdatePoller:
             chat_id=chat_id,
             user_id=user_id,
             auth=auth,
-            send_message=self.send_message,
+            send_message=self._send_message,
             token=self.settings.telegram_token,
             timeout=self.settings.telegram_timeout,
         ):
@@ -195,7 +209,7 @@ class TelegramUpdatePoller:
             auth=auth,
             status_snapshot_factory=self.status_snapshot_factory,
             dispatch_message=dispatch_message,
-            send_message=self.send_message,
+            send_message=self._send_message,
             token=self.settings.telegram_token,
             timeout=self.settings.telegram_timeout,
             log=self.log,
@@ -223,8 +237,8 @@ class TelegramUpdatePoller:
         if self.mangle_handler is not None and self.mangle_handler.handle_callback(
             callback=callback,
             auth=auth,
-            answer_callback=self.answer_callback,
-            send_message=self.send_message,
+            answer_callback=self._answer_callback,
+            send_message=self._send_message,
             telegram_token=self.settings.telegram_token,
             timeout=self.settings.telegram_timeout,
             now=int(self.now()),
@@ -246,12 +260,12 @@ class TelegramUpdatePoller:
             parse_unblock_callback=parse_unblock_callback,
             consume_unblock_token=consume_unblock_token,
             handle_unblock_action=self.handle_unblock_action,
-            answer_callback=self.answer_callback,
+            answer_callback=self._answer_callback,
             send_system_notification=self.send_system_notification,
             log=self.log,
             peek_unblock_token=peek_unblock_token,
             cancel_unblock_token=cancel_unblock_token,
-            send_message=self.send_message,
+            send_message=self._send_message,
             telegram_token=self.settings.telegram_token,
             telegram_timeout=self.settings.telegram_timeout,
         )

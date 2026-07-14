@@ -242,6 +242,93 @@ class TelegramCommandTests(unittest.TestCase):
             log.call_args_list[1].args[0],
         )
 
+    def test_retryable_mangle_send_does_not_advance_offset(self):
+        class MangleHandler:
+            def handle_message(self, **kwargs):
+                kwargs["send_message"](
+                    token=kwargs["token"],
+                    chat_id=kwargs["chat_id"],
+                    text="temporary",
+                    timeout=kwargs["timeout"],
+                )
+                return True
+
+            def handle_callback(self, **kwargs):
+                return False
+
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=Mock(),
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=FakeMessageResponse(text="/mangle")),
+            send_message=Mock(
+                return_value=types.SimpleNamespace(
+                    ok=False,
+                    retryable=True,
+                    response_text="network unavailable",
+                )
+            ),
+            mangle_handler=MangleHandler(),
+        )
+
+        poller.process_updates()
+
+        self.assertEqual(poller.update_offset, 0)
+
+    def test_retryable_callback_answer_does_not_advance_offset(self):
+        class CallbackResponse:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 101,
+                            "callback_query": {
+                                "id": "cb-1",
+                                "data": "mangle:refresh",
+                                "message": {"chat": {"id": "chat-1"}},
+                            },
+                        }
+                    ],
+                }
+
+        class MangleHandler:
+            def handle_message(self, **kwargs):
+                return False
+
+            def handle_callback(self, **kwargs):
+                kwargs["answer_callback"]("cb-1", "temporary", False)
+                return True
+
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=Mock(
+                return_value=types.SimpleNamespace(
+                    ok=False,
+                    retryable=True,
+                    response_text="network unavailable",
+                )
+            ),
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=CallbackResponse()),
+            mangle_handler=MangleHandler(),
+        )
+
+        poller.process_updates()
+
+        self.assertEqual(poller.update_offset, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

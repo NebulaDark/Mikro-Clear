@@ -12,6 +12,7 @@ from typing import Any, Callable
 from mikroclear.bot.mangle_control import build_mangle_confirm_keyboard, build_mangle_keyboard, format_mangle_status
 from mikroclear.routeros.mangle import get_managed_mangle_rule, list_managed_mangle_rules, set_mangle_rule_disabled
 from mikroclear.security import mask_known_secret, sanitize_exception_text
+from mikroclear.telegram.commands import RetryableTelegramDeliveryError
 
 
 def _command_name(text: Any) -> str:
@@ -179,6 +180,8 @@ class TelegramMangleHandler:
             return True
         try:
             self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=token, timeout=timeout)
+        except RetryableTelegramDeliveryError:
+            raise
         except Exception as exc:
             self.log(f"TELEGRAM MANGLE STATUS FAILED: {sanitize_exception_text(exc, self.settings.telegram_token)}")
             send_message(token=token, chat_id=chat_id, text="Could not read mangle rules", timeout=timeout)
@@ -279,6 +282,8 @@ class TelegramMangleHandler:
                 )
                 answer_callback(callback_id, "Mangle rule updated", False)
                 self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=telegram_token, timeout=timeout)
+            except RetryableTelegramDeliveryError:
+                raise
             except Exception as exc:
                 self.log(f"TELEGRAM MANGLE UPDATE FAILED: {sanitize_exception_text(exc, self.settings.telegram_token)}")
                 answer_callback(callback_id, "Could not update mangle rule", True)
