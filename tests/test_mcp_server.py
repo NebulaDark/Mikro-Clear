@@ -60,6 +60,23 @@ class McpServerSshTests(TestCase):
         self.assertIn(f"--- {remote_path}", result["diff"])
         self.assertIn(str(server.LOCAL_POLLING), result["diff"])
 
+    def test_compare_production_polling_rejects_false_remote_hash(self):
+        server = load_server()
+        local_bytes = server.LOCAL_POLLING.read_bytes()
+        remote = "\n".join(
+            [
+                "/opt/mikroclear-venv/site-packages/mikroclear/telegram/polling.py",
+                "0" * 64,
+                base64.b64encode(local_bytes).decode("ascii"),
+            ]
+        )
+
+        with patch.object(server, "run_ssh", return_value=remote):
+            result = server.compare_production_polling()
+
+        self.assertFalse(result["matches"])
+        self.assertIn("Remote SHA-256 mismatch", result["error"])
+
     def test_run_ssh_uses_configured_ssh_command(self):
         server = load_server()
 

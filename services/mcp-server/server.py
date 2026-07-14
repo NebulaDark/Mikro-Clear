@@ -277,6 +277,16 @@ def compare_production_polling() -> dict[str, Any]:
             "error": f"Invalid remote polling response: {exc}",
         }
 
+    computed_remote_sha256 = hashlib.sha256(remote_bytes).hexdigest()
+    if remote_sha256.lower() != computed_remote_sha256:
+        return {
+            "matches": False,
+            "error": "Remote SHA-256 mismatch",
+            "remote_path": remote_path,
+            "remote_sha256": remote_sha256,
+            "computed_remote_sha256": computed_remote_sha256,
+        }
+
     diff = "\n".join(
         difflib.unified_diff(
             remote_text.splitlines(),
