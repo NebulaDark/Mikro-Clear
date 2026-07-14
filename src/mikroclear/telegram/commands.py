@@ -28,12 +28,18 @@ def process_message_command(
         log(f"Rejected Telegram command from unauthorized chat {chat_id}")
         return True
 
-    send_message(
+    response = send_message(
         token=token,
         chat_id=chat_id,
         text=result.text,
         timeout=timeout,
     )
+    if getattr(response, "ok", True) is False:
+        response_text = str(getattr(response, "response_text", "")).strip()
+        if response_text:
+            log(f"Failed to send Telegram command response to chat {chat_id}: {response_text}")
+        else:
+            log(f"Failed to send Telegram command response to chat {chat_id}")
     return True
 
 
