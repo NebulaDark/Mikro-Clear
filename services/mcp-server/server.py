@@ -21,6 +21,7 @@ SSH_COMMAND = shlex.split(
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_SCRIPT = REPO_ROOT / "src" / "mikroclear" / "legacy.py"
+LOCAL_POLLING = REPO_ROOT / "src" / "mikroclear" / "telegram" / "polling.py"
 LOCAL_UNIT = REPO_ROOT / "systemd" / "mikroclear.service"
 LOCAL_WHEEL = REPO_ROOT / "dist" / "mikro_clear-0.1.0-py3-none-any.whl"
 REMOTE_SCRIPT = "/usr/local/bin/mikroclear.py"
@@ -246,6 +247,53 @@ def compare_production_script() -> dict[str, Any]:
         )
     )
     return {"matches": local_text.strip() == remote_text.strip(), "diff": diff}
+
+
+@mcp.tool()
+def compare_production_polling() -> dict[str, Any]:
+    local_bytes = LOCAL_POLLING.read_bytes()
+    command = (
+        "/opt/mikroclear-venv/bin/python -c \"import base64,hashlib; "
+        "from pathlib import Path; import mikroclear.telegram.polling as p; "
+        "path=Path(p.__file__); data=path.read_bytes(); print(path); "
+        "print(hashlib.sha256(data).hexdigest()); "
+        "print(base64.b64encode(data).decode('ascii'))\""
+    )
+    lines = run_ssh(command, 30).splitlines()
+    if len(lines) != 3:
+        return {
+            "matches": False,
+            "error": "Unexpected remote polling response",
+        }
+
+    remote_path, remote_sha256, encoded = lines
+    try:
+        remote_bytes = base64.b64decode(encoded, validate=True)
+        local_text = local_bytes.decode("utf-8")
+        remote_text = remote_bytes.decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as exc:
+        return {
+            "matches": False,
+            "error": f"Invalid remote polling response: {exc}",
+        }
+
+    diff = "\n".join(
+        difflib.unified_diff(
+            remote_text.splitlines(),
+            local_text.splitlines(),
+            fromfile=remote_path,
+            tofile=str(LOCAL_POLLING),
+            lineterm="",
+        )
+    )
+    return {
+        "matches": local_bytes == remote_bytes,
+        "local_path": str(LOCAL_POLLING),
+        "local_sha256": hashlib.sha256(local_bytes).hexdigest(),
+        "remote_path": remote_path,
+        "remote_sha256": remote_sha256,
+        "diff": diff,
+    }
 
 
 @mcp.tool()

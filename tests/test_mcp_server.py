@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import importlib.util
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +18,48 @@ def load_server():
 
 
 class McpServerSshTests(TestCase):
+    def test_compare_production_polling_reports_match(self):
+        server = load_server()
+        local_bytes = server.LOCAL_POLLING.read_bytes()
+        remote_path = (
+            "/opt/mikroclear-venv/lib/python3.11/site-packages/"
+            "mikroclear/telegram/polling.py"
+        )
+        remote = "\n".join(
+            [
+                remote_path,
+                hashlib.sha256(local_bytes).hexdigest(),
+                base64.b64encode(local_bytes).decode("ascii"),
+            ]
+        )
+
+        with patch.object(server, "run_ssh", return_value=remote):
+            result = server.compare_production_polling()
+
+        self.assertTrue(result["matches"])
+        self.assertEqual(result["local_sha256"], result["remote_sha256"])
+        self.assertEqual(result["remote_path"], remote_path)
+        self.assertEqual(result["diff"], "")
+
+    def test_compare_production_polling_reports_diff(self):
+        server = load_server()
+        remote_path = "/opt/mikroclear-venv/site-packages/mikroclear/telegram/polling.py"
+        remote_bytes = b"REMOTE = True\n"
+        remote = "\n".join(
+            [
+                remote_path,
+                hashlib.sha256(remote_bytes).hexdigest(),
+                base64.b64encode(remote_bytes).decode("ascii"),
+            ]
+        )
+
+        with patch.object(server, "run_ssh", return_value=remote):
+            result = server.compare_production_polling()
+
+        self.assertFalse(result["matches"])
+        self.assertIn(f"--- {remote_path}", result["diff"])
+        self.assertIn(str(server.LOCAL_POLLING), result["diff"])
+
     def test_run_ssh_uses_configured_ssh_command(self):
         server = load_server()
 
