@@ -83,6 +83,7 @@ class TelegramUpdatePoller:
         self.send_message = send_message
         self.backoff = backoff or TelegramPollingBackoff()
         self.update_offset = 0
+        self._pending_callback_answers: dict[str, tuple[str, bool]] = {}
 
     def process_updates(self) -> None:
         updates = self.fetch_updates(long_poll_seconds=0)
@@ -163,6 +164,8 @@ class TelegramUpdatePoller:
     def acknowledge_update(self, update: dict[str, Any]) -> None:
         update_id = int(update["update_id"])
         self.update_offset = max(self.update_offset, update_id + 1)
+        callback = update.get("callback_query") or {}
+        self._pending_callback_answers.pop(str(callback.get("id", "")), None)
 
     def _send_message(self, **kwargs: Any) -> Any:
         response = self.send_message(**kwargs)
@@ -170,8 +173,13 @@ class TelegramUpdatePoller:
         return response
 
     def _answer_callback(self, callback_id: str, text: str, alert: bool) -> Any:
-        response = self.answer_callback(callback_id, text, alert)
-        raise_for_retryable_delivery(response)
+        try:
+            response = self.answer_callback(callback_id, text, alert)
+            raise_for_retryable_delivery(response)
+        except Exception:
+            self._pending_callback_answers[callback_id] = (text, alert)
+            raise
+        self._pending_callback_answers.pop(callback_id, None)
         return response
 
     def _record_failure(self, error_text: str) -> None:
@@ -201,6 +209,7 @@ class TelegramUpdatePoller:
             send_message=self._send_message,
             token=self.settings.telegram_token,
             timeout=self.settings.telegram_timeout,
+            update_id=str(update.get("update_id", "")),
         ):
             return True
         return process_message_command(
@@ -233,6 +242,12 @@ class TelegramUpdatePoller:
             f"id={callback_id} action={callback_action} chat={chat_id} user={user_id}"
         )
 
+        pending_answer = self._pending_callback_answers.get(callback_id)
+        if pending_answer is not None:
+            text, alert = pending_answer
+            self._answer_callback(callback_id, text, alert)
+            return True
+
         auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
         if self.mangle_handler is not None and self.mangle_handler.handle_callback(
             callback=callback,
@@ -242,6 +257,7 @@ class TelegramUpdatePoller:
             telegram_token=self.settings.telegram_token,
             timeout=self.settings.telegram_timeout,
             now=int(self.now()),
+            update_id=str(update.get("update_id", "")),
         ):
             return True
 

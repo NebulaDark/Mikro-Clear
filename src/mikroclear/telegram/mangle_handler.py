@@ -78,10 +78,23 @@ class TelegramMangleHandler:
         *,
         now: int | None = None,
         ttl_seconds: int = 300,
+        source_update_id: str = "",
     ) -> str:
-        token = self.token_factory()
         current = int(self.now() if now is None else now)
         state = _read_state(self.state_file)
+        if source_update_id:
+            for existing_token, payload in state.items():
+                if (
+                    str(payload.get("source_update_id", "")) == source_update_id
+                    and str(payload.get("rule_id", "")) == str(rule_id)
+                    and str(payload.get("action", "")) == str(action)
+                    and str(payload.get("requester_chat_id", "")) == str(requester_chat_id)
+                    and str(payload.get("requester_user_id", "")) == str(requester_user_id)
+                    and int(payload.get("expires_at", 0)) > current
+                ):
+                    return existing_token
+
+        token = self.token_factory()
         state[token] = {
             "rule_id": str(rule_id),
             "action": str(action),
@@ -90,6 +103,8 @@ class TelegramMangleHandler:
             "requester_chat_id": str(requester_chat_id),
             "requester_user_id": str(requester_user_id),
         }
+        if source_update_id:
+            state[token]["source_update_id"] = source_update_id
         _write_state(self.state_file, state)
         return token
 
@@ -129,6 +144,7 @@ class TelegramMangleHandler:
         user_id: str,
         token: str,
         timeout: int,
+        update_id: str = "",
     ) -> None:
         rules = list_managed_mangle_rules(self._api(), self.settings)
         self.log(f"Telegram /mangle managed rules: {len(rules)} for chat {chat_id}")
@@ -144,6 +160,7 @@ class TelegramMangleHandler:
                     chat_id,
                     user_id,
                     now=int(self.now()),
+                    source_update_id=update_id,
                 ),
             ),
             timeout=timeout,
@@ -168,6 +185,7 @@ class TelegramMangleHandler:
         send_message: Callable[..., Any],
         token: str,
         timeout: int,
+        update_id: str = "",
     ) -> bool:
         if _command_name(text) != "/mangle":
             return False
@@ -179,7 +197,7 @@ class TelegramMangleHandler:
             send_message(token=token, chat_id=chat_id, text="Mangle control is disabled", timeout=timeout)
             return True
         try:
-            self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=token, timeout=timeout)
+            self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=token, timeout=timeout, update_id=update_id)
         except RetryableTelegramDeliveryError:
             raise
         except Exception as exc:
@@ -197,6 +215,7 @@ class TelegramMangleHandler:
         telegram_token: str,
         timeout: int,
         now: int,
+        update_id: str = "",
     ) -> bool:
         data = str(callback.get("data", ""))
         if not data.startswith("mangle:"):
@@ -222,7 +241,7 @@ class TelegramMangleHandler:
         action_token = parts[2] if len(parts) > 2 else ""
 
         if action_name == "refresh":
-            self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=telegram_token, timeout=timeout)
+            self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=telegram_token, timeout=timeout, update_id=update_id)
             answer_callback(callback_id, "Mangle status refreshed", False)
             return True
 
@@ -280,13 +299,19 @@ class TelegramMangleHandler:
                     "telegram mangle control",
                     lambda: set_mangle_rule_disabled(client.ensure_connected(), str(payload.get("rule_id", "")), disabled, self.settings),
                 )
-                answer_callback(callback_id, "Mangle rule updated", False)
-                self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=telegram_token, timeout=timeout)
-            except RetryableTelegramDeliveryError:
-                raise
             except Exception as exc:
                 self.log(f"TELEGRAM MANGLE UPDATE FAILED: {sanitize_exception_text(exc, self.settings.telegram_token)}")
                 answer_callback(callback_id, "Could not update mangle rule", True)
+                return True
+
+            try:
+                self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=telegram_token, timeout=timeout, update_id=update_id)
+            except Exception as exc:
+                self.log(
+                    "TELEGRAM MANGLE POST-WRITE STATUS FAILED: "
+                    f"{sanitize_exception_text(exc, self.settings.telegram_token)}"
+                )
+            answer_callback(callback_id, "Mangle rule updated", False)
             return True
 
         return False

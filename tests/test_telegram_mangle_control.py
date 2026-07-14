@@ -13,6 +13,7 @@ from mikroclear.bot.mangle_control import (
 from mikroclear.bot.settings import BotSettings
 from mikroclear.routeros.mangle import MangleRule
 from mikroclear.settings import Settings
+from mikroclear.telegram.commands import RetryableTelegramDeliveryError
 from mikroclear.telegram.mangle_handler import TelegramMangleHandler
 
 
@@ -220,6 +221,43 @@ class TelegramMangleHandlerTests(TestCase):
         self.assertTrue(handled)
         self.assertTrue(any("TELEGRAM MANGLE STATUS SEND FAILED" in call.args[0] for call in log.call_args_list))
 
+    def test_retrying_same_update_reuses_action_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            generated = iter(["token-one", "token-two"])
+            send = Mock()
+            handler = TelegramMangleHandler(
+                settings(tmp),
+                get_router_client=lambda: FakeClient(rows()),
+                log=Mock(),
+                token_factory=lambda: next(generated),
+            )
+
+            for _attempt in range(2):
+                handler.handle_message(
+                    text="/mangle",
+                    chat_id="chat-1",
+                    user_id="user-1",
+                    update_id="99",
+                    auth=self.auth(),
+                    send_message=send,
+                    token="token",
+                    timeout=7,
+                )
+
+            state = json.loads(
+                Path(tmp, "telegram-mangle-actions.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(list(state), ["token-one"])
+        callback_values = [
+            call.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+            for call in send.call_args_list
+        ]
+        self.assertEqual(
+            callback_values,
+            ["mangle:request:token-one", "mangle:request:token-one"],
+        )
+
     def test_request_returns_confirm_keyboard_without_routeros_update(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = FakeClient(rows())
@@ -319,6 +357,43 @@ class TelegramMangleHandlerTests(TestCase):
         self.assertTrue(handled)
         self.assertTrue(repeated)
         self.assertEqual(client.api.mangle.updated, [("*1", {"disabled": "yes"})])
+
+    def test_confirm_keeps_success_when_post_write_status_delivery_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(rows())
+            log = Mock()
+            answer = Mock()
+            handler = TelegramMangleHandler(
+                settings(tmp),
+                get_router_client=lambda: client,
+                log=log,
+            )
+            token = handler.create_action_token(
+                "*1",
+                "disable",
+                "chat-1",
+                "user-1",
+                now=100,
+            )
+
+            handled = handler.handle_callback(
+                callback={"id": "cb-1", "data": f"mangle:confirm:{token}", "message": {"chat": {"id": "chat-1"}}, "from": {"id": "user-1"}},
+                auth=self.auth(),
+                answer_callback=answer,
+                send_message=Mock(
+                    side_effect=RetryableTelegramDeliveryError("temporary")
+                ),
+                telegram_token="token",
+                timeout=7,
+                now=101,
+            )
+
+        self.assertTrue(handled)
+        self.assertEqual(client.api.mangle.updated, [("*1", {"disabled": "yes"})])
+        answer.assert_called_once_with("cb-1", "Mangle rule updated", False)
+        self.assertTrue(
+            any("POST-WRITE STATUS FAILED" in call.args[0] for call in log.call_args_list)
+        )
 
     def test_confirm_from_different_user_does_not_update_or_consume_token(self):
         with tempfile.TemporaryDirectory() as tmp:

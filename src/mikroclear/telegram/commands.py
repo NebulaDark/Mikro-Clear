@@ -140,9 +140,9 @@ def process_callback_update(
         return True
 
     result = handle_unblock_action(action)
-    answer_callback(callback_id, result.text, result.alert)
     if result.success:
         send_system_notification(result.text, "UNBLOCK")
+    answer_callback(callback_id, result.text, result.alert)
     return True
 
 

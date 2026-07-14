@@ -138,6 +138,54 @@ class TelegramUnblockTests(unittest.TestCase):
 
 
 class TelegramUnblockFlowTests(unittest.TestCase):
+    def test_retry_replays_original_callback_without_reexecuting_action(self):
+        from mikroclear.telegram.commands import RetryableTelegramDeliveryError
+
+        answer_callback = Mock(
+            side_effect=[
+                types.SimpleNamespace(
+                    ok=False,
+                    retryable=True,
+                    response_text="temporary",
+                ),
+                types.SimpleNamespace(ok=True),
+            ]
+        )
+        handle_unblock_action = Mock(
+            return_value=types.SimpleNamespace(
+                text="Unblocked 9.9.9.9",
+                success=True,
+                alert=False,
+            )
+        )
+        send_system_notification = Mock()
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=Mock(),
+            handle_unblock_action=handle_unblock_action,
+            answer_callback=answer_callback,
+            send_system_notification=send_system_notification,
+            log=Mock(),
+            now=Mock(return_value=100.0),
+        )
+        update = FakeTelegramResponse().json()["result"][0]
+
+        with patch(
+            "mikroclear.telegram.unblock.consume_unblock_token",
+            side_effect=[{"wanted_ip": "9.9.9.9"}, None],
+        ) as consume:
+            with self.assertRaises(RetryableTelegramDeliveryError):
+                poller.process_update(update)
+            poller.process_update(update)
+
+        self.assertEqual(consume.call_count, 1)
+        handle_unblock_action.assert_called_once()
+        self.assertEqual(
+            [call.args[1] for call in answer_callback.call_args_list],
+            ["Unblocked 9.9.9.9", "Unblocked 9.9.9.9"],
+        )
+        send_system_notification.assert_called_once_with("Unblocked 9.9.9.9", "UNBLOCK")
+
     def test_answer_callback_reports_retryable_transport_failures(self):
         from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
 
