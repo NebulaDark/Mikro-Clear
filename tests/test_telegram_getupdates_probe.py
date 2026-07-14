@@ -2,7 +2,9 @@ import importlib.util
 import json
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
+from unittest.mock import patch
 
 
 PROBE_PATH = (
@@ -22,6 +24,17 @@ def load_probe():
 
 
 class TelegramGetUpdatesProbeTests(TestCase):
+    def test_service_state_check_fails_closed_on_systemctl_error(self):
+        probe = load_probe()
+
+        with patch.object(
+            probe.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=1),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cannot verify"):
+                probe.is_service_active()
+
     def test_read_only_probe_never_calls_get_updates_or_exposes_token(self):
         probe = load_probe()
         calls = []

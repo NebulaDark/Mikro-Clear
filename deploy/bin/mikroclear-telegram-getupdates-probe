@@ -164,7 +164,13 @@ def is_service_active() -> bool:
         capture_output=True,
         check=False,
     )
-    return result.returncode == 0
+    if result.returncode == 0:
+        return True
+    if result.returncode == 3:
+        return False
+    raise RuntimeError(
+        f"cannot verify mikroclear.service state: systemctl exit {result.returncode}"
+    )
 
 
 def telegram_request(
