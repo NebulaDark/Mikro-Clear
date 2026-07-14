@@ -68,7 +68,11 @@ class TelegramPollingWorker:
         self._stop.set()
         if self._thread is None:
             return
-        self._thread.join(timeout=self.long_poll_seconds + 5)
+        request_timeout = max(
+            self.poller.settings.telegram_timeout,
+            self.long_poll_seconds + 5,
+        )
+        self._thread.join(timeout=request_timeout + 1)
         if self._thread.is_alive():
             self.log("Telegram polling worker did not stop before timeout")
 

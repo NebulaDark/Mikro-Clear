@@ -17,7 +17,10 @@ def wait_until(predicate, timeout=1.0):
 
 class FakePoller:
     def __init__(self, updates, failures=0):
-        self.settings = types.SimpleNamespace(telegram_token="token")
+        self.settings = types.SimpleNamespace(
+            telegram_token="token",
+            telegram_timeout=10,
+        )
         self.updates = list(updates)
         self.failures = failures
         self.fetch_calls = 0
@@ -125,3 +128,28 @@ class TelegramPollingWorkerTests(TestCase):
         time.sleep(0.02)
 
         self.assertEqual(poller.fetch_calls, fetch_calls)
+
+    def test_stop_waits_longer_than_configured_request_timeout(self):
+        class FakeThread:
+            def __init__(self):
+                self.join_timeouts = []
+
+            def join(self, timeout):
+                self.join_timeouts.append(timeout)
+
+            def is_alive(self):
+                return False
+
+        poller = FakePoller([])
+        poller.settings.telegram_timeout = 10
+        worker = TelegramPollingWorker(
+            poller,
+            long_poll_seconds=1,
+            log=lambda message: None,
+        )
+        thread = FakeThread()
+        worker._thread = thread
+
+        worker.stop()
+
+        self.assertGreater(thread.join_timeouts[0], 10)
