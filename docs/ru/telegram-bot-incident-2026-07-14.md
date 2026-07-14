@@ -132,8 +132,10 @@ Error processing Telegram updates; retry in 30s: HTTP 401: {"ok":false,"error_co
 - в бот отправлялся `/status`;
 - direct `getUpdates` с SELKS все равно возвращал пустой `result`.
 
-Это исключило `mikroclear.service` как consumer, который "съедает" update раньше
-журнала. Сообщение не попадало в Telegram update queue этого token вообще.
+Этот тест показал, что во время наблюдения update не получил остановленный
+`mikroclear.service`. Однако он не доказал Telegram-side root cause: перед
+отправкой `/status` не были последовательно подтверждены reset
+`allowed_updates=["message","callback_query"]` и post-reset readback.
 
 5. После ручного reset через direct `getUpdates(...allowed_updates=["message","callback_query"])`
    состояние временно исправлялось, но после reboot/prod reuse снова наблюдался
@@ -145,14 +147,19 @@ Error processing Telegram updates; retry in 30s: HTTP 401: {"ok":false,"error_co
 
 ## Вывод расследования
 
-На момент фиксации root cause внутри кода Mikro-Clear не подтвержден.
+На момент фиксации root cause не подтвержден ни внутри кода Mikro-Clear, ни на
+стороне Telegram.
 
-Наиболее вероятная причина:
+Рабочая гипотеза, которую еще нужно проверить контролируемым тестом:
 
 - Telegram-side state этого bot token/identity меняется вне SELKS;
 - в результате обычные `message` updates не доходят до production poller;
 - у бота остается только `callback_query` path, поэтому не появляются ни
   `/status` ответы, ни новые inline-кнопки/lock UI.
+
+Конкурирующие объяснения остаются открытыми: неполный reset subscription state,
+внешний consumer этого token или отличие фактически установленного polling
+artifact от локально проверенного кода.
 
 Что было исключено:
 
@@ -160,7 +167,7 @@ Error processing Telegram updates; retry in 30s: HTTP 401: {"ok":false,"error_co
 - отсутствие runtime bot settings;
 - отсутствие production polling diagnostics;
 - локальная ошибка `/status` formatter/dispatcher как первичный блокер;
-- второй consumer на самом SELKS host
+- второй обнаружимый consumer на самом SELKS host в момент проверки
   (`systemctl list-units` и `ps -ef` показывали только `mikroclear.service`).
 
 ## Изменения в текущей ветке
@@ -187,67 +194,41 @@ a015acb Restore mangle allowlist validation
 - расширены SELKS MCP runtime operations;
 - обновлены mangle-control diagnostics и disabled reporting.
 
-### Незакоммиченные изменения рабочего дерева
+### Изменения reliability-ветки
 
-На момент фиксации в рабочем дереве есть:
+В отдельной ветке подготовлены:
 
-1. `src/mikroclear/telegram/commands.py`
-   Что изменено:
-   - command response теперь проверяет результат `send_message`;
-   - при `ok=False` пишется явный лог
-     `Failed to send Telegram command response to chat ...`.
+- подтверждение update offset только после успешной обработки и доставки
+  command response;
+- long-polling worker с ограниченной очередью, retry и явным abandon marker;
+- read-only Telegram probe по умолчанию без вывода token и payload updates;
+- отдельный подтверждаемый reset `allowed_updates`, запрещенный при активном
+  `mikroclear.service`;
+- read-only MCP-сравнение production polling module с локальным artifact по
+  SHA-256 и unified diff.
 
-2. `tests/test_telegram_command_boundary.py`
-   Что изменено:
-   - добавлен тест на logging failed command response send.
-
-3. `scripts/install-selks-codex-sudoers.sh`
-   Что добавлено:
-   - root-side installer для helper scripts и sudoers policy на SELKS.
-
-4. `tests/test_selks_codex_sudoers_installer.py`
-   Что добавлено:
-   - тест на наличие installer script и ожидаемые target paths.
-
-5. `docs/ru/telegram-bot-incident-2026-07-14.md`
-   Что добавлено:
-   - этот отчет.
+Существующие SELKS sudo-команды не удалены и не сужены. Развертывание этих
+изменений на production в рамках подготовки ветки не выполнялось.
 
 ## Предложения
 
-### Рекомендуемый путь
+### Безопасная последовательность оператора
 
-Использовать новую Telegram bot identity, а не продолжать отладку старого бота:
+Каждый изменяющий production шаг требует отдельного явного подтверждения.
 
-1. создать нового бота у `@BotFather`;
-2. вписать новый token в `/etc/mikroclear/mikroclear.env`;
-3. перезапустить `mikroclear.service`;
-4. отправить новому боту `Start`, затем `/status`;
-5. сразу проверить:
-   - `getWebhookInfo`;
-   - `getUpdates`;
-   - journal polling markers.
+1. Запустить read-only probe и сохранить fingerprints config/runtime token,
+   identity из `getMe` и состояние `getWebhookInfo`.
+2. Сравнить production polling module с локальным artifact через
+   `compare_production_polling`; продолжать тест только при понятном результате.
+3. Остановить `mikroclear.service` с явным подтверждением оператора.
+4. Запустить подтвержденный reset `allowed_updates` и проверить post-reset
+   состояние до отправки тестового сообщения.
+5. Только после успешного readback отправить боту `/status`.
+6. Запустить service и проверить polling/update/response markers в journal.
+7. Использовать новую bot identity только как контролируемый эксперимент, если
+   совпадение artifact и token identity уже подтверждено, а воспроизводимость
+   проблемы сохранена.
 
-Причина рекомендации:
-
-- старый bot token/state уже демонстрировал устойчивый откат к
-  `allowed_updates=["callback_query"]`;
-- этот симптом повторялся даже после reboot и token replacement;
-- для production быстрее и надежнее проверить новый bot identity, чем
-  продолжать спорить с неочевидным Telegram-side состоянием старого.
-
-### Если продолжать по старому боту
-
-Нужно делать только как Telegram-side investigation:
-
-- перепроверить все внешние consumers этого token вне SELKS;
-- исключить другие CI secrets / test hosts / user scripts;
-- снять Telegram Bot API state сразу после каждого действия;
-- не трактовать отсутствие `/status` как локальный баг Mikro-Clear без
-  подтверждения `message update` в `getUpdates`.
-
-## Рекомендуемый commit этой фиксации
-
-```text
-Document Telegram bot incident and add SELKS sudoers installer
-```
+Если update снова не появляется, отдельно проверить внешние consumers token:
+CI secrets, test hosts и пользовательские скрипты. Отсутствие ответа `/status`
+само по себе не доказывает локальный дефект Mikro-Clear или Telegram-side сбой.
