@@ -43,7 +43,7 @@ def summarize_webhook(body: dict[str, Any]) -> dict[str, Any]:
     webhook = body.get("result", {}) if body.get("ok") else {}
     return {
         "ok": bool(body.get("ok")),
-        "url": webhook.get("url", ""),
+        "url_configured": bool(webhook.get("url")),
         "pending_update_count": webhook.get("pending_update_count", 0),
         "allowed_updates": webhook.get("allowed_updates", []),
     }
@@ -65,6 +65,12 @@ def summarize_updates(body: dict[str, Any]) -> dict[str, Any]:
             for update in updates
         ],
     }
+
+
+def require_api_success(body: dict[str, Any], method: str) -> None:
+    if not body.get("ok"):
+        description = str(body.get("description", "unknown Telegram API error"))
+        raise RuntimeError(f"{method} failed: {description}")
 
 
 def run_probe(
@@ -97,23 +103,35 @@ def run_probe(
             raise RuntimeError(
                 "mikroclear.service must be stopped before allowed_updates reset"
             )
-        result["webhook_before"] = summarize_webhook(
-            request("getWebhookInfo", config_token, None)
-        )
-        result["updates"] = summarize_updates(
-            request(
-                "getUpdates",
-                config_token,
-                {
-                    "offset": 0,
-                    "timeout": 0,
-                    "allowed_updates": json.dumps(ALLOWED_UPDATES),
-                },
+        webhook_before = request("getWebhookInfo", config_token, None)
+        require_api_success(webhook_before, "getWebhookInfo before reset")
+        result["webhook_before"] = summarize_webhook(webhook_before)
+        if service_active():
+            raise RuntimeError(
+                "mikroclear.service must remain stopped during allowed_updates reset"
             )
+        updates = request(
+            "getUpdates",
+            config_token,
+            {
+                "offset": 0,
+                "timeout": 0,
+                "allowed_updates": json.dumps(ALLOWED_UPDATES),
+            },
         )
-        result["webhook_after"] = summarize_webhook(
-            request("getWebhookInfo", config_token, None)
-        )
+        require_api_success(updates, "getUpdates")
+        result["updates"] = summarize_updates(updates)
+        if service_active():
+            raise RuntimeError(
+                "mikroclear.service started during allowed_updates reset"
+            )
+        webhook_after = request("getWebhookInfo", config_token, None)
+        require_api_success(webhook_after, "getWebhookInfo after reset")
+        result["webhook_after"] = summarize_webhook(webhook_after)
+        if set(result["webhook_after"]["allowed_updates"]) != set(ALLOWED_UPDATES):
+            raise RuntimeError(
+                "allowed_updates reset did not establish message and callback_query"
+            )
         return result
 
     identities = {
@@ -184,7 +202,12 @@ def telegram_request(
             params=params,
             timeout=10,
         )
-        return response.json()
+        body = response.json()
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"HTTP {response.status_code}: {body.get('description', 'Telegram API error')}"
+            )
+        return body
     except Exception as exc:
         message = str(exc).replace(token, "***MASKED***")
         raise RuntimeError(message) from None

@@ -65,6 +65,35 @@ class TelegramGetUpdatesProbeTests(TestCase):
         self.assertNotIn("token-a", json.dumps(result))
         self.assertTrue(result["tokens_match"])
 
+    def test_read_only_probe_does_not_expose_webhook_url(self):
+        probe = load_probe()
+        webhook_url = "https://example.invalid/token-a/private-hook"
+
+        def request(method, token, params=None):
+            if method == "getMe":
+                return {"ok": True, "result": {"id": 7, "username": "bot"}}
+            return {
+                "ok": True,
+                "result": {
+                    "url": webhook_url,
+                    "pending_update_count": 0,
+                    "allowed_updates": ["message"],
+                },
+            }
+
+        result = probe.run_probe(
+            ["probe"],
+            env={"MIKROCLEAR_TELEGRAM_TOKEN": "token-a"},
+            runtime_token="token-a",
+            request=request,
+            service_active=lambda: True,
+        )
+
+        serialized = json.dumps(result)
+        self.assertNotIn(webhook_url, serialized)
+        self.assertNotIn("private-hook", serialized)
+        self.assertTrue(result["identities"]["config"]["webhook"]["url_configured"])
+
     def test_reset_refuses_while_service_is_active(self):
         probe = load_probe()
 
@@ -75,6 +104,81 @@ class TelegramGetUpdatesProbeTests(TestCase):
                 runtime_token="token-a",
                 request=lambda method, token, params=None: {},
                 service_active=lambda: True,
+            )
+
+    def test_reset_rechecks_service_state_immediately_before_get_updates(self):
+        probe = load_probe()
+        states = iter([False, True])
+        calls = []
+
+        def request(method, token, params=None):
+            calls.append(method)
+            return {
+                "ok": True,
+                "result": {
+                    "url": "",
+                    "pending_update_count": 0,
+                    "allowed_updates": ["callback_query"],
+                },
+            }
+
+        with self.assertRaisesRegex(RuntimeError, "must remain stopped"):
+            probe.run_probe(
+                ["probe", "--reset-allowed-updates"],
+                env={"MIKROCLEAR_TELEGRAM_TOKEN": "token-a"},
+                runtime_token=None,
+                request=request,
+                service_active=lambda: next(states),
+            )
+
+        self.assertEqual(calls, ["getWebhookInfo"])
+
+    def test_reset_rejects_failed_get_updates_response(self):
+        probe = load_probe()
+
+        def request(method, token, params=None):
+            if method == "getUpdates":
+                return {"ok": False, "description": "Conflict"}
+            return {
+                "ok": True,
+                "result": {
+                    "url": "",
+                    "pending_update_count": 0,
+                    "allowed_updates": ["callback_query"],
+                },
+            }
+
+        with self.assertRaisesRegex(RuntimeError, "getUpdates failed"):
+            probe.run_probe(
+                ["probe", "--reset-allowed-updates"],
+                env={"MIKROCLEAR_TELEGRAM_TOKEN": "token-a"},
+                runtime_token=None,
+                request=request,
+                service_active=lambda: False,
+            )
+
+    def test_reset_rejects_unchanged_post_state(self):
+        probe = load_probe()
+
+        def request(method, token, params=None):
+            if method == "getUpdates":
+                return {"ok": True, "result": []}
+            return {
+                "ok": True,
+                "result": {
+                    "url": "",
+                    "pending_update_count": 0,
+                    "allowed_updates": ["callback_query"],
+                },
+            }
+
+        with self.assertRaisesRegex(RuntimeError, "did not establish"):
+            probe.run_probe(
+                ["probe", "--reset-allowed-updates"],
+                env={"MIKROCLEAR_TELEGRAM_TOKEN": "token-a"},
+                runtime_token=None,
+                request=request,
+                service_active=lambda: False,
             )
 
     def test_reset_records_post_state_without_update_payload(self):

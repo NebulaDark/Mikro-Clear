@@ -111,7 +111,7 @@ Error processing Telegram updates; retry in 30s: HTTP 401: {"ok":false,"error_co
 {
   "ok": true,
   "result": {
-    "url": "",
+    "url_configured": false,
     "pending_update_count": 0,
     "allowed_updates": ["callback_query"]
   }
