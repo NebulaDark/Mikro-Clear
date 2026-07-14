@@ -177,6 +177,50 @@ class TelegramGetUpdatesProbeTests(TestCase):
 
         self.assertEqual(sleep.call_count, 2)
 
+    def test_service_start_inhibitor_cleans_partial_mask_after_interrupt(self):
+        probe = load_probe()
+        calls = []
+        responses = iter(
+            [
+                SimpleNamespace(returncode=0, stdout="enabled\n", stderr=""),
+                InterruptedError("signal during mask"),
+                SimpleNamespace(
+                    returncode=1,
+                    stdout="masked-runtime\n",
+                    stderr="",
+                ),
+                SimpleNamespace(returncode=0, stdout="", stderr=""),
+            ]
+        )
+
+        def run(command, **kwargs):
+            calls.append(command)
+            result = next(responses)
+            if isinstance(result, BaseException):
+                raise result
+            return result
+
+        with TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "mask-owned"
+            with (
+                patch.object(probe, "MASK_MARKER", marker),
+                patch.object(probe.subprocess, "run", side_effect=run),
+                patch.object(probe.signal, "pthread_sigmask", return_value=set()),
+            ):
+                with self.assertRaisesRegex(InterruptedError, "signal during mask"):
+                    with probe.inhibit_service_start():
+                        pass
+
+        self.assertEqual(
+            calls,
+            [
+                ["/usr/bin/systemctl", "is-enabled", "mikroclear.service"],
+                ["/usr/bin/systemctl", "mask", "--runtime", "mikroclear.service"],
+                ["/usr/bin/systemctl", "is-enabled", "mikroclear.service"],
+                ["/usr/bin/systemctl", "unmask", "--runtime", "mikroclear.service"],
+            ],
+        )
+
     def test_service_state_check_fails_closed_on_systemctl_error(self):
         probe = load_probe()
 

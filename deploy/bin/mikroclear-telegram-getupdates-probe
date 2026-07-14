@@ -188,16 +188,46 @@ def inhibit_service_start():
                 return
             else:
                 MASK_MARKER.unlink(missing_ok=True)
-                mask = subprocess.run(
-                    ["/usr/bin/systemctl", "mask", "--runtime", SERVICE_NAME],
-                    text=True,
-                    capture_output=True,
-                    check=False,
+                blocked_signals = signal.pthread_sigmask(
+                    signal.SIG_BLOCK,
+                    {signal.SIGTERM},
                 )
+                try:
+                    try:
+                        mask = subprocess.run(
+                            ["/usr/bin/systemctl", "mask", "--runtime", SERVICE_NAME],
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                    except BaseException:
+                        state_after_error = subprocess.run(
+                            ["/usr/bin/systemctl", "is-enabled", SERVICE_NAME],
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                        owns_runtime_mask = (
+                            state_after_error.stdout.strip() == "masked-runtime"
+                        )
+                        raise
+                    if mask.returncode == 0:
+                        owns_runtime_mask = True
+                    else:
+                        state_after_error = subprocess.run(
+                            ["/usr/bin/systemctl", "is-enabled", SERVICE_NAME],
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                        owns_runtime_mask = (
+                            state_after_error.stdout.strip() == "masked-runtime"
+                        )
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, blocked_signals)
                 if mask.returncode != 0:
                     detail = mask.stderr.strip() or f"systemctl exit {mask.returncode}"
                     raise RuntimeError(f"cannot inhibit mikroclear.service startup: {detail}")
-                owns_runtime_mask = True
                 write_mask_marker(current_runtime_mask_identity())
 
             yield
