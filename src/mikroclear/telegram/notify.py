@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 import requests
 
-from mikroclear.security import mask_known_secret
+from mikroclear.security import mask_known_secret, sanitize_exception_text
 from mikroclear.telegram.formatting import escape_html_safe, format_alert_message, format_system_message
 from mikroclear.telegram.rate_limit import TelegramRateLimitLock
 from mikroclear.telegram.unblock import build_unblock_keyboard, create_unblock_token
@@ -17,6 +17,7 @@ class TelegramSendResult:
     status_code: int = 0
     response_text: str = ""
     retry_after: int = 0
+    retryable: bool = False
 
 
 def send_telegram_message(
@@ -35,11 +36,18 @@ def send_telegram_message(
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup if isinstance(reply_markup, str) else json.dumps(reply_markup)
 
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data=payload,
-        timeout=timeout,
-    )
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=payload,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return TelegramSendResult(
+            ok=False,
+            response_text=sanitize_exception_text(exc, token),
+            retryable=True,
+        )
     retry_after = 0
     if response.status_code == 429:
         try:
@@ -52,6 +60,7 @@ def send_telegram_message(
         status_code=response.status_code,
         response_text=mask_known_secret(response.text, token),
         retry_after=retry_after,
+        retryable=response.status_code == 429 or response.status_code >= 500,
     )
 
 

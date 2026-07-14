@@ -8,6 +8,10 @@ from mikroclear.telegram.formatting import escape_html_safe
 from mikroclear.telegram.unblock import build_unblock_confirm_keyboard
 
 
+class RetryableTelegramDeliveryError(RuntimeError):
+    """Signal a temporary response delivery failure to the polling lifecycle."""
+
+
 def process_message_command(
     *,
     text: str,
@@ -36,6 +40,10 @@ def process_message_command(
     )
     if getattr(response, "ok", True) is False:
         response_text = str(getattr(response, "response_text", "")).strip()
+        if getattr(response, "retryable", False):
+            raise RetryableTelegramDeliveryError(
+                response_text or "temporary Telegram delivery failure"
+            )
         if response_text:
             log(f"Failed to send Telegram command response to chat {chat_id}: {response_text}")
         else:
@@ -130,4 +138,8 @@ def process_callback_update(
     return True
 
 
-__all__ = ["process_callback_update", "process_message_command"]
+__all__ = [
+    "RetryableTelegramDeliveryError",
+    "process_callback_update",
+    "process_message_command",
+]

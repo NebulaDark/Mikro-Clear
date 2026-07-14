@@ -81,26 +81,48 @@ class TelegramUpdatePoller:
         self.update_offset = 0
 
     def process_updates(self) -> None:
-        if (
-            not self.settings.enable_telegram
-            or not self.settings.telegram_token
-            or not self.settings.telegram_chatid
-        ):
+        updates = self.fetch_updates(long_poll_seconds=0)
+        if updates is None:
             return
+        for update in updates:
+            try:
+                self.process_update(update)
+            except Exception as exc:
+                self._record_failure(
+                    sanitize_exception_text(exc, self.settings.telegram_token)
+                )
+                break
+            self.acknowledge_update(update)
 
+    def _enabled(self) -> bool:
+        return bool(
+            self.settings.enable_telegram
+            and self.settings.telegram_token
+            and self.settings.telegram_chatid
+        )
+
+    def fetch_updates(
+        self,
+        *,
+        long_poll_seconds: int = 0,
+    ) -> list[dict[str, Any]] | None:
+        if not self._enabled():
+            return None
         current_time = self.now()
         if not self.backoff.should_poll(current_time):
-            return
-
+            return None
         try:
             response = self.http_get(
                 f"https://api.telegram.org/bot{self.settings.telegram_token}/getUpdates",
                 params={
                     "offset": self.update_offset,
-                    "timeout": 0,
+                    "timeout": long_poll_seconds,
                     "allowed_updates": ujson.dumps(["callback_query", "message"]),
                 },
-                timeout=self.settings.telegram_timeout,
+                timeout=max(
+                    self.settings.telegram_timeout,
+                    long_poll_seconds + 5,
+                ),
             )
             if response.status_code != 200:
                 error_text = mask_known_secret(
@@ -120,19 +142,23 @@ class TelegramUpdatePoller:
             self._record_failure(sanitize_exception_text(exc, self.settings.telegram_token))
             return
 
-        updates = body.get("result", [])
+        updates = list(body.get("result", []))
         if updates:
             self.log(
                 "Telegram updates received: "
                 f"{len(updates)} item(s), current offset={self.update_offset}"
             )
 
-        for update in updates:
-            update_id = int(update.get("update_id", 0))
-            self.update_offset = max(self.update_offset, update_id + 1)
-            if self._process_message(update):
-                continue
-            self._process_callback(update)
+        return updates
+
+    def process_update(self, update: dict[str, Any]) -> None:
+        if self._process_message(update):
+            return
+        self._process_callback(update)
+
+    def acknowledge_update(self, update: dict[str, Any]) -> None:
+        update_id = int(update["update_id"])
+        self.update_offset = max(self.update_offset, update_id + 1)
 
     def _record_failure(self, error_text: str) -> None:
         should_log, delay = self.backoff.record_failure(self.now(), error_text)

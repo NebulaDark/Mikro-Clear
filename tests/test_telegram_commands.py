@@ -68,6 +68,29 @@ class TelegramCommandTests(unittest.TestCase):
         self.assertEqual(send.call_args.kwargs["chat_id"], "chat-1")
         self.assertIn("Mikro-Clear status", send.call_args.kwargs["text"])
 
+    def test_retryable_handler_failure_does_not_advance_offset(self):
+        poller = TelegramUpdatePoller(
+            Settings(enable_telegram=True, telegram_token="token", telegram_chatid="chat-1"),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=Mock(),
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            http_get=Mock(return_value=FakeMessageResponse()),
+            send_message=Mock(
+                return_value=types.SimpleNamespace(
+                    ok=False,
+                    retryable=True,
+                    response_text="temporary",
+                )
+            ),
+        )
+
+        poller.process_updates()
+
+        self.assertEqual(poller.update_offset, 0)
+
     def test_process_updates_requests_message_and_callback_updates(self):
         http_get = Mock(return_value=FakeMessageResponse())
         poller = TelegramUpdatePoller(

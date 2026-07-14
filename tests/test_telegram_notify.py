@@ -146,6 +146,30 @@ class TelegramNotifyDeliveryTests(TestCase):
         self.assertEqual(result.status_code, 429)
         self.assertEqual(result.retry_after, 12)
         self.assertEqual(result.response_text, "too many")
+        self.assertTrue(result.retryable)
+
+    def test_send_telegram_message_returns_retryable_result_for_network_error(self):
+        with patch(
+            "mikroclear.telegram.notify.requests.post",
+            side_effect=RuntimeError("failed token-secret"),
+        ):
+            result = send_telegram_message("token-secret", "chat", "hello", timeout=7)
+
+        self.assertFalse(result.ok)
+        self.assertTrue(result.retryable)
+        self.assertNotIn("token-secret", result.response_text)
+
+    def test_send_telegram_message_classifies_server_and_client_errors(self):
+        cases = ((503, True), (400, False))
+
+        for status_code, retryable in cases:
+            with self.subTest(status_code=status_code):
+                response = Mock(status_code=status_code, text="failed")
+                with patch("mikroclear.telegram.notify.requests.post", return_value=response):
+                    result = send_telegram_message("token", "chat", "hello", timeout=7)
+
+                self.assertFalse(result.ok)
+                self.assertEqual(result.retryable, retryable)
 
     def test_send_telegram_message_masks_token_in_response_text(self):
         response = Mock(status_code=500, text="failed /bot123456:ABC_def-123/sendMessage")
