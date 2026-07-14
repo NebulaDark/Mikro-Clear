@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import subprocess
 import sys
@@ -73,6 +74,31 @@ def require_api_success(body: dict[str, Any], method: str) -> None:
         raise RuntimeError(f"{method} failed: {description}")
 
 
+@contextmanager
+def inhibit_service_start():
+    mask = subprocess.run(
+        ["/usr/bin/systemctl", "mask", "--runtime", SERVICE_NAME],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if mask.returncode != 0:
+        detail = mask.stderr.strip() or f"systemctl exit {mask.returncode}"
+        raise RuntimeError(f"cannot inhibit mikroclear.service startup: {detail}")
+    try:
+        yield
+    finally:
+        unmask = subprocess.run(
+            ["/usr/bin/systemctl", "unmask", "--runtime", SERVICE_NAME],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if unmask.returncode != 0:
+            detail = unmask.stderr.strip() or f"systemctl exit {unmask.returncode}"
+            raise RuntimeError(f"cannot remove mikroclear.service startup inhibitor: {detail}")
+
+
 def run_probe(
     argv: list[str],
     *,
@@ -80,6 +106,7 @@ def run_probe(
     runtime_token: str | None,
     request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
     service_active: Callable[[], bool],
+    service_inhibitor: Callable[[], Any] = nullcontext,
 ) -> dict[str, Any]:
     config_token = env.get("MIKROCLEAR_TELEGRAM_TOKEN", "")
     if not config_token:
@@ -99,39 +126,40 @@ def run_probe(
     }
 
     if reset:
-        if service_active():
-            raise RuntimeError(
-                "mikroclear.service must be stopped before allowed_updates reset"
+        with service_inhibitor():
+            if service_active():
+                raise RuntimeError(
+                    "mikroclear.service must be stopped before allowed_updates reset"
+                )
+            webhook_before = request("getWebhookInfo", config_token, None)
+            require_api_success(webhook_before, "getWebhookInfo before reset")
+            result["webhook_before"] = summarize_webhook(webhook_before)
+            if service_active():
+                raise RuntimeError(
+                    "mikroclear.service must remain stopped during allowed_updates reset"
+                )
+            updates = request(
+                "getUpdates",
+                config_token,
+                {
+                    "offset": 0,
+                    "timeout": 0,
+                    "allowed_updates": json.dumps(ALLOWED_UPDATES),
+                },
             )
-        webhook_before = request("getWebhookInfo", config_token, None)
-        require_api_success(webhook_before, "getWebhookInfo before reset")
-        result["webhook_before"] = summarize_webhook(webhook_before)
-        if service_active():
-            raise RuntimeError(
-                "mikroclear.service must remain stopped during allowed_updates reset"
-            )
-        updates = request(
-            "getUpdates",
-            config_token,
-            {
-                "offset": 0,
-                "timeout": 0,
-                "allowed_updates": json.dumps(ALLOWED_UPDATES),
-            },
-        )
-        require_api_success(updates, "getUpdates")
-        result["updates"] = summarize_updates(updates)
-        if service_active():
-            raise RuntimeError(
-                "mikroclear.service started during allowed_updates reset"
-            )
-        webhook_after = request("getWebhookInfo", config_token, None)
-        require_api_success(webhook_after, "getWebhookInfo after reset")
-        result["webhook_after"] = summarize_webhook(webhook_after)
-        if set(result["webhook_after"]["allowed_updates"]) != set(ALLOWED_UPDATES):
-            raise RuntimeError(
-                "allowed_updates reset did not establish message and callback_query"
-            )
+            require_api_success(updates, "getUpdates")
+            result["updates"] = summarize_updates(updates)
+            if service_active():
+                raise RuntimeError(
+                    "mikroclear.service started during allowed_updates reset"
+                )
+            webhook_after = request("getWebhookInfo", config_token, None)
+            require_api_success(webhook_after, "getWebhookInfo after reset")
+            result["webhook_after"] = summarize_webhook(webhook_after)
+            if set(result["webhook_after"]["allowed_updates"]) != set(ALLOWED_UPDATES):
+                raise RuntimeError(
+                    "allowed_updates reset did not establish message and callback_query"
+                )
         return result
 
     identities = {
@@ -224,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
             runtime_token=read_runtime_token(),
             request=telegram_request,
             service_active=is_service_active,
+            service_inhibitor=inhibit_service_start,
         )
     except Exception as exc:
         message = str(exc).replace(token, "***MASKED***") if token else str(exc)

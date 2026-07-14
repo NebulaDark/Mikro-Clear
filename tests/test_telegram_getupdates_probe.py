@@ -1,5 +1,6 @@
 import importlib.util
 import json
+from contextlib import contextmanager
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,37 @@ def load_probe():
 
 
 class TelegramGetUpdatesProbeTests(TestCase):
+    def test_service_start_inhibitor_masks_and_unmasks_runtime_unit(self):
+        probe = load_probe()
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0, stderr="")
+
+        with patch.object(probe.subprocess, "run", side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, "body failed"):
+                with probe.inhibit_service_start():
+                    raise RuntimeError("body failed")
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "/usr/bin/systemctl",
+                    "mask",
+                    "--runtime",
+                    "mikroclear.service",
+                ],
+                [
+                    "/usr/bin/systemctl",
+                    "unmask",
+                    "--runtime",
+                    "mikroclear.service",
+                ],
+            ],
+        )
+
     def test_service_state_check_fails_closed_on_systemctl_error(self):
         probe = load_probe()
 
@@ -105,6 +137,52 @@ class TelegramGetUpdatesProbeTests(TestCase):
                 request=lambda method, token, params=None: {},
                 service_active=lambda: True,
             )
+
+    def test_reset_holds_service_inhibitor_for_all_api_calls(self):
+        probe = load_probe()
+        inhibited = []
+
+        @contextmanager
+        def inhibitor():
+            inhibited.append(True)
+            try:
+                yield
+            finally:
+                inhibited.pop()
+
+        def request(method, token, params=None):
+            self.assertEqual(inhibited, [True])
+            if method == "getUpdates":
+                return {"ok": True, "result": []}
+            return {
+                "ok": True,
+                "result": {
+                    "url": "",
+                    "pending_update_count": 0,
+                    "allowed_updates": (
+                        ["message", "callback_query"]
+                        if method == "getWebhookInfo" and request.calls > 1
+                        else ["callback_query"]
+                    ),
+                },
+            }
+
+        request.calls = 0
+
+        def counted_request(method, token, params=None):
+            request.calls += 1
+            return request(method, token, params)
+
+        probe.run_probe(
+            ["probe", "--reset-allowed-updates"],
+            env={"MIKROCLEAR_TELEGRAM_TOKEN": "token-a"},
+            runtime_token=None,
+            request=counted_request,
+            service_active=lambda: False,
+            service_inhibitor=inhibitor,
+        )
+
+        self.assertEqual(inhibited, [])
 
     def test_reset_rechecks_service_state_immediately_before_get_updates(self):
         probe = load_probe()

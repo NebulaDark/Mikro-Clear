@@ -221,7 +221,8 @@ a015acb Restore mangle allowlist validation
 2. Сравнить production polling module с локальным artifact через
    `compare_production_polling`; продолжать тест только при понятном результате.
 3. Остановить `mikroclear.service` с явным подтверждением оператора.
-4. Запустить подтвержденный reset `allowed_updates` и проверить post-reset
+4. Запустить подтвержденный reset `allowed_updates`. Helper временно применяет
+   runtime mask к unit, снимает его после операции и проверяет post-reset
    состояние до отправки тестового сообщения.
 5. Только после успешного readback отправить боту `/status`.
 6. Запустить service и проверить polling/update/response markers в journal.
