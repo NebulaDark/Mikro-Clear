@@ -3,7 +3,10 @@ import types
 from threading import Event
 from unittest import TestCase
 
-from mikroclear.telegram.polling_worker import TelegramPollingWorker
+from mikroclear.telegram.polling_worker import (
+    TelegramPollingWorker,
+    TelegramWorkerFatalError,
+)
 
 
 def wait_until(predicate, timeout=1.0):
@@ -109,8 +112,12 @@ class TelegramPollingWorkerTests(TestCase):
 
         self.assertTrue(self.drain_until(worker, lambda: poller.acked == [30]))
         self.assertEqual(poller.processed, [30, 30, 30, 30, 30])
-        self.assertEqual(len(logs), 1)
-        self.assertIn("Abandoned Telegram update 30 after 5 attempts", logs[0])
+        abandoned_logs = [
+            message
+            for message in logs
+            if "Abandoned Telegram update 30 after 5 attempts" in message
+        ]
+        self.assertEqual(len(abandoned_logs), 1)
 
     def test_stop_prevents_additional_fetches(self):
         poller = FakePoller([])
@@ -153,3 +160,57 @@ class TelegramPollingWorkerTests(TestCase):
         worker.stop()
 
         self.assertGreater(thread.join_timeouts[0], 10)
+
+    def test_fatal_worker_error_is_sanitized_and_reported_by_health_check(self):
+        class CrashingPoller(FakePoller):
+            def fetch_updates(self, *, long_poll_seconds):
+                raise RuntimeError("fatal token")
+
+        logs = []
+        poller = CrashingPoller([])
+        worker = TelegramPollingWorker(poller, long_poll_seconds=25, log=logs.append)
+        worker.start()
+
+        self.assertTrue(
+            wait_until(lambda: worker._thread is not None and not worker._thread.is_alive())
+        )
+        with self.assertRaisesRegex(TelegramWorkerFatalError, "fatal \\*\\*\\*MASKED\\*\\*\\*"):
+            worker.check_health()
+        self.assertNotIn("token", " ".join(logs))
+
+    def test_health_check_succeeds_before_start(self):
+        worker = TelegramPollingWorker(
+            FakePoller([]),
+            long_poll_seconds=25,
+            log=lambda message: None,
+        )
+
+        worker.check_health()
+
+    def test_health_check_succeeds_while_empty_worker_is_alive(self):
+        poller = FakePoller([])
+        worker = TelegramPollingWorker(
+            poller,
+            long_poll_seconds=25,
+            log=lambda message: None,
+        )
+        self.addCleanup(worker.stop)
+
+        worker.start()
+        self.assertTrue(poller.fetched.wait(1.0))
+
+        worker.check_health()
+
+    def test_health_check_succeeds_after_stop(self):
+        poller = FakePoller([])
+        worker = TelegramPollingWorker(
+            poller,
+            long_poll_seconds=25,
+            log=lambda message: None,
+        )
+
+        worker.start()
+        self.assertTrue(poller.fetched.wait(1.0))
+        worker.stop()
+
+        worker.check_health()

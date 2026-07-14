@@ -16,6 +16,10 @@ class PendingTelegramUpdate:
     error_text: str = ""
 
 
+class TelegramWorkerFatalError(RuntimeError):
+    """Raised when a started polling worker exits unexpectedly."""
+
+
 class TelegramPollingWorker:
     RETRY_DELAYS = (5, 10, 20, 40)
 
@@ -34,16 +38,29 @@ class TelegramPollingWorker:
         self._queue: Queue[PendingTelegramUpdate] = Queue(maxsize=1)
         self._stop = Event()
         self._thread: Thread | None = None
+        self._started = False
+        self._stopping = False
+        self._fatal_error: str | None = None
 
     def start(self) -> None:
         if self._thread is not None:
             return
+        self._started = True
         self._thread = Thread(
-            target=self._run,
+            target=self._run_guarded,
             name="telegram-long-poll",
             daemon=True,
         )
         self._thread.start()
+        self.log("Telegram polling worker started")
+
+    def check_health(self) -> None:
+        if not self._started or self._stopping:
+            return
+        if self._thread is not None and self._thread.is_alive():
+            return
+        detail = self._fatal_error or "thread exited without an error"
+        raise TelegramWorkerFatalError(f"Telegram polling worker is not running: {detail}")
 
     def drain_ready(self) -> bool:
         try:
@@ -65,6 +82,7 @@ class TelegramPollingWorker:
         return True
 
     def stop(self) -> None:
+        self._stopping = True
         self._stop.set()
         if self._thread is None:
             return
@@ -75,6 +93,19 @@ class TelegramPollingWorker:
         self._thread.join(timeout=request_timeout + 1)
         if self._thread.is_alive():
             self.log("Telegram polling worker did not stop before timeout")
+
+    def _run_guarded(self) -> None:
+        try:
+            self._run()
+        except Exception as exc:
+            self._fatal_error = sanitize_exception_text(
+                exc,
+                self.poller.settings.telegram_token,
+            )
+            self.log(
+                f"Telegram polling worker failed: {type(exc).__name__}: "
+                f"{self._fatal_error}"
+            )
 
     def _publish(self, pending: PendingTelegramUpdate) -> bool:
         while not self._stop.is_set():
@@ -131,4 +162,4 @@ class TelegramPollingWorker:
         return False
 
 
-__all__ = ["TelegramPollingWorker"]
+__all__ = ["TelegramPollingWorker", "TelegramWorkerFatalError"]
