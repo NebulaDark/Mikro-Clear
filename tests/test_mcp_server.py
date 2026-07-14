@@ -299,6 +299,28 @@ class McpServerSshTests(TestCase):
         self.assertEqual(output, "telegram-probe")
         self.assertEqual(run_ssh.call_args.args[0], "sudo -n /usr/local/sbin/mikroclear-telegram-getupdates-probe")
 
+    def test_reset_telegram_updates_requires_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.reset_mikroclear_telegram_updates()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_reset_telegram_updates_uses_exact_helper_argument(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "telegram-reset"
+            output = server.reset_mikroclear_telegram_updates(confirm=True)
+
+        self.assertEqual(output, "telegram-reset")
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "sudo -n /usr/local/sbin/mikroclear-telegram-getupdates-probe --reset-allowed-updates",
+        )
+
     def test_daemon_reload_requires_confirmation(self):
         server = load_server()
 

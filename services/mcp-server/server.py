@@ -176,6 +176,16 @@ def probe_mikroclear_telegram_updates() -> str:
 
 
 @mcp.tool()
+def reset_mikroclear_telegram_updates(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to reset Telegram allowed_updates without confirm=True."
+    return run_ssh(
+        f"sudo -n {TELEGRAM_UPDATES_PROBE} --reset-allowed-updates",
+        30,
+    )
+
+
+@mcp.tool()
 def tail_suricata_eve(lines: int = 20) -> str:
     lines = _fixed_size(lines, (20, 50, 100))
     return run_ssh(

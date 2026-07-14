@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
+import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
+from typing import Any, Callable
 
 import requests
 
 
 ENV_PATH = Path("/etc/mikroclear/mikroclear.env")
 ALLOWED_UPDATES = ["message", "callback_query"]
+SERVICE_NAME = "mikroclear.service"
 
 
-def load_env() -> dict[str, str]:
+def load_env(path: Path = ENV_PATH) -> dict[str, str]:
     result: dict[str, str] = {}
-    for line in ENV_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         value = line.strip()
         if not value or value.startswith("#") or "=" not in value:
             continue
@@ -21,27 +26,184 @@ def load_env() -> dict[str, str]:
     return result
 
 
-def main() -> int:
-    env = load_env()
-    token = env.get("MIKROCLEAR_TELEGRAM_TOKEN", "")
-    if not token:
-        print("MIKROCLEAR_TELEGRAM_TOKEN is empty", file=sys.stderr)
-        return 2
+def token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
-    base_url = f"https://api.telegram.org/bot{token}"
-    webhook = requests.get(f"{base_url}/getWebhookInfo", timeout=10)
-    updates = requests.get(
-        f"{base_url}/getUpdates",
-        params={"offset": 0, "timeout": 0, "allowed_updates": json.dumps(ALLOWED_UPDATES)},
-        timeout=10,
+
+def summarize_get_me(body: dict[str, Any]) -> dict[str, Any]:
+    user = body.get("result", {}) if body.get("ok") else {}
+    return {
+        "ok": bool(body.get("ok")),
+        "id": user.get("id"),
+        "username": user.get("username"),
+    }
+
+
+def summarize_webhook(body: dict[str, Any]) -> dict[str, Any]:
+    webhook = body.get("result", {}) if body.get("ok") else {}
+    return {
+        "ok": bool(body.get("ok")),
+        "url": webhook.get("url", ""),
+        "pending_update_count": webhook.get("pending_update_count", 0),
+        "allowed_updates": webhook.get("allowed_updates", []),
+    }
+
+
+def summarize_updates(body: dict[str, Any]) -> dict[str, Any]:
+    updates = body.get("result", []) if body.get("ok") else []
+    return {
+        "ok": bool(body.get("ok")),
+        "count": len(updates),
+        "updates": [
+            {
+                "update_id": update.get("update_id"),
+                "type": next(
+                    (key for key in update if key != "update_id"),
+                    "unknown",
+                ),
+            }
+            for update in updates
+        ],
+    }
+
+
+def run_probe(
+    argv: list[str],
+    *,
+    env: dict[str, str],
+    runtime_token: str | None,
+    request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
+    service_active: Callable[[], bool],
+) -> dict[str, Any]:
+    config_token = env.get("MIKROCLEAR_TELEGRAM_TOKEN", "")
+    if not config_token:
+        raise RuntimeError("MIKROCLEAR_TELEGRAM_TOKEN is empty")
+
+    arguments = argv[1:]
+    if any(argument != "--reset-allowed-updates" for argument in arguments):
+        raise RuntimeError("usage: mikroclear-telegram-getupdates-probe [--reset-allowed-updates]")
+    reset = "--reset-allowed-updates" in arguments
+    result: dict[str, Any] = {
+        "mode": "reset-allowed-updates" if reset else "read-only",
+        "config_token_fingerprint": token_fingerprint(config_token),
+        "runtime_token_fingerprint": (
+            token_fingerprint(runtime_token) if runtime_token else None
+        ),
+        "tokens_match": bool(runtime_token and runtime_token == config_token),
+    }
+
+    if reset:
+        if service_active():
+            raise RuntimeError(
+                "mikroclear.service must be stopped before allowed_updates reset"
+            )
+        result["webhook_before"] = summarize_webhook(
+            request("getWebhookInfo", config_token, None)
+        )
+        result["updates"] = summarize_updates(
+            request(
+                "getUpdates",
+                config_token,
+                {
+                    "offset": 0,
+                    "timeout": 0,
+                    "allowed_updates": json.dumps(ALLOWED_UPDATES),
+                },
+            )
+        )
+        result["webhook_after"] = summarize_webhook(
+            request("getWebhookInfo", config_token, None)
+        )
+        return result
+
+    identities = {
+        "config": {
+            "get_me": summarize_get_me(request("getMe", config_token, None)),
+            "webhook": summarize_webhook(
+                request("getWebhookInfo", config_token, None)
+            ),
+        }
+    }
+    if runtime_token and runtime_token != config_token:
+        identities["runtime"] = {
+            "get_me": summarize_get_me(request("getMe", runtime_token, None)),
+            "webhook": summarize_webhook(
+                request("getWebhookInfo", runtime_token, None)
+            ),
+        }
+    result["identities"] = identities
+    return result
+
+
+def read_runtime_token() -> str | None:
+    result = subprocess.run(
+        ["/usr/bin/systemctl", "show", "-p", "MainPID", "--value", SERVICE_NAME],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    pid = result.stdout.strip()
+    if not pid or pid == "0":
+        return None
+    try:
+        entries = os.fsdecode(Path(f"/proc/{pid}/environ").read_bytes()).split("\0")
+    except OSError:
+        return None
+    prefix = "MIKROCLEAR_TELEGRAM_TOKEN="
+    return next(
+        (entry[len(prefix):] for entry in entries if entry.startswith(prefix)),
+        None,
     )
 
-    print(f"webhook_status={webhook.status_code}")
-    print(json.dumps(webhook.json(), indent=2, ensure_ascii=False))
-    print(f"updates_status={updates.status_code}")
-    print(json.dumps(updates.json(), indent=2, ensure_ascii=False))
+
+def is_service_active() -> bool:
+    result = subprocess.run(
+        ["/usr/bin/systemctl", "is-active", "--quiet", SERVICE_NAME],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def telegram_request(
+    method: str,
+    token: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        response = requests.get(
+            f"https://api.telegram.org/bot{token}/{method}",
+            params=params,
+            timeout=10,
+        )
+        return response.json()
+    except Exception as exc:
+        message = str(exc).replace(token, "***MASKED***")
+        raise RuntimeError(message) from None
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = argv or sys.argv
+    env = load_env()
+    token = env.get("MIKROCLEAR_TELEGRAM_TOKEN", "")
+    try:
+        result = run_probe(
+            arguments,
+            env=env,
+            runtime_token=read_runtime_token(),
+            request=telegram_request,
+            service_active=is_service_active,
+        )
+    except Exception as exc:
+        message = str(exc).replace(token, "***MASKED***") if token else str(exc)
+        print(message, file=sys.stderr)
+        return 2
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))

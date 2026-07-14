@@ -18,6 +18,7 @@ mcp-selks ALL=(root) NOPASSWD: \
     /usr/local/sbin/mikroclear-mask-env /etc/mikrocata/mikrocataTZSP0.env, \
     /usr/local/sbin/mikroclear-service-env, \
     /usr/local/sbin/mikroclear-telegram-getupdates-probe, \
+    /usr/local/sbin/mikroclear-telegram-getupdates-probe --reset-allowed-updates, \
     /usr/bin/systemctl daemon-reload, \
     /usr/bin/tail -n 20 /opt/SELKS/docker/containers-data/suricata/logs/eve.json, \
     /usr/bin/tail -n 50 /opt/SELKS/docker/containers-data/suricata/logs/eve.json, \

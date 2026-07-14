@@ -51,6 +51,10 @@ class SudoersPolicyTests(TestCase):
         self.assertIn("/usr/local/sbin/mikroclear-mask-env /etc/mikroclear/mikroclear.env", text)
         self.assertIn("/usr/local/sbin/mikroclear-service-env", text)
         self.assertIn("/usr/local/sbin/mikroclear-telegram-getupdates-probe", text)
+        self.assertIn(
+            "/usr/local/sbin/mikroclear-telegram-getupdates-probe --reset-allowed-updates",
+            text,
+        )
         self.assertIn("/usr/bin/journalctl -u mikroclear.service -n 100 --no-pager", text)
         self.assertIn("/usr/bin/journalctl -u mikroclear.service -n 300 --no-pager", text)
         self.assertIn("/usr/bin/journalctl -u mikroclear.service -n 500 --no-pager", text)
