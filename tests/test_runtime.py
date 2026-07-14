@@ -33,7 +33,8 @@ class FakeNotifier:
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, calls):
+        self.calls = calls
         self.connected = False
         self.closed = False
         self.heartbeats = []
@@ -46,6 +47,7 @@ class FakeClient:
 
     def close(self):
         self.closed = True
+        self.calls.append(("client_close",))
 
 
 class FakeClock:
@@ -61,7 +63,7 @@ class FakeClock:
 class RuntimeServiceTests(TestCase):
     def make_dependencies(self, clock=None):
         calls = []
-        client = FakeClient()
+        client = FakeClient(calls)
         watch_manager = FakeWatchManager()
         notifier_box = {}
 
@@ -87,7 +89,9 @@ class RuntimeServiceTests(TestCase):
             seek_to_end=lambda path: calls.append(("seek_to_end", path)),
             get_router_client=lambda: client,
             read_ignore_list=lambda path: calls.append(("read_ignore_list", path)),
+            start_telegram_worker=lambda: calls.append(("start_telegram_worker",)),
             process_telegram_updates=lambda: calls.append(("process_telegram_updates",)),
+            stop_telegram_worker=lambda: calls.append(("stop_telegram_worker",)),
             log=lambda message: calls.append(("log", message)),
             debug_traceback=lambda: "traceback",
             sleep=lambda seconds: calls.append(("sleep", seconds)),
@@ -110,6 +114,7 @@ class RuntimeServiceTests(TestCase):
         self.assertIn(("seek_to_end", "/var/log/eve.json"), calls)
         self.assertIn(("read_ignore_list", "/state/ignore.conf"), calls)
         self.assertIn(("send_system_notification", "Mikro-Clear v1.0 started", "START"), calls)
+        self.assertIn(("start_telegram_worker",), calls)
         self.assertIn("notifier", notifier_box)
 
     def test_install_signal_handlers_registers_term_and_int(self):
@@ -120,7 +125,7 @@ class RuntimeServiceTests(TestCase):
 
         self.assertEqual([item[:2] for item in calls], [("signal", 15), ("signal", 2)])
 
-    def test_run_once_processes_telegram_and_idle_heartbeat_by_interval(self):
+    def test_run_once_drains_telegram_and_processes_idle_heartbeat(self):
         deps, calls, client, _watch_manager, _notifier_box = self.make_dependencies(clock=FakeClock([10.0, 10.0]))
         service = MikroClearService(
             RuntimeConfig(telegram_updates_interval_seconds=5, router_heartbeat_seconds=5),
@@ -142,5 +147,9 @@ class RuntimeServiceTests(TestCase):
 
         self.assertTrue(notifier_box["notifier"].stopped)
         self.assertTrue(client.closed)
+        self.assertLess(
+            calls.index(("stop_telegram_worker",)),
+            calls.index(("client_close",)),
+        )
         self.assertIn(("send_system_notification", "Mikro-Clear v1.0 stopped", "STOP"), calls)
         self.assertIn(("log", "Stopped"), calls)

@@ -26,7 +26,9 @@ class RuntimeDependencies:
     seek_to_end: Callable[[str], None]
     get_router_client: Callable[[], Any]
     read_ignore_list: Callable[[str], None]
+    start_telegram_worker: Callable[[], None]
     process_telegram_updates: Callable[[], None]
+    stop_telegram_worker: Callable[[], None]
     log: Callable[[str], None]
     debug_traceback: Callable[[], str]
     sleep: Callable[[int], None]
@@ -64,6 +66,7 @@ class MikroClearService:
         self.deps.read_ignore_list(self.config.ignore_list_path)
         self._start_file_watcher()
         self.deps.log(f"Monitoring {self.config.filepath} for Suricata alerts")
+        self.deps.start_telegram_worker()
 
     def _start_file_watcher(self) -> None:
         directory_to_monitor = os.path.dirname(self.config.filepath) or "."
@@ -86,10 +89,7 @@ class MikroClearService:
         if self.notifier.check_events(timeout=1000):
             self.notifier.read_events()
 
-        now = self.deps.time()
-        if now - self.last_telegram_updates_check >= self.config.telegram_updates_interval_seconds:
-            self.last_telegram_updates_check = now
-            self.deps.process_telegram_updates()
+        self.deps.process_telegram_updates()
 
         now = self.deps.time()
         if now - self.last_idle_heartbeat >= self.config.router_heartbeat_seconds:
@@ -116,6 +116,7 @@ class MikroClearService:
         return 0
 
     def shutdown(self) -> None:
+        self.deps.stop_telegram_worker()
         if self.notifier is not None:
             try:
                 self.notifier.stop()

@@ -120,7 +120,12 @@ limits.
 : Время жизни token для inline unblock action.
 
 `MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS`
-: Интервал polling `getUpdates`.
+: Устаревший интервал polling, сохраненный для совместимости. Сетевой worker
+  использует long polling и не зависит от этого значения.
+
+`MIKROCLEAR_TELEGRAM_LONG_POLL_SECONDS`
+: Timeout long-poll запроса `getUpdates`. По умолчанию `25`; HTTP timeout
+  автоматически увеличивается еще на 5 секунд.
 
 `MIKROCLEAR_TELEGRAM_LOCK_FILE`
 : Файл локального rate-limit lock.

@@ -25,6 +25,7 @@ from mikroclear.telegram.formatting import escape_html_safe
 from mikroclear.telegram.notify import TelegramNotifier
 from mikroclear.telegram.mangle_handler import TelegramMangleHandler
 from mikroclear.telegram.polling import TelegramUpdatePoller
+from mikroclear.telegram.polling_worker import TelegramPollingWorker
 from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
 
 
@@ -102,6 +103,11 @@ class RuntimeProviders:
             log=log,
             now=time,
             mangle_handler=self.mangle_handler,
+        )
+        self.polling_worker = TelegramPollingWorker(
+            self.poller,
+            long_poll_seconds=self.settings.telegram_long_poll_seconds,
+            log=log,
         )
 
     def debug_log(self, message: str) -> None:

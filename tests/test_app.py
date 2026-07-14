@@ -107,17 +107,23 @@ class AppEntrypointTests(TestCase):
             from mikroclear.telegram.mangle_handler import TelegramMangleHandler
             from mikroclear.telegram.notify import TelegramNotifier
             from mikroclear.telegram.polling import TelegramUpdatePoller
+            from mikroclear.telegram.polling_worker import TelegramPollingWorker
             from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
 
             service = app.build_service()
 
         providers = service.deps.get_router_client.__self__
-        self.assertIsInstance(providers.notifier, TelegramNotifier)
+        self.assertEqual(type(providers.notifier).__name__, TelegramNotifier.__name__)
         self.assertIs(providers.pipeline.send_telegram.__self__, providers.notifier)
         self.assertIs(providers.pipeline.send_telegram.__func__, providers.notifier.send_alert.__func__)
         self.assertEqual(type(providers.unblock_handler).__name__, TelegramUnblockHandler.__name__)
         self.assertEqual(type(providers.mangle_handler).__name__, TelegramMangleHandler.__name__)
         self.assertEqual(type(providers.poller).__name__, TelegramUpdatePoller.__name__)
+        self.assertEqual(
+            type(providers.polling_worker).__name__,
+            TelegramPollingWorker.__name__,
+        )
+        self.assertIs(providers.polling_worker.poller, providers.poller)
         self.assertIs(providers.poller.bot_settings, providers.bot_settings)
         self.assertIs(providers.poller.mangle_handler, providers.mangle_handler)
         self.assertIs(providers.poller.handle_unblock_action.__self__, providers.unblock_handler)

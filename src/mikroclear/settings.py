@@ -33,6 +33,7 @@ class Settings:
     telegram_unblock_enable: bool = True
     telegram_unblock_ttl_seconds: int = 24 * 3600
     telegram_updates_interval_seconds: int = 5
+    telegram_long_poll_seconds: int = 25
     wan_ip: str = ""
     local_ip_prefix: str = "192.168.0.0/16"
     default_whitelist: tuple[str, ...] = ()
@@ -130,6 +131,7 @@ class Settings:
             telegram_unblock_enable=env_bool("MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE", True),
             telegram_unblock_ttl_seconds=env_int("MIKROCLEAR_TELEGRAM_UNBLOCK_TTL_SECONDS", 24 * 3600),
             telegram_updates_interval_seconds=env_int("MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS", 5),
+            telegram_long_poll_seconds=env_int("MIKROCLEAR_TELEGRAM_LONG_POLL_SECONDS", 25),
             wan_ip=wan_ip,
             local_ip_prefix=local_ip_prefix,
             default_whitelist=default_whitelist,

@@ -1,0 +1,127 @@
+import time
+import types
+from threading import Event
+from unittest import TestCase
+
+from mikroclear.telegram.polling_worker import TelegramPollingWorker
+
+
+def wait_until(predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return False
+
+
+class FakePoller:
+    def __init__(self, updates, failures=0):
+        self.settings = types.SimpleNamespace(telegram_token="token")
+        self.updates = list(updates)
+        self.failures = failures
+        self.fetch_calls = 0
+        self.fetched = Event()
+        self.processed = []
+        self.acked = []
+
+    def fetch_updates(self, *, long_poll_seconds):
+        self.fetch_calls += 1
+        self.fetched.set()
+        if self.fetch_calls == 1:
+            return list(self.updates)
+        return []
+
+    def process_update(self, update):
+        self.processed.append(update["update_id"])
+        if len(self.processed) <= self.failures:
+            raise RuntimeError("temporary")
+
+    def acknowledge_update(self, update):
+        self.acked.append(update["update_id"])
+
+
+class TelegramPollingWorkerTests(TestCase):
+    def drain_until(self, worker, predicate, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            worker.drain_ready()
+            if predicate():
+                return True
+            time.sleep(0.005)
+        return False
+
+    def test_worker_waits_for_main_thread_and_preserves_batch_order(self):
+        poller = FakePoller([{"update_id": 10}, {"update_id": 11}])
+        worker = TelegramPollingWorker(
+            poller,
+            long_poll_seconds=25,
+            log=lambda message: None,
+            retry_delays=(0, 0, 0, 0),
+        )
+        self.addCleanup(worker.stop)
+
+        worker.start()
+        self.assertTrue(poller.fetched.wait(1.0))
+        self.assertEqual(poller.processed, [])
+        self.assertEqual(poller.acked, [])
+        self.assertEqual(poller.fetch_calls, 1)
+
+        self.assertTrue(wait_until(worker.drain_ready))
+        self.assertTrue(wait_until(lambda: poller.acked == [10]))
+        self.assertEqual(poller.processed, [10])
+        self.assertEqual(poller.fetch_calls, 1)
+
+        self.assertTrue(wait_until(worker.drain_ready))
+        self.assertTrue(wait_until(lambda: poller.acked == [10, 11]))
+        self.assertEqual(poller.processed, [10, 11])
+
+    def test_retryable_update_gets_five_attempts_before_success(self):
+        poller = FakePoller([{"update_id": 20}], failures=4)
+        worker = TelegramPollingWorker(
+            poller,
+            long_poll_seconds=25,
+            log=lambda message: None,
+            retry_delays=(0, 0, 0, 0),
+        )
+        self.addCleanup(worker.stop)
+
+        worker.start()
+
+        self.assertTrue(self.drain_until(worker, lambda: poller.acked == [20]))
+        self.assertEqual(poller.processed, [20, 20, 20, 20, 20])
+
+    def test_poison_update_is_logged_and_acknowledged_after_five_attempts(self):
+        logs = []
+        poller = FakePoller([{"update_id": 30}], failures=5)
+        worker = TelegramPollingWorker(
+            poller,
+            long_poll_seconds=25,
+            log=logs.append,
+            retry_delays=(0, 0, 0, 0),
+        )
+        self.addCleanup(worker.stop)
+
+        worker.start()
+
+        self.assertTrue(self.drain_until(worker, lambda: poller.acked == [30]))
+        self.assertEqual(poller.processed, [30, 30, 30, 30, 30])
+        self.assertEqual(len(logs), 1)
+        self.assertIn("Abandoned Telegram update 30 after 5 attempts", logs[0])
+
+    def test_stop_prevents_additional_fetches(self):
+        poller = FakePoller([])
+        worker = TelegramPollingWorker(
+            poller,
+            long_poll_seconds=25,
+            log=lambda message: None,
+            retry_delays=(0, 0, 0, 0),
+        )
+
+        worker.start()
+        self.assertTrue(poller.fetched.wait(1.0))
+        worker.stop()
+        fetch_calls = poller.fetch_calls
+        time.sleep(0.02)
+
+        self.assertEqual(poller.fetch_calls, fetch_calls)

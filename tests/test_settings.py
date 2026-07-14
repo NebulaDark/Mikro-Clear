@@ -7,6 +7,18 @@ from mikroclear.settings import Settings, load_settings
 
 
 class SettingsTests(TestCase):
+    def test_telegram_long_poll_seconds_default_and_env(self):
+        self.assertEqual(Settings().telegram_long_poll_seconds, 25)
+
+        with patch.dict(
+            os.environ,
+            {"MIKROCLEAR_TELEGRAM_LONG_POLL_SECONDS": "40"},
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertEqual(settings.telegram_long_poll_seconds, 40)
+
     def test_mikroclear_env_overrides_legacy_env(self):
         with patch.dict(
             os.environ,
