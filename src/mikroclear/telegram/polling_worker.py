@@ -98,14 +98,8 @@ class TelegramPollingWorker:
         try:
             self._run()
         except Exception as exc:
-            self._fatal_error = sanitize_exception_text(
-                exc,
-                self.poller.settings.telegram_token,
-            )
-            self.log(
-                f"Telegram polling worker failed: {type(exc).__name__}: "
-                f"{self._fatal_error}"
-            )
+            self._fatal_error = type(exc).__name__
+            self.log(f"Telegram polling worker failed: {self._fatal_error}")
 
     def _publish(self, pending: PendingTelegramUpdate) -> bool:
         while not self._stop.is_set():

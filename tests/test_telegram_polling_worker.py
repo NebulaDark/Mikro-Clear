@@ -161,10 +161,13 @@ class TelegramPollingWorkerTests(TestCase):
 
         self.assertGreater(thread.join_timeouts[0], 10)
 
-    def test_fatal_worker_error_is_sanitized_and_reported_by_health_check(self):
+    def test_fatal_worker_error_does_not_expose_update_payload(self):
         class CrashingPoller(FakePoller):
             def fetch_updates(self, *, long_poll_seconds):
-                raise RuntimeError("fatal token")
+                raise RuntimeError(
+                    "token=token message text=hello from Telegram "
+                    "callback_data=unblock:42 update_body={'update_id': 99}"
+                )
 
         logs = []
         poller = CrashingPoller([])
@@ -174,9 +177,21 @@ class TelegramPollingWorkerTests(TestCase):
         self.assertTrue(
             wait_until(lambda: worker._thread is not None and not worker._thread.is_alive())
         )
-        with self.assertRaisesRegex(TelegramWorkerFatalError, "fatal \\*\\*\\*MASKED\\*\\*\\*"):
+        with self.assertRaises(TelegramWorkerFatalError) as raised:
             worker.check_health()
-        self.assertNotIn("token", " ".join(logs))
+
+        diagnostics = " ".join([*logs, str(raised.exception)])
+        for payload in (
+            "token",
+            "message text",
+            "hello from Telegram",
+            "callback_data",
+            "unblock:42",
+            "update_body",
+            "update_id",
+        ):
+            self.assertNotIn(payload, diagnostics)
+        self.assertIn("RuntimeError", diagnostics)
 
     def test_health_check_succeeds_before_start(self):
         worker = TelegramPollingWorker(
