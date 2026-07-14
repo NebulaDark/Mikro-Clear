@@ -3,9 +3,10 @@ import json
 from contextlib import contextmanager
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 PROBE_PATH = (
@@ -31,16 +32,26 @@ class TelegramGetUpdatesProbeTests(TestCase):
 
         def run(command, **kwargs):
             calls.append(command)
-            return SimpleNamespace(returncode=0, stderr="")
+            return SimpleNamespace(returncode=0, stdout="enabled\n", stderr="")
 
-        with patch.object(probe.subprocess, "run", side_effect=run):
-            with self.assertRaisesRegex(RuntimeError, "body failed"):
-                with probe.inhibit_service_start():
-                    raise RuntimeError("body failed")
+        with TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "mask-owned"
+            with (
+                patch.object(probe, "MASK_MARKER", marker),
+                patch.object(probe.subprocess, "run", side_effect=run),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "body failed"):
+                    with probe.inhibit_service_start():
+                        raise RuntimeError("body failed")
 
         self.assertEqual(
             calls,
             [
+                [
+                    "/usr/bin/systemctl",
+                    "is-enabled",
+                    "mikroclear.service",
+                ],
                 [
                     "/usr/bin/systemctl",
                     "mask",
@@ -55,6 +66,59 @@ class TelegramGetUpdatesProbeTests(TestCase):
                 ],
             ],
         )
+
+    def test_service_start_inhibitor_preserves_preexisting_runtime_mask(self):
+        probe = load_probe()
+        run = Mock(
+            return_value=SimpleNamespace(
+                returncode=1,
+                stdout="masked-runtime\n",
+                stderr="",
+            )
+        )
+
+        with TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "mask-owned"
+            with (
+                patch.object(probe, "MASK_MARKER", marker),
+                patch.object(probe.subprocess, "run", run),
+            ):
+                with probe.inhibit_service_start():
+                    pass
+
+        run.assert_called_once_with(
+            ["/usr/bin/systemctl", "is-enabled", "mikroclear.service"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_service_start_inhibitor_leaves_recovery_for_failed_cleanup(self):
+        probe = load_probe()
+        responses = [
+            SimpleNamespace(returncode=0, stdout="enabled\n", stderr=""),
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+            SimpleNamespace(returncode=1, stdout="", stderr="busy"),
+            SimpleNamespace(returncode=1, stdout="", stderr="busy"),
+            SimpleNamespace(returncode=1, stdout="", stderr="busy"),
+        ]
+
+        with TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "mask-owned"
+            with (
+                patch.object(probe, "MASK_MARKER", marker),
+                patch.object(probe.subprocess, "run", side_effect=responses),
+                patch.object(probe, "sleep") as sleep,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "systemctl unmask --runtime mikroclear.service",
+                ):
+                    with probe.inhibit_service_start():
+                        pass
+                self.assertTrue(marker.exists())
+
+        self.assertEqual(sleep.call_count, 2)
 
     def test_service_state_check_fails_closed_on_systemctl_error(self):
         probe = load_probe()

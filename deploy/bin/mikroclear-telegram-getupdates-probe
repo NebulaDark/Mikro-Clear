@@ -2,10 +2,12 @@
 import hashlib
 import json
 import os
+import signal
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import subprocess
 import sys
+from time import sleep
 from typing import Any, Callable
 
 import requests
@@ -14,6 +16,7 @@ import requests
 ENV_PATH = Path("/etc/mikroclear/mikroclear.env")
 ALLOWED_UPDATES = ["message", "callback_query"]
 SERVICE_NAME = "mikroclear.service"
+MASK_MARKER = Path("/run/mikroclear-telegram-reset-mask-owned")
 
 
 def load_env(path: Path = ENV_PATH) -> dict[str, str]:
@@ -76,27 +79,76 @@ def require_api_success(body: dict[str, Any], method: str) -> None:
 
 @contextmanager
 def inhibit_service_start():
-    mask = subprocess.run(
-        ["/usr/bin/systemctl", "mask", "--runtime", SERVICE_NAME],
+    state_result = subprocess.run(
+        ["/usr/bin/systemctl", "is-enabled", SERVICE_NAME],
         text=True,
         capture_output=True,
         check=False,
     )
-    if mask.returncode != 0:
-        detail = mask.stderr.strip() or f"systemctl exit {mask.returncode}"
-        raise RuntimeError(f"cannot inhibit mikroclear.service startup: {detail}")
-    try:
+    prior_state = state_result.stdout.strip()
+    if not prior_state:
+        detail = state_result.stderr.strip() or f"systemctl exit {state_result.returncode}"
+        raise RuntimeError(f"cannot determine mikroclear.service mask state: {detail}")
+
+    owns_runtime_mask = prior_state == "masked-runtime" and MASK_MARKER.exists()
+    if prior_state in {"masked", "masked-runtime"} and not owns_runtime_mask:
         yield
-    finally:
-        unmask = subprocess.run(
-            ["/usr/bin/systemctl", "unmask", "--runtime", SERVICE_NAME],
+        return
+
+    if not owns_runtime_mask:
+        MASK_MARKER.unlink(missing_ok=True)
+        mask = subprocess.run(
+            ["/usr/bin/systemctl", "mask", "--runtime", SERVICE_NAME],
             text=True,
             capture_output=True,
             check=False,
         )
-        if unmask.returncode != 0:
-            detail = unmask.stderr.strip() or f"systemctl exit {unmask.returncode}"
-            raise RuntimeError(f"cannot remove mikroclear.service startup inhibitor: {detail}")
+        if mask.returncode != 0:
+            detail = mask.stderr.strip() or f"systemctl exit {mask.returncode}"
+            raise RuntimeError(f"cannot inhibit mikroclear.service startup: {detail}")
+        try:
+            MASK_MARKER.write_text("owned by mikroclear Telegram reset\n", encoding="utf-8")
+            os.chmod(MASK_MARKER, 0o600)
+        except Exception:
+            subprocess.run(
+                ["/usr/bin/systemctl", "unmask", "--runtime", SERVICE_NAME],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            raise
+
+    def interrupt_reset(_signum: int, _frame: Any) -> None:
+        raise InterruptedError("Telegram reset interrupted")
+
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, interrupt_reset)
+    try:
+        yield
+    finally:
+        try:
+            last_error = ""
+            for attempt in range(3):
+                unmask = subprocess.run(
+                    ["/usr/bin/systemctl", "unmask", "--runtime", SERVICE_NAME],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                if unmask.returncode == 0:
+                    MASK_MARKER.unlink(missing_ok=True)
+                    break
+                last_error = unmask.stderr.strip() or f"systemctl exit {unmask.returncode}"
+                if attempt < 2:
+                    sleep(0.2)
+            else:
+                raise RuntimeError(
+                    "cannot remove mikroclear.service startup inhibitor: "
+                    f"{last_error}; recovery: /usr/bin/systemctl unmask --runtime "
+                    f"{SERVICE_NAME} && /usr/bin/rm -f {MASK_MARKER}"
+                )
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def run_probe(

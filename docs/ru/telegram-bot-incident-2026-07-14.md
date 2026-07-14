@@ -230,6 +230,16 @@ a015acb Restore mangle allowlist validation
    совпадение artifact и token identity уже подтверждено, а воспроизводимость
    проблемы сохранена.
 
+Helper не снимает mask, существовавший до reset. Если cleanup собственного
+runtime mask не удался или процесс был принудительно завершен, выполнить от
+root и затем повторить read-only probe:
+
+```bash
+/usr/bin/systemctl unmask --runtime mikroclear.service
+/usr/bin/rm -f /run/mikroclear-telegram-reset-mask-owned
+/usr/bin/systemctl is-enabled mikroclear.service
+```
+
 Если update снова не появляется, отдельно проверить внешние consumers token:
 CI secrets, test hosts и пользовательские скрипты. Отсутствие ответа `/status`
 само по себе не доказывает локальный дефект Mikro-Clear или Telegram-side сбой.
