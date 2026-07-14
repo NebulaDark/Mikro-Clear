@@ -38,6 +38,11 @@ class TelegramGetUpdatesProbeTests(TestCase):
             marker = Path(tmp) / "mask-owned"
             with (
                 patch.object(probe, "MASK_MARKER", marker),
+                patch.object(
+                    probe,
+                    "current_runtime_mask_identity",
+                    return_value="helper-mask",
+                ),
                 patch.object(probe.subprocess, "run", side_effect=run),
             ):
                 with self.assertRaisesRegex(RuntimeError, "body failed"):
@@ -93,6 +98,53 @@ class TelegramGetUpdatesProbeTests(TestCase):
             check=False,
         )
 
+    def test_service_start_inhibitor_rejects_concurrent_reset(self):
+        probe = load_probe()
+
+        with TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "mask-owned"
+            with (
+                patch.object(probe, "MASK_MARKER", marker),
+                patch.object(
+                    probe.fcntl,
+                    "flock",
+                    side_effect=BlockingIOError("locked"),
+                ),
+                patch.object(probe.subprocess, "run") as run,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "already in progress"):
+                    with probe.inhibit_service_start():
+                        pass
+
+        run.assert_not_called()
+
+    def test_service_start_inhibitor_does_not_remove_mismatched_stale_marker(self):
+        probe = load_probe()
+        run = Mock(
+            return_value=SimpleNamespace(
+                returncode=1,
+                stdout="masked-runtime\n",
+                stderr="",
+            )
+        )
+
+        with TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "mask-owned"
+            marker.write_text('{"mask_identity": "old-mask"}', encoding="utf-8")
+            with (
+                patch.object(probe, "MASK_MARKER", marker),
+                patch.object(
+                    probe,
+                    "current_runtime_mask_identity",
+                    return_value="operator-mask",
+                ),
+                patch.object(probe.subprocess, "run", run),
+            ):
+                with probe.inhibit_service_start():
+                    pass
+
+        run.assert_called_once()
+
     def test_service_start_inhibitor_leaves_recovery_for_failed_cleanup(self):
         probe = load_probe()
         responses = [
@@ -107,6 +159,11 @@ class TelegramGetUpdatesProbeTests(TestCase):
             marker = Path(tmp) / "mask-owned"
             with (
                 patch.object(probe, "MASK_MARKER", marker),
+                patch.object(
+                    probe,
+                    "current_runtime_mask_identity",
+                    return_value="helper-mask",
+                ),
                 patch.object(probe.subprocess, "run", side_effect=responses),
                 patch.object(probe, "sleep") as sleep,
             ):

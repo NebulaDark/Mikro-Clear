@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import fcntl
 import hashlib
 import json
 import os
@@ -17,6 +18,7 @@ ENV_PATH = Path("/etc/mikroclear/mikroclear.env")
 ALLOWED_UPDATES = ["message", "callback_query"]
 SERVICE_NAME = "mikroclear.service"
 MASK_MARKER = Path("/run/mikroclear-telegram-reset-mask-owned")
+RUNTIME_MASK_PATH = Path("/run/systemd/system") / SERVICE_NAME
 
 
 def load_env(path: Path = ENV_PATH) -> dict[str, str]:
@@ -77,78 +79,140 @@ def require_api_success(body: dict[str, Any], method: str) -> None:
         raise RuntimeError(f"{method} failed: {description}")
 
 
+def current_runtime_mask_identity() -> str:
+    stat = RUNTIME_MASK_PATH.lstat()
+    return f"{stat.st_dev}:{stat.st_ino}:{stat.st_ctime_ns}"
+
+
+def read_mask_marker() -> str:
+    try:
+        body = json.loads(MASK_MARKER.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    return str(body.get("mask_identity", "")) if isinstance(body, dict) else ""
+
+
+def write_mask_marker(mask_identity: str) -> None:
+    temporary = MASK_MARKER.with_name(f"{MASK_MARKER.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps({"mask_identity": mask_identity, "pid": os.getpid()}),
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, MASK_MARKER)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 @contextmanager
-def inhibit_service_start():
-    state_result = subprocess.run(
-        ["/usr/bin/systemctl", "is-enabled", SERVICE_NAME],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    prior_state = state_result.stdout.strip()
-    if not prior_state:
-        detail = state_result.stderr.strip() or f"systemctl exit {state_result.returncode}"
-        raise RuntimeError(f"cannot determine mikroclear.service mask state: {detail}")
-
-    owns_runtime_mask = prior_state == "masked-runtime" and MASK_MARKER.exists()
-    if prior_state in {"masked", "masked-runtime"} and not owns_runtime_mask:
+def service_mask_lock():
+    lock_path = MASK_MARKER.with_name(f"{MASK_MARKER.name}.lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    acquired = False
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            raise RuntimeError("Telegram allowed_updates reset is already in progress") from None
         yield
-        return
+    finally:
+        try:
+            if acquired:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
-    if not owns_runtime_mask:
-        MASK_MARKER.unlink(missing_ok=True)
-        mask = subprocess.run(
-            ["/usr/bin/systemctl", "mask", "--runtime", SERVICE_NAME],
+
+def remove_owned_runtime_mask() -> None:
+    last_error = ""
+    for attempt in range(3):
+        unmask = subprocess.run(
+            ["/usr/bin/systemctl", "unmask", "--runtime", SERVICE_NAME],
             text=True,
             capture_output=True,
             check=False,
         )
-        if mask.returncode != 0:
-            detail = mask.stderr.strip() or f"systemctl exit {mask.returncode}"
-            raise RuntimeError(f"cannot inhibit mikroclear.service startup: {detail}")
+        if unmask.returncode == 0:
+            try:
+                MASK_MARKER.unlink(missing_ok=True)
+            except OSError as exc:
+                raise RuntimeError(
+                    "runtime service mask was removed but ownership marker remains; "
+                    f"recovery: /usr/bin/rm -f {MASK_MARKER}: {exc}"
+                ) from None
+            return
+        last_error = unmask.stderr.strip() or f"systemctl exit {unmask.returncode}"
+        if attempt < 2:
+            sleep(0.2)
+    raise RuntimeError(
+        "cannot remove mikroclear.service startup inhibitor: "
+        f"{last_error}; recovery: /usr/bin/systemctl unmask --runtime "
+        f"{SERVICE_NAME} && /usr/bin/rm -f {MASK_MARKER}"
+    )
+
+
+@contextmanager
+def inhibit_service_start():
+    with service_mask_lock():
+        def interrupt_reset(_signum: int, _frame: Any) -> None:
+            raise InterruptedError("Telegram reset interrupted")
+
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, interrupt_reset)
+        owns_runtime_mask = False
         try:
-            MASK_MARKER.write_text("owned by mikroclear Telegram reset\n", encoding="utf-8")
-            os.chmod(MASK_MARKER, 0o600)
-        except Exception:
-            subprocess.run(
-                ["/usr/bin/systemctl", "unmask", "--runtime", SERVICE_NAME],
+            state_result = subprocess.run(
+                ["/usr/bin/systemctl", "is-enabled", SERVICE_NAME],
                 text=True,
                 capture_output=True,
                 check=False,
             )
-            raise
+            prior_state = state_result.stdout.strip()
+            if not prior_state:
+                detail = state_result.stderr.strip() or f"systemctl exit {state_result.returncode}"
+                raise RuntimeError(f"cannot determine mikroclear.service mask state: {detail}")
 
-    def interrupt_reset(_signum: int, _frame: Any) -> None:
-        raise InterruptedError("Telegram reset interrupted")
-
-    previous_sigterm = signal.getsignal(signal.SIGTERM)
-    signal.signal(signal.SIGTERM, interrupt_reset)
-    try:
-        yield
-    finally:
-        try:
-            last_error = ""
-            for attempt in range(3):
-                unmask = subprocess.run(
-                    ["/usr/bin/systemctl", "unmask", "--runtime", SERVICE_NAME],
+            if prior_state == "masked-runtime":
+                marker_identity = read_mask_marker()
+                owns_runtime_mask = bool(
+                    marker_identity
+                    and marker_identity == current_runtime_mask_identity()
+                )
+                if not owns_runtime_mask:
+                    yield
+                    return
+            elif prior_state == "masked":
+                yield
+                return
+            else:
+                MASK_MARKER.unlink(missing_ok=True)
+                mask = subprocess.run(
+                    ["/usr/bin/systemctl", "mask", "--runtime", SERVICE_NAME],
                     text=True,
                     capture_output=True,
                     check=False,
                 )
-                if unmask.returncode == 0:
-                    MASK_MARKER.unlink(missing_ok=True)
-                    break
-                last_error = unmask.stderr.strip() or f"systemctl exit {unmask.returncode}"
-                if attempt < 2:
-                    sleep(0.2)
-            else:
-                raise RuntimeError(
-                    "cannot remove mikroclear.service startup inhibitor: "
-                    f"{last_error}; recovery: /usr/bin/systemctl unmask --runtime "
-                    f"{SERVICE_NAME} && /usr/bin/rm -f {MASK_MARKER}"
-                )
+                if mask.returncode != 0:
+                    detail = mask.stderr.strip() or f"systemctl exit {mask.returncode}"
+                    raise RuntimeError(f"cannot inhibit mikroclear.service startup: {detail}")
+                owns_runtime_mask = True
+                write_mask_marker(current_runtime_mask_identity())
+
+            yield
         finally:
-            signal.signal(signal.SIGTERM, previous_sigterm)
+            cleanup_error: Exception | None = None
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            try:
+                if owns_runtime_mask:
+                    remove_owned_runtime_mask()
+            except Exception as exc:
+                cleanup_error = exc
+            finally:
+                signal.signal(signal.SIGTERM, previous_sigterm)
+            if cleanup_error is not None:
+                raise cleanup_error
 
 
 def run_probe(
