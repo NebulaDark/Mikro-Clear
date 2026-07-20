@@ -2,6 +2,7 @@ import types
 from unittest import TestCase
 
 from mikroclear.runtime import MikroClearService, RuntimeConfig, RuntimeDependencies
+from mikroclear.telegram.polling_worker import TelegramWorkerFatalError
 
 
 class FakeWatchManager:
@@ -61,7 +62,7 @@ class FakeClock:
 
 
 class RuntimeServiceTests(TestCase):
-    def make_dependencies(self, clock=None):
+    def make_dependencies(self, clock=None, check_telegram_worker=None, sleep=None):
         calls = []
         client = FakeClient(calls)
         watch_manager = FakeWatchManager()
@@ -90,11 +91,13 @@ class RuntimeServiceTests(TestCase):
             get_router_client=lambda: client,
             read_ignore_list=lambda path: calls.append(("read_ignore_list", path)),
             start_telegram_worker=lambda: calls.append(("start_telegram_worker",)),
+            check_telegram_worker=check_telegram_worker
+            or (lambda: calls.append(("check_telegram_worker",))),
             process_telegram_updates=lambda: calls.append(("process_telegram_updates",)),
             stop_telegram_worker=lambda: calls.append(("stop_telegram_worker",)),
             log=lambda message: calls.append(("log", message)),
             debug_traceback=lambda: "traceback",
-            sleep=lambda seconds: calls.append(("sleep", seconds)),
+            sleep=sleep or (lambda seconds: calls.append(("sleep", seconds))),
             time=clock or FakeClock([0.0]),
         )
         return deps, calls, client, watch_manager, notifier_box
@@ -125,7 +128,7 @@ class RuntimeServiceTests(TestCase):
 
         self.assertEqual([item[:2] for item in calls], [("signal", 15), ("signal", 2)])
 
-    def test_run_once_drains_telegram_and_processes_idle_heartbeat(self):
+    def test_run_once_checks_worker_health_before_draining_telegram_updates(self):
         deps, calls, client, _watch_manager, _notifier_box = self.make_dependencies(clock=FakeClock([10.0, 10.0]))
         service = MikroClearService(
             RuntimeConfig(telegram_updates_interval_seconds=5, router_heartbeat_seconds=5),
@@ -136,7 +139,53 @@ class RuntimeServiceTests(TestCase):
         service.run_once()
 
         self.assertIn(("process_telegram_updates",), calls)
+        self.assertLess(
+            calls.index(("check_telegram_worker",)),
+            calls.index(("process_telegram_updates",)),
+        )
         self.assertEqual(client.heartbeats, [True, False])
+
+    def test_run_returns_failure_and_stops_when_telegram_worker_is_fatal(self):
+        def raise_fatal_worker_error():
+            raise TelegramWorkerFatalError("worker dead")
+
+        deps, calls, _client, _watch_manager, _notifier_box = self.make_dependencies(
+            check_telegram_worker=raise_fatal_worker_error,
+        )
+        service = MikroClearService(RuntimeConfig(), deps)
+
+        result = service.run()
+
+        self.assertEqual(result, 1)
+        self.assertIn(("log", "Fatal Telegram polling worker error: worker dead"), calls)
+        self.assertIn(("stop_telegram_worker",), calls)
+        self.assertNotIn(("sleep", 5), calls)
+
+    def test_run_retries_generic_worker_health_errors(self):
+        service_box = {}
+
+        def raise_generic_error():
+            raise RuntimeError("temporary worker error")
+
+        def stop_after_retry(seconds):
+            calls.append(("sleep", seconds))
+            service_box["service"].shutdown_requested = True
+
+        deps, calls, _client, _watch_manager, _notifier_box = self.make_dependencies(
+            check_telegram_worker=raise_generic_error,
+            sleep=stop_after_retry,
+        )
+        service = MikroClearService(RuntimeConfig(), deps)
+        service_box["service"] = service
+
+        result = service.run()
+
+        self.assertEqual(result, 0)
+        self.assertIn(("sleep", 5), calls)
+        self.assertIn(
+            ("log", "Unexpected error in main loop: RuntimeError: temporary worker error"),
+            calls,
+        )
 
     def test_shutdown_stops_notifier_closes_client_and_sends_stop_notification(self):
         deps, calls, client, _watch_manager, notifier_box = self.make_dependencies()

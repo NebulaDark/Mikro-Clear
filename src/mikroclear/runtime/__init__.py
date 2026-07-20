@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import os
 from typing import Any, Callable
 
+from mikroclear.telegram.polling_worker import TelegramWorkerFatalError
+
 
 @dataclass(frozen=True)
 class RuntimeConfig:
@@ -27,6 +29,7 @@ class RuntimeDependencies:
     get_router_client: Callable[[], Any]
     read_ignore_list: Callable[[str], None]
     start_telegram_worker: Callable[[], None]
+    check_telegram_worker: Callable[[], None]
     process_telegram_updates: Callable[[], None]
     stop_telegram_worker: Callable[[], None]
     log: Callable[[str], None]
@@ -85,6 +88,7 @@ class MikroClearService:
         if self.notifier is None or self.client is None:
             raise RuntimeError("MikroClearService.startup() must be called before run_once()")
 
+        self.deps.check_telegram_worker()
         self.notifier.process_events()
         if self.notifier.check_events(timeout=1000):
             self.notifier.read_events()
@@ -100,10 +104,15 @@ class MikroClearService:
         self.install_signal_handlers()
         self.startup()
 
+        exit_code = 0
         try:
             while not self.shutdown_requested:
                 try:
                     self.run_once()
+                except TelegramWorkerFatalError as exc:
+                    self.deps.log(f"Fatal Telegram polling worker error: {exc}")
+                    exit_code = 1
+                    break
                 except KeyboardInterrupt:
                     break
                 except Exception as exc:
@@ -113,7 +122,7 @@ class MikroClearService:
                     self.deps.sleep(5)
         finally:
             self.shutdown()
-        return 0
+        return exit_code
 
     def shutdown(self) -> None:
         self.deps.stop_telegram_worker()
