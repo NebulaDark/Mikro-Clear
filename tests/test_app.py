@@ -124,6 +124,14 @@ class AppEntrypointTests(TestCase):
             TelegramPollingWorker.__name__,
         )
         self.assertIs(providers.polling_worker.poller, providers.poller)
+        self.assertIs(
+            service.deps.check_telegram_worker.__self__,
+            providers.polling_worker,
+        )
+        self.assertIs(
+            service.deps.check_telegram_worker.__func__,
+            providers.polling_worker.check_health.__func__,
+        )
         self.assertIs(providers.poller.bot_settings, providers.bot_settings)
         self.assertIs(providers.poller.mangle_handler, providers.mangle_handler)
         self.assertIs(providers.poller.handle_unblock_action.__self__, providers.unblock_handler)

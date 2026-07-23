@@ -65,6 +65,7 @@ def build_runtime_service(settings: Settings) -> MikroClearService:
             get_router_client=providers.get_router_client,
             read_ignore_list=providers.ignore_rules.load,
             start_telegram_worker=providers.polling_worker.start,
+            check_telegram_worker=providers.polling_worker.check_health,
             process_telegram_updates=providers.polling_worker.drain_ready,
             stop_telegram_worker=providers.polling_worker.stop,
             log=log,
