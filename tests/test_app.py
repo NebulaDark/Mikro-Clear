@@ -125,12 +125,36 @@ class AppEntrypointTests(TestCase):
         )
         self.assertIs(providers.polling_worker.poller, providers.poller)
         self.assertIs(
+            service.deps.start_telegram_worker.__self__,
+            providers.polling_worker,
+        )
+        self.assertIs(
+            service.deps.start_telegram_worker.__func__,
+            providers.polling_worker.start.__func__,
+        )
+        self.assertIs(
             service.deps.check_telegram_worker.__self__,
             providers.polling_worker,
         )
         self.assertIs(
             service.deps.check_telegram_worker.__func__,
             providers.polling_worker.check_health.__func__,
+        )
+        self.assertIs(
+            service.deps.process_telegram_updates.__self__,
+            providers.polling_worker,
+        )
+        self.assertIs(
+            service.deps.process_telegram_updates.__func__,
+            providers.polling_worker.drain_ready.__func__,
+        )
+        self.assertIs(
+            service.deps.stop_telegram_worker.__self__,
+            providers.polling_worker,
+        )
+        self.assertIs(
+            service.deps.stop_telegram_worker.__func__,
+            providers.polling_worker.stop.__func__,
         )
         self.assertIs(providers.poller.bot_settings, providers.bot_settings)
         self.assertIs(providers.poller.mangle_handler, providers.mangle_handler)
