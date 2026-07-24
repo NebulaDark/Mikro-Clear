@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.11+, `threading`, `unittest`, systemd `Restart=on-failure`.
 
+**Status:** Tasks 1-3 completed and locally verified on 2026-07-24. Task 4 remains pending.
+
 ## Global Constraints
 
 - Do not call live Telegram API or RouterOS in tests.
@@ -30,7 +32,7 @@
 - Produces: `TelegramPollingWorker.check_health() -> None`.
 - Preserves: `start()`, `drain_ready()`, and `stop()` public behavior.
 
-- [ ] **Step 1: Write failing health tests**
+- [x] **Step 1: Write failing health tests**
 
 Add a poller whose `fetch_updates()` raises a token-bearing exception, then assert:
 
@@ -40,20 +42,20 @@ class CrashingPoller(FakePoller):
         raise RuntimeError("fatal token")
 
 
-def test_fatal_worker_error_is_sanitized_and_reported_by_health_check(self):
+def test_fatal_worker_error_does_not_expose_update_payload(self):
     logs = []
     poller = CrashingPoller([])
     worker = TelegramPollingWorker(poller, long_poll_seconds=25, log=logs.append)
     worker.start()
     self.assertTrue(wait_until(lambda: worker._thread is not None and not worker._thread.is_alive()))
-    with self.assertRaisesRegex(TelegramWorkerFatalError, "fatal \\*\\*\\*MASKED\\*\\*\\*"):
+    with self.assertRaisesRegex(TelegramWorkerFatalError, "RuntimeError"):
         worker.check_health()
     self.assertNotIn("token", " ".join(logs))
 ```
 
 Add separate tests proving `check_health()` succeeds before `start()`, while an empty polling worker is alive, and after `stop()`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -63,7 +65,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ./.venv/bin/python -m unittest tests.te
 
 Expected: failure because `TelegramWorkerFatalError` and `check_health()` do not exist.
 
-- [ ] **Step 3: Implement the minimal worker health contract**
+- [x] **Step 3: Implement the minimal worker health contract**
 
 In `polling_worker.py`:
 
@@ -76,26 +78,34 @@ def _run_guarded(self) -> None:
     try:
         self._run()
     except Exception as exc:
-        self._fatal_error = sanitize_exception_text(exc, self.poller.settings.telegram_token)
-        self.log(f"Telegram polling worker failed: {type(exc).__name__}: {self._fatal_error}")
+        with self._lifecycle_lock:
+            if self._stopping:
+                return
+            self._fatal_error = type(exc).__name__
+            self.log(f"Telegram polling worker failed: {self._fatal_error}")
 
 
 def check_health(self) -> None:
-    if not self._started or self._stopping:
-        return
-    if self._thread is not None and self._thread.is_alive():
-        return
-    detail = self._fatal_error or "thread exited without an error"
+    with self._lifecycle_lock:
+        if not self._started or self._stopping:
+            return
+        if self._thread is not None and self._thread.is_alive():
+            return
+        detail = self._fatal_error or "thread exited without an error"
     raise TelegramWorkerFatalError(f"Telegram polling worker is not running: {detail}")
 ```
 
-Initialize `_started`, `_stopping`, and `_fatal_error`; target `_run_guarded`; log `Telegram polling worker started`; set `_stopping` before normal stop. Export the exception in `__all__`.
+Initialize `_started`, `_stopping`, `_fatal_error`, and `_lifecycle_lock`; target
+`_run_guarded`; log `Telegram polling worker started`; set `_stopping` under
+the same lock before normal stop. Fatal diagnostics store only the exception
+class name, and failures released after shutdown begins do not create fatal
+state. Export the exception in `__all__`.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run the focused command from Step 2. Expected: all worker tests pass with no unhandled thread traceback.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add src/mikroclear/telegram/polling_worker.py tests/test_telegram_polling_worker.py
@@ -115,7 +125,7 @@ git commit -m "Add Telegram polling worker health checks"
 - Produces: `RuntimeDependencies.check_telegram_worker: Callable[[], None]`.
 - Preserves: generic exception retry behavior and ordered shutdown.
 
-- [ ] **Step 1: Write failing runtime tests**
+- [x] **Step 1: Write failing runtime tests**
 
 Extend the dependency fixture with `check_telegram_worker`. Assert `run_once()` calls it before `process_telegram_updates`. Add a test dependency that raises `TelegramWorkerFatalError("worker dead")` and assert:
 
@@ -130,7 +140,7 @@ self.assertNotIn(("sleep", 5), calls)
 
 Keep the existing generic exception test and assert it still sleeps 5 seconds rather than taking the fatal path.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -140,7 +150,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ./.venv/bin/python -m unittest tests.te
 
 Expected: fixture/type failures because `check_telegram_worker` is not part of `RuntimeDependencies`, followed by the missing fatal branch.
 
-- [ ] **Step 3: Implement the minimal runtime branch**
+- [x] **Step 3: Implement the minimal runtime branch**
 
 Add `check_telegram_worker` to `RuntimeDependencies`, call it first in `run_once()`, and handle the dedicated error outside the generic loop retry:
 
@@ -161,11 +171,11 @@ finally:
 return exit_code
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run the focused command from Step 2. Expected: all runtime tests pass and the existing generic retry assertion remains green.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```bash
 git add src/mikroclear/runtime/__init__.py tests/test_runtime.py
@@ -184,7 +194,7 @@ git commit -m "Fail fast when Telegram worker stops"
 - Consumes: `TelegramPollingWorker.check_health()` and `RuntimeDependencies.check_telegram_worker`.
 - Produces: one worker instance bound to start, health, drain, and stop lifecycle callbacks.
 
-- [ ] **Step 1: Write the failing wiring assertion**
+- [x] **Step 1: Write the failing wiring assertion**
 
 In the app wiring test, assert:
 
@@ -199,7 +209,7 @@ self.assertIs(
 )
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -209,7 +219,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ./.venv/bin/python -m unittest tests.te
 
 Expected: failure because wiring does not supply `check_telegram_worker`.
 
-- [ ] **Step 3: Wire the same worker health method**
+- [x] **Step 3: Wire the same worker health method**
 
 Add:
 
@@ -219,7 +229,7 @@ check_telegram_worker=providers.polling_worker.check_health,
 
 between start and drain callbacks in `build_runtime_service()`.
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ./.venv/bin/python -m unittest tests.test_telegram_polling_worker tests.test_runtime tests.test_app
@@ -230,7 +240,7 @@ git diff --check
 
 Expected: focused and full suites pass, compilation exits 0, and `git diff --check` emits no output.
 
-- [ ] **Step 5: Scan changed files for secret exposure**
+- [x] **Step 5: Scan changed files for secret exposure**
 
 ```bash
 grep -RInE 'bot[0-9]+:|MIKROCLEAR_TELEGRAM_TOKEN=' src tests docs/superpowers/specs docs/superpowers/plans
@@ -238,7 +248,7 @@ grep -RInE 'bot[0-9]+:|MIKROCLEAR_TELEGRAM_TOKEN=' src tests docs/superpowers/sp
 
 Expected: no literal Telegram credentials; configuration key references without values are acceptable.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```bash
 git add src/mikroclear/runtime/wiring.py tests/test_app.py docs/superpowers/plans/2026-07-14-telegram-worker-health.md

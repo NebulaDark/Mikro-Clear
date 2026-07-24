@@ -2,6 +2,8 @@
 
 Дата: 2026-07-14
 
+Обновлено: 2026-07-24
+
 Статус: утвержден вариант 1
 
 ## Контекст
@@ -25,12 +27,15 @@ payload.
 
 - `start()` записывает событие успешного запуска с именем worker, но без
   конфигурационных секретов;
-- верхняя граница worker thread перехватывает неожиданное исключение,
-  сохраняет sanitized fatal error и записывает его в журнал;
-- штатный `stop()` помечает остановку как ожидаемую и не создаёт fatal state;
+- верхняя граница worker thread перехватывает неожиданное исключение только
+  пока lifecycle lock подтверждает, что штатная остановка ещё не началась,
+  сохраняет только имя класса исключения и записывает его в журнал;
+- штатный `stop()` под тем же lifecycle lock помечает остановку как ожидаемую;
+  исключение из уже выполняемого poll после этой отметки не создаёт fatal state
+  и не записывается как fatal;
 - `check_health()` ничего не делает до запуска и после штатной остановки, но
-  выбрасывает отдельный `TelegramWorkerFatalError` с sanitized причиной, если
-  запущенный worker умер;
+  выбрасывает отдельный `TelegramWorkerFatalError` с сохранённым именем класса,
+  если запущенный worker умер;
 - worker не перезапускает себя внутри процесса, чтобы не скрывать повторяемую
   ошибку и не создавать несколько consumers.
 
@@ -48,9 +53,11 @@ retry delays, acknowledgement и RouterOS main-thread boundary не меняют
 
 ## Ошибки и журнал
 
-- Fatal exception маскируется через существующий `sanitize_exception_text`.
-- Журнал содержит тип исключения и sanitized message, но не update body,
-  callback data или Telegram token.
+- Fatal diagnostics содержат только `type(exc).__name__`; код не вызывает
+  `str(exc)` и не использует arbitrary sanitized exception message для fatal
+  worker path.
+- Журнал и `TelegramWorkerFatalError` содержат имя класса исключения, но не
+  update body, callback data, Telegram token или другой exception payload.
 - Ошибка запуска `Thread.start()` остаётся синхронной startup-ошибкой и также
   приводит к неуспешному завершению сервиса.
 - Повторный health check возвращает ту же сохранённую причину до shutdown.
@@ -62,11 +69,20 @@ TDD regression cases:
 - неожиданное исключение из `fetch_updates()` завершает worker и становится
   доступно через `check_health()`;
 - token в fatal exception маскируется;
+- fatal worker diagnostics строго равны class-only формату и не зависят от
+  exception message;
 - пустой успешный polling сохраняет живой worker;
 - `check_health()` не ошибается до `start()` и после штатного `stop()`;
+- deterministic race начинает `stop()`, затем освобождает падающий
+  `fetch_updates()` и подтверждает отсутствие fatal state, fatal log и health
+  error;
 - runtime вызывает health check в каждом `run_once`;
 - `TelegramWorkerFatalError` приводит к shutdown и результату `run() == 1`,
   тогда как generic main-loop exception сохраняет прежний retry path;
+- integration через реальный `TelegramPollingWorker`, подключённый к
+  `MikroClearService.run()`, подтверждает exit `1`, однократный consumer,
+  порядок worker/notifier/client shutdown, отсутствие retry sleep и
+  payload-free logs;
 - wiring передаёт health method того же worker instance.
 
 После focused tests выполняются полный `unittest discover`, `compileall`,
@@ -85,7 +101,8 @@ root; отсутствие этих файлов не маскируется к�
 - `active/running` больше не может сохраняться после необработанной смерти
   polling worker.
 - Не возникает второй одновременный Telegram consumer внутри процесса.
-- Fatal diagnostics не раскрывают token или Telegram payload.
+- Fatal diagnostics содержат только class name и не раскрывают token или
+  Telegram payload.
 - Runtime и worker regression tests проходят без live Telegram/RouterOS calls.
 - Повторный SELKS deploy либо подтверждает живой worker, либо автоматически
   откатывается к подтверждённому rollback wheel.

@@ -1,6 +1,6 @@
 import time
 import types
-from threading import Event
+from threading import Event, Thread
 from unittest import TestCase
 
 from mikroclear.telegram.polling_worker import (
@@ -180,6 +180,14 @@ class TelegramPollingWorkerTests(TestCase):
         with self.assertRaises(TelegramWorkerFatalError) as raised:
             worker.check_health()
 
+        self.assertEqual(
+            [message for message in logs if "Telegram polling worker failed:" in message],
+            ["Telegram polling worker failed: RuntimeError"],
+        )
+        self.assertEqual(
+            str(raised.exception),
+            "Telegram polling worker is not running: RuntimeError",
+        )
         diagnostics = " ".join([*logs, str(raised.exception)])
         for payload in (
             "token",
@@ -192,6 +200,41 @@ class TelegramPollingWorkerTests(TestCase):
         ):
             self.assertNotIn(payload, diagnostics)
         self.assertIn("RuntimeError", diagnostics)
+
+    def test_stop_discards_fetch_error_released_after_shutdown_begins(self):
+        class BlockingCrashingPoller(FakePoller):
+            def __init__(self):
+                super().__init__([])
+                self.fetch_started = Event()
+                self.release_failure = Event()
+
+            def fetch_updates(self, *, long_poll_seconds):
+                self.fetch_calls += 1
+                self.fetch_started.set()
+                self.release_failure.wait(1.0)
+                raise RuntimeError("token=token update_body={'update_id': 99}")
+
+        logs = []
+        poller = BlockingCrashingPoller()
+        worker = TelegramPollingWorker(poller, long_poll_seconds=25, log=logs.append)
+
+        worker.start()
+        self.assertTrue(poller.fetch_started.wait(1.0))
+
+        stopper = Thread(target=worker.stop)
+        stopper.start()
+        self.assertTrue(worker._stop.wait(1.0))
+        poller.release_failure.set()
+        stopper.join(1.0)
+
+        self.assertFalse(stopper.is_alive())
+        self.assertIsNone(worker._fatal_error)
+        worker.check_health()
+        self.assertEqual(poller.fetch_calls, 1)
+        self.assertEqual(
+            [message for message in logs if "Telegram polling worker failed:" in message],
+            [],
+        )
 
     def test_health_check_succeeds_before_start(self):
         worker = TelegramPollingWorker(

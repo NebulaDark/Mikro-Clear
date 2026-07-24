@@ -1,4 +1,6 @@
 import types
+from dataclasses import replace
+from threading import Event
 from unittest import TestCase
 
 from mikroclear.runtime import MikroClearService, RuntimeConfig, RuntimeDependencies
@@ -14,9 +16,10 @@ class FakeWatchManager:
 
 
 class FakeNotifier:
-    def __init__(self, watch_manager, handler):
+    def __init__(self, watch_manager, handler, calls=None):
         self.watch_manager = watch_manager
         self.handler = handler
+        self.calls = calls
         self.processed = 0
         self.stopped = False
 
@@ -31,6 +34,8 @@ class FakeNotifier:
 
     def stop(self):
         self.stopped = True
+        if self.calls is not None:
+            self.calls.append(("notifier_stop",))
 
 
 class FakeClient:
@@ -69,7 +74,7 @@ class RuntimeServiceTests(TestCase):
         notifier_box = {}
 
         def make_notifier(wm, handler):
-            notifier = FakeNotifier(wm, handler)
+            notifier = FakeNotifier(wm, handler, calls)
             notifier_box["notifier"] = notifier
             return notifier
 
@@ -186,6 +191,86 @@ class RuntimeServiceTests(TestCase):
             ("log", "Unexpected error in main loop: RuntimeError: temporary worker error"),
             calls,
         )
+
+    def test_run_with_real_fatal_worker_exits_and_fully_shuts_down(self):
+        class CrashingPoller:
+            def __init__(self):
+                self.settings = types.SimpleNamespace(
+                    telegram_token="token",
+                    telegram_timeout=10,
+                )
+                self.fetch_calls = 0
+                self.crashed = Event()
+
+            def fetch_updates(self, *, long_poll_seconds):
+                self.fetch_calls += 1
+                self.crashed.set()
+                raise RuntimeError(
+                    "token=token message text=hello callback_data=unblock:42 "
+                    "update_body={'update_id': 99}"
+                )
+
+            def process_update(self, update):
+                raise AssertionError("No update should be processed after a poller crash")
+
+            def acknowledge_update(self, update):
+                raise AssertionError("No update should be acknowledged after a poller crash")
+
+        from mikroclear.telegram.polling_worker import TelegramPollingWorker
+
+        deps, calls, client, _watch_manager, notifier_box = self.make_dependencies()
+        poller = CrashingPoller()
+        worker = TelegramPollingWorker(
+            poller,
+            long_poll_seconds=25,
+            log=lambda message: calls.append(("log", message)),
+        )
+
+        def process_updates():
+            calls.append(("process_telegram_updates",))
+            self.assertTrue(poller.crashed.wait(1.0))
+
+        def stop_worker():
+            calls.append(("stop_telegram_worker",))
+            worker.stop()
+
+        deps = replace(
+            deps,
+            start_telegram_worker=worker.start,
+            check_telegram_worker=worker.check_health,
+            process_telegram_updates=process_updates,
+            stop_telegram_worker=stop_worker,
+            log=lambda message: calls.append(("log", message)),
+        )
+        service = MikroClearService(RuntimeConfig(), deps)
+
+        result = service.run()
+
+        self.assertEqual(result, 1)
+        self.assertEqual(poller.fetch_calls, 1)
+        self.assertTrue(notifier_box["notifier"].stopped)
+        self.assertTrue(client.closed)
+        self.assertLess(
+            calls.index(("stop_telegram_worker",)),
+            calls.index(("notifier_stop",)),
+        )
+        self.assertLess(
+            calls.index(("notifier_stop",)),
+            calls.index(("client_close",)),
+        )
+        self.assertNotIn(("sleep", 5), calls)
+        diagnostics = " ".join(call[1] for call in calls if call[0] == "log")
+        self.assertIn("RuntimeError", diagnostics)
+        for payload in (
+            "token",
+            "message text",
+            "hello",
+            "callback_data",
+            "unblock:42",
+            "update_body",
+            "update_id",
+        ):
+            self.assertNotIn(payload, diagnostics)
 
     def test_shutdown_stops_notifier_closes_client_and_sends_stop_notification(self):
         deps, calls, client, _watch_manager, notifier_box = self.make_dependencies()

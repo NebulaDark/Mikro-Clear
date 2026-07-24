@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from queue import Empty, Full, Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import Any, Callable
 
 from mikroclear.security import sanitize_exception_text
@@ -37,29 +37,32 @@ class TelegramPollingWorker:
         self.retry_delays = retry_delays or self.RETRY_DELAYS
         self._queue: Queue[PendingTelegramUpdate] = Queue(maxsize=1)
         self._stop = Event()
+        self._lifecycle_lock = Lock()
         self._thread: Thread | None = None
         self._started = False
         self._stopping = False
         self._fatal_error: str | None = None
 
     def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._started = True
-        self._thread = Thread(
-            target=self._run_guarded,
-            name="telegram-long-poll",
-            daemon=True,
-        )
-        self._thread.start()
+        with self._lifecycle_lock:
+            if self._thread is not None:
+                return
+            self._started = True
+            self._thread = Thread(
+                target=self._run_guarded,
+                name="telegram-long-poll",
+                daemon=True,
+            )
+            self._thread.start()
         self.log("Telegram polling worker started")
 
     def check_health(self) -> None:
-        if not self._started or self._stopping:
-            return
-        if self._thread is not None and self._thread.is_alive():
-            return
-        detail = self._fatal_error or "thread exited without an error"
+        with self._lifecycle_lock:
+            if not self._started or self._stopping:
+                return
+            if self._thread is not None and self._thread.is_alive():
+                return
+            detail = self._fatal_error or "thread exited without an error"
         raise TelegramWorkerFatalError(f"Telegram polling worker is not running: {detail}")
 
     def drain_ready(self) -> bool:
@@ -82,24 +85,29 @@ class TelegramPollingWorker:
         return True
 
     def stop(self) -> None:
-        self._stopping = True
-        self._stop.set()
-        if self._thread is None:
+        with self._lifecycle_lock:
+            self._stopping = True
+            self._stop.set()
+            thread = self._thread
+        if thread is None:
             return
         request_timeout = max(
             self.poller.settings.telegram_timeout,
             self.long_poll_seconds + 5,
         )
-        self._thread.join(timeout=request_timeout + 1)
-        if self._thread.is_alive():
+        thread.join(timeout=request_timeout + 1)
+        if thread.is_alive():
             self.log("Telegram polling worker did not stop before timeout")
 
     def _run_guarded(self) -> None:
         try:
             self._run()
         except Exception as exc:
-            self._fatal_error = type(exc).__name__
-            self.log(f"Telegram polling worker failed: {self._fatal_error}")
+            with self._lifecycle_lock:
+                if self._stopping:
+                    return
+                self._fatal_error = type(exc).__name__
+                self.log(f"Telegram polling worker failed: {self._fatal_error}")
 
     def _publish(self, pending: PendingTelegramUpdate) -> bool:
         while not self._stop.is_set():
