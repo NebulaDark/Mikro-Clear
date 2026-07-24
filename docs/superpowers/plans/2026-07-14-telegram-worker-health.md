@@ -8,8 +8,8 @@
 
 **Tech Stack:** Python 3.11+, `threading`, `unittest`, systemd `Restart=on-failure`.
 
-**Status:** Tasks 1-3 and Task 4 review completed and locally verified on
-2026-07-24. Merge, artifact build, and staged deploy remain pending.
+**Status:** Tasks 1-3, Task 4 review, and local merge completed and verified on
+2026-07-24. Artifact build and staged deploy remain pending.
 
 ## Global Constraints
 
@@ -276,9 +276,13 @@ Review result on 2026-07-24: no Critical or Important findings. The focused
 worker/runtime suites passed 50 consecutive runs, and the full suite passed
 286 tests.
 
-- [ ] **Step 2: Merge locally into `main` without including existing dirty dependency files**
+- [x] **Step 2: Merge locally into `main` without including existing dirty dependency files**
 
 Use a fast-forward merge after full tests. Preserve the existing uncommitted `pyproject.toml` and `requirements.txt` changes in the main checkout.
+
+Merge result on 2026-07-24: `main` fast-forwarded to `9534a3f`; the existing
+uncommitted dependency files remained outside the merge. The merged tree passed
+286 tests.
 
 - [ ] **Step 3: Build from committed HEAD in a clean temporary source tree**
 
