@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import sys
 import zipfile
 
@@ -56,6 +57,23 @@ def validate_wheel(wheel_path: str | Path) -> WheelValidationResult:
                 errors.append("missing wheel entry_points.txt")
             elif not _has_required_console_script(wheel, entry_points_members):
                 errors.append(f"missing console script: {REQUIRED_CONSOLE_SCRIPT}")
+
+            metadata_members = [
+                name for name in names if name.endswith(".dist-info/METADATA")
+            ]
+            for member in sorted(metadata_members):
+                metadata = wheel.read(member).decode("utf-8")
+                for line in metadata.splitlines():
+                    if not line.lower().startswith("requires-dist:"):
+                        continue
+                    dependency = line.split(":", 1)[1].strip()
+                    normalized = re.split(
+                        r"[\s(<=>!~;\[]",
+                        dependency,
+                        maxsplit=1,
+                    )[0].lower()
+                    if normalized == "mcp":
+                        errors.append("forbidden runtime dependency: mcp")
     except zipfile.BadZipFile:
         errors.append(f"not a valid wheel zip archive: {path}")
 

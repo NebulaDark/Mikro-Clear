@@ -7,6 +7,15 @@ from mikroclear.settings import Settings, load_settings
 
 
 class SettingsTests(TestCase):
+    def test_default_ca_file_uses_mikroclear_config_tree(self):
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings.from_env()
+
+        self.assertEqual(
+            settings.ca_file,
+            "/etc/mikroclear/certs/mikrotik-ca.crt",
+        )
+
     def test_telegram_long_poll_seconds_default_and_env(self):
         self.assertEqual(Settings().telegram_long_poll_seconds, 25)
 

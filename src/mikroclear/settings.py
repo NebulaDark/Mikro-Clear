@@ -15,7 +15,7 @@ class Settings:
     use_ssl: bool = True
     port: int = 8729
     allow_self_signed_certs: bool = False
-    ca_file: str = "/etc/mikrocata/certs/mikrotik-ca.crt"
+    ca_file: str = "/etc/mikroclear/certs/mikrotik-ca.crt"
     router_connect_retry_seconds: int = 30
     socket_timeout_seconds: int = 20
     router_heartbeat_seconds: int = 60
@@ -113,7 +113,7 @@ class Settings:
             use_ssl=use_ssl,
             port=port,
             allow_self_signed_certs=env_bool("MIKROCLEAR_ALLOW_SELF_SIGNED_CERTS", False),
-            ca_file=env_str("MIKROCLEAR_CA_FILE", "/etc/mikrocata/certs/mikrotik-ca.crt"),
+            ca_file=env_str("MIKROCLEAR_CA_FILE", "/etc/mikroclear/certs/mikrotik-ca.crt"),
             router_connect_retry_seconds=env_int("MIKROCLEAR_ROUTER_CONNECT_RETRY_SECONDS", 30),
             socket_timeout_seconds=env_int("MIKROCLEAR_SOCKET_TIMEOUT_SECONDS", 20),
             router_heartbeat_seconds=env_int("MIKROCLEAR_ROUTER_HEARTBEAT_SECONDS", 60),
