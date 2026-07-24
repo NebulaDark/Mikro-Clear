@@ -14,6 +14,14 @@
 systemd продолжал показывать `active/running`, состояние без Telegram consumer
 не было обнаружено автоматически. Deploy был откатан к `43cbf17`.
 
+Повторный staged deploy коммита `a3cae62` 2026-07-24 воспроизвёл то же
+состояние. SHA установленных runtime-модулей совпали с локальным wheel, но unit
+имел `WorkingDirectory=/usr/local/bin`, где сохранился legacy-файл
+`mikroclear.py`. Из этого каталога Python разрешал имя `mikroclear` именно в
+legacy-файл, поэтому пакетный runtime и новый worker фактически не запускались.
+Acceptance снова завершился rollback к точному прежнему wheel. Перед следующим
+deploy unit должен использовать нейтральный `WorkingDirectory=/`.
+
 ## Цель
 
 Сервис не должен оставаться в ложноположительном состоянии `active`, если
@@ -93,8 +101,10 @@ TDD regression cases:
 ## Deploy Boundary
 
 Повторный deploy выполняется wheel-артефактом из committed HEAD с SHA-256,
-backup и rollback wheel. Helper и sudoers устанавливаются отдельно только через
-root; отсутствие этих файлов не маскируется как полный deploy.
+backup и rollback wheel. Вместе с wheel устанавливается проверенный unit с
+`WorkingDirectory=/`; rollback сохраняет и wheel, и прежний unit. Helper и
+sudoers устанавливаются отдельно только через root; отсутствие этих файлов не
+маскируется как полный deploy.
 
 ## Критерии приёмки
 

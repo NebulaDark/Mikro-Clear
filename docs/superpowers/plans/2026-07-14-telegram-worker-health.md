@@ -8,8 +8,10 @@
 
 **Tech Stack:** Python 3.11+, `threading`, `unittest`, systemd `Restart=on-failure`.
 
-**Status:** Tasks 1-3, Task 4 review, local merge, and clean artifact build
-completed and verified on 2026-07-24. Staged deploy remains pending.
+**Status:** Tasks 1-3, Task 4 review, local merge, clean artifact build, repeat
+staged deploy, acceptance, and automatic rollback completed on 2026-07-24.
+The failed acceptance was traced to legacy module shadowing caused by
+`WorkingDirectory=/usr/local/bin`. The unit correction and repeat deploy remain.
 
 ## Global Constraints
 
@@ -294,11 +296,14 @@ runtime package and polling worker, and excluded the uncommitted MCP dependency
 from its metadata. The deploy report records the final artifact commit and
 SHA-256.
 
-- [ ] **Step 4: Deploy with rollback ready**
+- [x] **Step 4: Deploy with rollback ready**
 
 Capture service state, copy the validated wheel, create a site-packages backup, install through the exact allowed sudo command, and restart `mikroclear.service`.
 
-- [ ] **Step 5: Apply runtime acceptance**
+Deploy result on 2026-07-24: commit `a3cae62` was installed from wheel SHA-256
+`f2a4d3732c2b84ea8c7dfdc79e01f09f54948ae04ab57bf536d60856295a173b`.
+
+- [x] **Step 5: Apply runtime acceptance**
 
 Require all of:
 
@@ -312,10 +317,36 @@ installed module SHA matches the wheel
 no fatal worker error or traceback after at least one 25-second poll window
 ```
 
-- [ ] **Step 6: Roll back on any failed acceptance condition**
+Acceptance result: installed runtime source SHAs matched the candidate, but the
+service remained at `Tasks=1` and emitted no worker-start marker. Read-only
+reproduction confirmed that `/usr/local/bin/mikroclear.py` shadowed the
+installed package because the unit used `WorkingDirectory=/usr/local/bin`.
+
+- [x] **Step 6: Roll back on any failed acceptance condition**
 
 Reinstall the exact rollback wheel matching pre-deploy `polling.py` SHA, restart, and confirm `active/running`, `NRestarts=0`, and the restored source SHA.
+
+Rollback result: wheel SHA-256
+`a70e6e9f155d0da0357df5b9a2e54a986296f11af485fc182e138d178ede19bb`
+was restored; the service returned to `active/running`, `NRestarts=0`, and the
+pre-deploy `polling.py` SHA.
 
 - [ ] **Step 7: Report privileged remainder**
 
 If helper and sudoers still differ, report exact candidate hashes and root install commands. Do not claim a full helper/reset deploy until root-owned files match.
+
+---
+
+### Task 5: Prevent Legacy Module Shadowing And Repeat Deploy
+
+**Files:**
+- Modify: `systemd/mikroclear.service`
+- Modify: `deploy/systemd/mikroclear.service.candidate`
+- Modify: `tests/test_systemd_candidate_unit.py`
+
+- [x] **Step 1: Add a regression test for a neutral working directory**
+- [x] **Step 2: Set both package-entrypoint units to `WorkingDirectory=/`**
+- [x] **Step 3: Run focused and full local verification**
+- [ ] **Step 4: Commit, push, and build a clean wheel from committed HEAD**
+- [ ] **Step 5: Deploy the wheel and corrected unit with both rollback artifacts ready**
+- [ ] **Step 6: Repeat the full runtime acceptance window**

@@ -36,6 +36,16 @@ class SystemdCandidateUnitTests(TestCase):
         self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", service_lines)
         self.assertNotIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
 
+    def test_package_entrypoint_cannot_be_shadowed_by_legacy_working_directory(self):
+        for unit_path in (PRODUCTION_UNIT, CANDIDATE_UNIT):
+            with self.subTest(unit=str(unit_path)):
+                service_lines = section_lines(unit_path, "Service")
+                working_directories = [
+                    line for line in service_lines if line.startswith("WorkingDirectory=")
+                ]
+
+                self.assertEqual(working_directories, ["WorkingDirectory=/"])
+
     def test_candidate_uses_primary_mikroclear_env_only(self):
         service_lines = section_lines(CANDIDATE_UNIT, "Service")
         current = "EnvironmentFile=-/etc/mikroclear/mikroclear.env"

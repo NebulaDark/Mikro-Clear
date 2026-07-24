@@ -145,21 +145,43 @@ Error processing Telegram updates; retry in 30s: HTTP 401: {"ok":false,"error_co
 "allowed_updates": ["callback_query"]
 ```
 
+## Обновление 2026-07-24: подтверждён root cause staged deploy
+
+Два staged deploy пакетного runtime оставляли сервис в состоянии `Tasks=1` без
+Telegram worker, хотя SHA установленных модулей совпадали с wheel. Причина
+подтверждена отдельным read-only импортом на SELKS:
+
+- unit запускал `/opt/mikroclear-venv/bin/python -m mikroclear`;
+- `WorkingDirectory` оставался `/usr/local/bin`;
+- в этом каталоге находится legacy `/usr/local/bin/mikroclear.py`;
+- Python разрешал `mikroclear` в этот файл без package `__path__`, поэтому
+  установленный пакет не исполнялся.
+
+Первый неуспешный deploy `5e01be5` был откатан к `43cbf17`. Повторный deploy
+`a3cae62` был автоматически откатан к точному прежнему wheel с SHA-256
+`a70e6e9f155d0da0357df5b9a2e54a986296f11af485fc182e138d178ede19bb`.
+В репозитории добавлен regression test и unit исправлен на
+`WorkingDirectory=/`. Это объясняет ложноположительный результат именно
+пакетных deploy; отдельная гипотеза о Telegram `allowed_updates` требует
+повторной проверки после успешного запуска пакетного worker.
+
 ## Вывод расследования
 
-На момент фиксации root cause не подтвержден ни внутри кода Mikro-Clear, ни на
-стороне Telegram.
+Для отсутствующего worker при staged deploy root cause подтверждён: legacy
+module shadowing из-за рабочего каталога systemd unit.
 
-Рабочая гипотеза, которую еще нужно проверить контролируемым тестом:
+Для исходного поведения Telegram updates рабочая гипотеза всё ещё требует
+контролируемого теста после исправленного deploy:
 
 - Telegram-side state этого bot token/identity меняется вне SELKS;
 - в результате обычные `message` updates не доходят до production poller;
 - у бота остается только `callback_query` path, поэтому не появляются ни
   `/status` ответы, ни новые inline-кнопки/lock UI.
 
-Конкурирующие объяснения остаются открытыми: неполный reset subscription state,
-внешний consumer этого token или отличие фактически установленного polling
-artifact от локально проверенного кода.
+Конкурирующие Telegram-side объяснения остаются открытыми: неполный reset
+subscription state или внешний consumer этого token. Отличие установленного
+polling artifact от локального кода исключено сравнением SHA, но ранее этот
+artifact не достигал выполнения из-за module shadowing.
 
 Что было исключено:
 

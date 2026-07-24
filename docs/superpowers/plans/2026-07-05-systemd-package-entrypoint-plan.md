@@ -72,8 +72,14 @@ First switch recommendation:
 
 1. Keep `/opt/mikroclear-venv/bin/python`.
 2. Use `-m mikroclear`.
-3. Keep `WorkingDirectory=/usr/local/bin` for now.
+3. Set `WorkingDirectory=/` so `/usr/local/bin/mikroclear.py` cannot shadow the
+   installed `mikroclear` package.
 4. Keep the legacy script and env fallback until one stable runtime window passes.
+
+Correction confirmed on 2026-07-24: with `WorkingDirectory=/usr/local/bin`,
+Python resolved `mikroclear` to `/usr/local/bin/mikroclear.py` and reported no
+package `__path__`. The unit therefore appeared to use `-m mikroclear` while
+actually executing the legacy single-file runtime.
 
 ## 3. EnvironmentFile Strategy
 

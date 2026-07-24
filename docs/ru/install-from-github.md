@@ -6,6 +6,7 @@ entrypoint:
 
 ```text
 /opt/mikroclear-venv/bin/python -m mikroclear
+WorkingDirectory=/
 ```
 
 Проект устанавливается в существующее виртуальное окружение:
@@ -13,6 +14,11 @@ entrypoint:
 ```text
 /opt/mikroclear-venv
 ```
+
+Нейтральный рабочий каталог обязателен, пока существует
+`/usr/local/bin/mikroclear.py`: при `WorkingDirectory=/usr/local/bin` этот
+legacy-файл перехватывает имя `mikroclear`, и пакетный entrypoint фактически не
+запускается.
 
 ## Что делает установка
 
@@ -153,14 +159,32 @@ scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new \
   selks:/var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl
 ```
 
-Проверить sha256 на SELKS:
+Загрузить unit с пакетным entrypoint:
+
+```bash
+scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new \
+  systemd/mikroclear.service \
+  selks:/var/tmp/mikroclear-deploy/mikroclear-codex.service
+```
+
+Проверить SHA-256 обоих кандидатов на SELKS и синтаксис unit:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sha256sum /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl'
+  'sha256sum /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl /var/tmp/mikroclear-deploy/mikroclear-codex.service && systemd-analyze verify /var/tmp/mikroclear-deploy/mikroclear-codex.service'
 ```
 
-Контрольная сумма должна совпадать с локальной.
+Контрольные суммы должны совпадать с локальными.
+
+До первой мутации сохранить точную копию эффективного unit:
+
+```bash
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'sudo install -o root -g root -m 600 /etc/systemd/system/mikroclear.service /var/tmp/mikroclear-deploy/mikroclear.service.rollback && sha256sum /etc/systemd/system/mikroclear.service /var/tmp/mikroclear-deploy/mikroclear.service.rollback'
+```
+
+Предыдущий проверенный wheel также должен оставаться в
+`/var/tmp/mikroclear-deploy` под отдельным именем до завершения acceptance.
 
 ## 6. Установить wheel в production venv
 
@@ -178,12 +202,15 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
   '/opt/mikroclear-venv/bin/python -m pip show mikro-clear | sed -n "1,14p"'
 ```
 
-Проверить импорт:
+Проверить импорт из нейтрального рабочего каталога:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__)"'
+  'cd / && /opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__); print(mikroclear.__path__)"'
 ```
+
+Путь должен указывать в `site-packages`, а `mikroclear.__path__` должен
+существовать.
 
 Проверить service factory без запуска runtime-loop:
 
@@ -198,18 +225,18 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
 MikroClearService
 ```
 
-## 7. Перезапустить сервис
+## 7. Установить unit и перезапустить сервис
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo systemctl restart mikroclear.service && systemctl status mikroclear.service --no-pager --lines=30'
+  'sudo install -o root -g root -m 644 /var/tmp/mikroclear-deploy/mikroclear-codex.service /etc/systemd/system/mikroclear.service && sudo systemctl daemon-reload && sudo systemd-analyze verify /etc/systemd/system/mikroclear.service && sudo systemctl restart mikroclear.service && systemctl status mikroclear.service --no-pager --lines=30'
 ```
 
 Проверить machine-readable status:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'systemctl show mikroclear.service --property=ActiveState,SubState,ExecStart,NRestarts --no-pager'
+  'systemctl show mikroclear.service --property=ActiveState,SubState,ExecStart,WorkingDirectory,NRestarts,TasksCurrent --no-pager'
 ```
 
 Ожидаемо:
@@ -218,8 +245,13 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
 ActiveState=active
 SubState=running
 NRestarts=0
+TasksCurrent=2
+WorkingDirectory=/
 ExecStart=... /opt/mikroclear-venv/bin/python -m mikroclear ...
 ```
+
+`TasksCurrent` должен быть не меньше `2`. После полного long-poll окна журнал
+должен содержать marker запуска Telegram worker и не содержать traceback.
 
 ## 8. Проверить логи
 
@@ -241,18 +273,19 @@ ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
 
 ## 9. Rollback
 
-Если новый wheel нужно откатить, установить предыдущий wheel тем же способом:
+Если acceptance не прошёл, восстановить и предыдущий wheel, и точную резервную
+копию unit:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo /opt/mikroclear-venv/bin/python -m pip install --no-deps --force-reinstall /var/tmp/mikroclear-deploy/<previous-wheel>.whl'
+  'sudo /opt/mikroclear-venv/bin/python -m pip install --no-deps --force-reinstall /var/tmp/mikroclear-deploy/<previous-wheel>.whl && sudo install -o root -g root -m 644 /var/tmp/mikroclear-deploy/mikroclear.service.rollback /etc/systemd/system/mikroclear.service && sudo systemctl daemon-reload && sudo systemd-analyze verify /etc/systemd/system/mikroclear.service'
 ```
 
 Затем:
 
 ```bash
 ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo systemctl restart mikroclear.service && systemctl status mikroclear.service --no-pager --lines=30'
+  'sudo systemctl restart mikroclear.service && systemctl show mikroclear.service --property=ActiveState,SubState,WorkingDirectory,NRestarts,TasksCurrent --no-pager && sha256sum /etc/systemd/system/mikroclear.service'
 ```
 
 Legacy script rollback сохраняется только как аварийный путь, если systemd unit
@@ -262,7 +295,8 @@ Legacy script rollback сохраняется только как аварийн
 /opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
 ```
 
-Для текущей production-модели целевой rollback - переустановка предыдущего wheel.
+Для текущей production-модели целевой rollback всегда восстанавливает оба
+изменяемых артефакта: предыдущий wheel и предыдущий unit.
 
 ## 10. Что не делать
 
@@ -270,5 +304,6 @@ Legacy script rollback сохраняется только как аварийн
 - Не хранить Telegram token в README, issues, logs или shell snippets.
 - Не менять RouterOS/firewall вручную в ходе package deploy.
 - Не переключать `ExecStart`, если текущий package entrypoint уже работает.
+- Не использовать `WorkingDirectory=/usr/local/bin` с пакетным entrypoint.
 - Не запускать runtime-loop локально с production `.env`.
 - Не использовать `MIKROCATA_*` как новые имена переменных.
