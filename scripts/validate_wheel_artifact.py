@@ -14,7 +14,7 @@ REQUIRED_MEMBERS = (
     "mikroclear/__main__.py",
     "mikroclear/cli.py",
     "mikroclear/app.py",
-    "mikroclear/runtime.py",
+    "mikroclear/runtime/__init__.py",
 )
 
 REQUIRED_CONSOLE_SCRIPT = "mikroclear = mikroclear.cli:main"

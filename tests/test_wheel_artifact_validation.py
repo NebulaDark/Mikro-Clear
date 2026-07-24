@@ -29,7 +29,7 @@ def write_wheel(path: Path, *, omit: set[str] | None = None, entry_points: str |
         "mikroclear/__main__.py": "from .cli import main\nraise SystemExit(main())\n",
         "mikroclear/cli.py": "from . import app\n\ndef main():\n    return app.main()\n",
         "mikroclear/app.py": "def main():\n    return 0\n",
-        "mikroclear/runtime.py": "class MikroClearService:\n    pass\n",
+        "mikroclear/runtime/__init__.py": "class MikroClearService:\n    pass\n",
         "mikro_clear-0.1.0.dist-info/entry_points.txt": entry_points,
     }
     with zipfile.ZipFile(path, "w") as wheel:
@@ -52,15 +52,18 @@ class WheelArtifactValidationTests(TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.errors, ())
 
-    def test_missing_runtime_module_fails(self):
+    def test_missing_runtime_package_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             wheel = Path(tmp) / "mikro_clear-0.1.0-py3-none-any.whl"
-            write_wheel(wheel, omit={"mikroclear/runtime.py"})
+            write_wheel(wheel, omit={"mikroclear/runtime/__init__.py"})
 
             result = self.validator.validate_wheel(wheel)
 
         self.assertFalse(result.ok)
-        self.assertIn("missing required member: mikroclear/runtime.py", result.errors)
+        self.assertIn(
+            "missing required member: mikroclear/runtime/__init__.py",
+            result.errors,
+        )
 
     def test_missing_console_script_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
