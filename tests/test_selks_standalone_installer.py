@@ -180,3 +180,106 @@ class SelksStandaloneInstallerTests(TestCase):
 
         self.assertNotIn("pip install -r", source)
         self.assertNotIn("pip install --requirement", source)
+
+    def test_template_layout_has_secure_modes(self):
+        with tempfile.TemporaryDirectory() as root:
+            result = run_bash(
+                "init_paths; install_layout; write_template_config",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+            env_file = Path(root) / "etc/mikroclear/mikroclear.env"
+            config_dir = env_file.parent
+            cert_dir = config_dir / "certs"
+            state_dir = Path(root) / "var/lib/mikroclear"
+            backup_dir = Path(root) / "var/backups/mikroclear"
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(config_dir.stat().st_mode & 0o777, 0o750)
+            self.assertEqual(cert_dir.stat().st_mode & 0o777, 0o750)
+            self.assertEqual(env_file.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(state_dir.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(backup_dir.stat().st_mode & 0o777, 0o700)
+            self.assertIn(
+                "MIKROCLEAR_ROUTER_PASSWORD=",
+                env_file.read_text(encoding="utf-8"),
+            )
+
+    def test_existing_template_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as root:
+            env_file = Path(root) / "etc/mikroclear/mikroclear.env"
+            env_file.parent.mkdir(parents=True)
+            env_file.write_text("KEEP=1\n", encoding="utf-8")
+
+            result = run_bash(
+                "init_paths; write_template_config",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("configuration already exists", result.stderr)
+            self.assertEqual(env_file.read_text(encoding="utf-8"), "KEEP=1\n")
+
+    def test_service_identity_is_not_mutated_in_test_mode(self):
+        with tempfile.TemporaryDirectory() as root:
+            result = run_bash(
+                'groupadd(){ printf "MUTATION groupadd\\n"; }; '
+                'useradd(){ printf "MUTATION useradd\\n"; }; '
+                "init_paths; ensure_service_identity",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("MUTATION", result.stdout)
+
+    def test_eve_failure_does_not_run_permission_mutations(self):
+        result = run_bash(
+            'chmod(){ printf "MUTATION chmod\\n"; }; '
+            'chown(){ printf "MUTATION chown\\n"; }; '
+            'setfacl(){ printf "MUTATION setfacl\\n"; }; '
+            "run_as_service_user(){ return 1; }; "
+            "namei(){ :; }; stat(){ printf 'suricata\\n'; }; "
+            "verify_eve_access"
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("eve.json is not readable by mikroclear", result.stderr)
+        self.assertNotIn("MUTATION", result.stdout)
+        self.assertTrue(
+            "usermod -a -G" in result.stderr or "setfacl -m" in result.stderr
+        )
+
+    def test_eve_success_uses_service_user_check(self):
+        result = run_bash(
+            'run_as_service_user(){ printf "%s\\n" "$*"; return 0; }; '
+            "verify_eve_access"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("test -r", result.stdout)
+        self.assertIn("eve.json", result.stdout)
+
+    def test_unexpected_symlink_target_is_rejected_before_layout_changes(self):
+        with tempfile.TemporaryDirectory() as root:
+            etc = Path(root) / "etc"
+            etc.mkdir()
+            (etc / "mikroclear").symlink_to("/tmp")
+
+            result = run_bash(
+                "init_paths; validate_target_paths",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unexpected symlink", result.stderr)
