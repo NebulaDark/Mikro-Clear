@@ -400,6 +400,250 @@ verify_eve_access() {
     die "eve.json is not readable by ${SERVICE_USER}"
 }
 
+env_line() {
+    local key="$1"
+    local value="$2"
+    local escaped
+
+    [[ "${key}" =~ ^[A-Z][A-Z0-9_]*$ ]] ||
+        die "invalid environment key: ${key}"
+    if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+        die "newline is not allowed in environment value"
+    fi
+    escaped="${value//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    printf '%s="%s"\n' "${key}" "${escaped}"
+}
+
+render_config() {
+    local router_username="${ROUTER_USERNAME:-}"
+    local router_password="${ROUTER_PASSWORD:-}"
+    local router_ip="${ROUTER_IP:-}"
+    local use_ssl="${USE_SSL:-true}"
+    local router_port="${ROUTER_PORT:-8729}"
+    local tls_server_name="${TLS_SERVER_NAME:-${router_ip}}"
+    local allow_self_signed="${ALLOW_SELF_SIGNED:-false}"
+    local telegram_enable="${TELEGRAM_ENABLE:-false}"
+    local telegram_token="${TELEGRAM_TOKEN:-}"
+    local telegram_chatid="${TELEGRAM_CHATID:-}"
+    local mangle_enable="${MANGLE_CONTROL_ENABLE:-false}"
+
+    env_line MIKROCLEAR_ROUTER_USERNAME "${router_username}"
+    env_line MIKROCLEAR_ROUTER_PASSWORD "${router_password}"
+    env_line MIKROCLEAR_ROUTER_IP "${router_ip}"
+    printf '%s\n' \
+        "MIKROCLEAR_USE_SSL=${use_ssl}" \
+        "MIKROCLEAR_ROUTER_PORT=${router_port}" \
+        "MIKROCLEAR_ROUTER_CONNECT_NOTIFY_ENABLE=false" \
+        "MIKROCLEAR_ALLOW_SELF_SIGNED_CERTS=${allow_self_signed}" \
+        "MIKROCLEAR_CA_FILE=${CANONICAL_CA_FILE}"
+    env_line MIKROCLEAR_ROUTER_TLS_SERVER_NAME "${tls_server_name}"
+    printf '%s\n' \
+        "MIKROCLEAR_BLOCK_LIST_NAME=Suricata" \
+        "MIKROCLEAR_BLOCK_TIMEOUT=1d" \
+        "MIKROCLEAR_MONITOR_ONLY=false" \
+        "MIKROCLEAR_TELEGRAM_ENABLE=${telegram_enable}"
+    env_line MIKROCLEAR_TELEGRAM_TOKEN "${telegram_token}"
+    env_line MIKROCLEAR_TELEGRAM_CHATID "${telegram_chatid}"
+    printf '%s\n' \
+        "MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true" \
+        "MIKROCLEAR_TELEGRAM_UNBLOCK_TTL_SECONDS=86400" \
+        "MIKROCLEAR_TELEGRAM_LONG_POLL_SECONDS=25" \
+        "MIKROCLEAR_MANGLE_CONTROL_ENABLE=${mangle_enable}" \
+        "MIKROCLEAR_MANGLE_COMMENT_PREFIX=MC:" \
+        "MIKROCLEAR_MANGLE_ALLOWED_CHAINS=prerouting" \
+        "MIKROCLEAR_MANGLE_ALLOWED_ACTIONS=mark-routing" \
+        "MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION=true" \
+        "MIKROCLEAR_BOT_ENABLE=${telegram_enable}" \
+        "MIKROCLEAR_BOT_DRY_RUN=true"
+    env_line MIKROCLEAR_BOT_ADMIN_CHAT_IDS "${telegram_chatid}"
+    env_line MIKROCLEAR_BOT_ALLOWED_CHAT_IDS "${telegram_chatid}"
+    printf '%s\n' \
+        "MIKROCLEAR_BOT_MODULES=status,asset_resolver,mangle_control,parental_control" \
+        "MIKROCLEAR_BOT_AUDIT_LOG=/var/lib/mikroclear/bot-audit.log" \
+        "MIKROCLEAR_SURICATA_LOG_DIR=/opt/SELKS/docker/containers-data/suricata/logs/" \
+        "MIKROCLEAR_EVE_JSON=${CANONICAL_EVE_PATH}" \
+        "MIKROCLEAR_STATE_DIR=${CANONICAL_STATE_DIR}" \
+        "MIKROCLEAR_SEVERITY=1,2" \
+        "MIKROCLEAR_LISTEN_INTERFACES=tzsp0" \
+        "MIKROCLEAR_ADD_ON_START=false" \
+        "MIKROCLEAR_DEBUG=false"
+}
+
+print_masked_summary() {
+    printf '%s\n' \
+        "RouterOS user: ${ROUTER_USERNAME:-}" \
+        "RouterOS password: ***" \
+        "RouterOS address: ${ROUTER_IP:-}:${ROUTER_PORT:-}" \
+        "RouterOS TLS: ${USE_SSL:-true}" \
+        "Telegram enabled: ${TELEGRAM_ENABLE:-false}" \
+        "Telegram token: ***" \
+        "Telegram chat ID: ${TELEGRAM_CHATID:-}" \
+        "Mangle control: ${MANGLE_CONTROL_ENABLE:-false}"
+}
+
+validate_config_text() {
+    local config_path="$1"
+    local key
+    local line
+    local required=(
+        MIKROCLEAR_ROUTER_USERNAME
+        MIKROCLEAR_ROUTER_PASSWORD
+        MIKROCLEAR_ROUTER_IP
+        MIKROCLEAR_ROUTER_PORT
+        MIKROCLEAR_STATE_DIR
+        MIKROCLEAR_EVE_JSON
+    )
+
+    for key in "${required[@]}"; do
+        line="$(grep -m 1 "^${key}=" "${config_path}" || true)"
+        [[ -n "${line}" && "${line#*=}" != '""' ]] ||
+            return 1
+    done
+}
+
+write_config_atomic() {
+    local content="$1"
+    local temporary
+
+    temporary="$(mktemp "${CONFIG_DIR}/.mikroclear.env.XXXXXX")"
+    printf '%s\n' "${content}" >"${temporary}"
+    if ! validate_config_text "${temporary}"; then
+        rm -f "${temporary}"
+        die "configuration validation failed"
+        return 1
+    fi
+    chmod 0640 "${temporary}"
+    if [[ "${TEST_MODE}" != "1" ]]; then
+        chown root:"${SERVICE_GROUP}" "${temporary}"
+    fi
+    mv -T "${temporary}" "${ENV_FILE}"
+}
+
+validate_ca_source() {
+    local source="$1"
+
+    [[ -f "${source}" ]] ||
+        die "invalid CA certificate: file not found"
+    openssl x509 -in "${source}" -noout >/dev/null 2>&1 ||
+        die "invalid CA certificate: ${source}"
+}
+
+install_ca() {
+    local source="$1"
+    local temporary
+
+    validate_ca_source "${source}"
+    temporary="$(mktemp "${CERT_DIR}/.mikrotik-ca.crt.XXXXXX")"
+    if ! install -m 0640 "${source}" "${temporary}"; then
+        rm -f "${temporary}"
+        return 1
+    fi
+    if [[ "${TEST_MODE}" != "1" ]]; then
+        chown root:"${SERVICE_GROUP}" "${temporary}"
+    fi
+    mv -T "${temporary}" "${CA_FILE}"
+}
+
+validate_router_port() {
+    local port="$1"
+
+    [[ "${port}" =~ ^[0-9]+$ ]] &&
+        ((port >= 1 && port <= 65535)) ||
+        die "RouterOS port must be between 1 and 65535"
+}
+
+read_yes_no() {
+    local prompt="$1"
+    local default="$2"
+    local answer
+
+    printf '%s [%s]: ' "${prompt}" "${default}" >&2
+    read -r answer
+    answer="${answer:-${default}}"
+    case "${answer,,}" in
+        yes | y | true) printf '%s\n' "true" ;;
+        no | n | false) printf '%s\n' "false" ;;
+        *) die "answer yes or no" ;;
+    esac
+}
+
+collect_interactive_config() {
+    local confirmation
+
+    printf 'RouterOS username: ' >&2
+    read -r ROUTER_USERNAME
+    printf 'RouterOS password: ' >&2
+    read -r -s ROUTER_PASSWORD
+    printf '\nRouterOS address: ' >&2
+    read -r ROUTER_IP
+    [[ -n "${ROUTER_USERNAME}" &&
+        -n "${ROUTER_PASSWORD}" &&
+        -n "${ROUTER_IP}" ]] ||
+        die "RouterOS username, password and address are required"
+
+    USE_SSL="$(read_yes_no "Use RouterOS TLS" "yes")"
+    if [[ "${USE_SSL}" == "true" ]]; then
+        printf 'RouterOS API port [8729]: ' >&2
+        read -r ROUTER_PORT
+        ROUTER_PORT="${ROUTER_PORT:-8729}"
+        printf 'TLS server name [%s]: ' "${ROUTER_IP}" >&2
+        read -r TLS_SERVER_NAME
+        TLS_SERVER_NAME="${TLS_SERVER_NAME:-${ROUTER_IP}}"
+        ALLOW_SELF_SIGNED="$(
+            read_yes_no "Disable certificate verification (unsafe)" "no"
+        )"
+        CA_SOURCE=""
+        if [[ "${ALLOW_SELF_SIGNED}" == "false" ]]; then
+            printf 'Source CA certificate path: ' >&2
+            read -r CA_SOURCE
+            [[ -n "${CA_SOURCE}" ]] ||
+                die "CA certificate path is required for verified TLS"
+            validate_ca_source "${CA_SOURCE}"
+        fi
+    else
+        printf 'RouterOS API port [8728]: ' >&2
+        read -r ROUTER_PORT
+        ROUTER_PORT="${ROUTER_PORT:-8728}"
+        TLS_SERVER_NAME="${ROUTER_IP}"
+        ALLOW_SELF_SIGNED=false
+        CA_SOURCE=""
+    fi
+    validate_router_port "${ROUTER_PORT}"
+
+    TELEGRAM_ENABLE="$(read_yes_no "Enable Telegram" "no")"
+    TELEGRAM_TOKEN=""
+    TELEGRAM_CHATID=""
+    if [[ "${TELEGRAM_ENABLE}" == "true" ]]; then
+        printf 'Telegram token: ' >&2
+        read -r -s TELEGRAM_TOKEN
+        printf '\nTelegram chat ID: ' >&2
+        read -r TELEGRAM_CHATID
+        [[ -n "${TELEGRAM_TOKEN}" && -n "${TELEGRAM_CHATID}" ]] ||
+            die "Telegram token and chat ID are required"
+    fi
+
+    MANGLE_CONTROL_ENABLE="$(
+        read_yes_no "Enable Telegram mangle control" "no"
+    )"
+    print_masked_summary
+    confirmation="$(read_yes_no "Write this configuration" "no")"
+    [[ "${confirmation}" == "true" ]] ||
+        die "configuration was not confirmed"
+}
+
+configure_interactively() {
+    local content
+
+    collect_interactive_config
+    if [[ "${USE_SSL}" == "true" &&
+        "${ALLOW_SELF_SIGNED}" == "false" ]]; then
+        install_ca "${CA_SOURCE}"
+    fi
+    content="$(render_config)"
+    write_config_atomic "${content}"
+}
+
 main() {
     local parse_rc=0
     parse_args "$@" || parse_rc=$?

@@ -283,3 +283,136 @@ class SelksStandaloneInstallerTests(TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unexpected symlink", result.stderr)
+
+    def test_rendered_config_uses_safe_defaults(self):
+        result = run_bash(
+            "ROUTER_USERNAME=api; ROUTER_PASSWORD=secret; "
+            "ROUTER_IP=192.0.2.1; USE_SSL=true; ROUTER_PORT=8729; "
+            "TLS_SERVER_NAME=router.example; ALLOW_SELF_SIGNED=false; "
+            "TELEGRAM_ENABLE=false; TELEGRAM_TOKEN=; TELEGRAM_CHATID=; "
+            "render_config"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "MIKROCLEAR_CA_FILE=/etc/mikroclear/certs/mikrotik-ca.crt",
+            result.stdout,
+        )
+        self.assertIn("MIKROCLEAR_MANGLE_CONTROL_ENABLE=false", result.stdout)
+        self.assertIn("MIKROCLEAR_BOT_DRY_RUN=true", result.stdout)
+
+    def test_env_renderer_quotes_special_characters_and_rejects_newlines(self):
+        quoted = run_bash("env_line SECRET 'space # quote\" backslash\\'")
+        rejected = run_bash("env_line SECRET $'first\\nsecond'")
+
+        self.assertEqual(quoted.returncode, 0, quoted.stderr)
+        self.assertEqual(
+            quoted.stdout,
+            r'SECRET="space # quote\" backslash\\"' + "\n",
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "newline is not allowed in environment value",
+            rejected.stderr,
+        )
+
+    def test_summary_masks_all_secrets(self):
+        result = run_bash(
+            "ROUTER_USERNAME=api; ROUTER_PASSWORD=router-secret; "
+            "ROUTER_IP=192.0.2.1; ROUTER_PORT=8729; USE_SSL=true; "
+            "TELEGRAM_ENABLE=true; TELEGRAM_TOKEN=telegram-secret; "
+            "TELEGRAM_CHATID=42; print_masked_summary"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("router-secret", result.stdout)
+        self.assertNotIn("telegram-secret", result.stdout)
+        self.assertGreaterEqual(result.stdout.count("***"), 2)
+
+    def test_atomic_writer_preserves_existing_file_on_failure(self):
+        with tempfile.TemporaryDirectory() as root:
+            env_file = Path(root) / "etc/mikroclear/mikroclear.env"
+            env_file.parent.mkdir(parents=True)
+            env_file.write_text("OLD=1\n", encoding="utf-8")
+            result = run_bash(
+                "init_paths; validate_config_text(){ return 1; }; "
+                'write_config_atomic "NEW=1"',
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("configuration validation failed", result.stderr)
+            self.assertEqual(env_file.read_text(encoding="utf-8"), "OLD=1\n")
+
+    def test_valid_ca_is_copied_to_canonical_secure_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            source_ca = Path(root) / "source-ca.crt"
+            subprocess.run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-nodes",
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/CN=mikroclear-installer-test",
+                    "-keyout",
+                    str(Path(root) / "source-ca.key"),
+                    "-out",
+                    str(source_ca),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            result = run_bash(
+                f'init_paths; install_layout; install_ca "{source_ca}"',
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+            installed = (
+                Path(root)
+                / "etc/mikroclear/certs/mikrotik-ca.crt"
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(installed.read_bytes(), source_ca.read_bytes())
+            self.assertEqual(installed.stat().st_mode & 0o777, 0o640)
+
+    def test_invalid_ca_does_not_replace_existing_ca(self):
+        with tempfile.TemporaryDirectory() as root:
+            cert_dir = Path(root) / "etc/mikroclear/certs"
+            cert_dir.mkdir(parents=True)
+            installed = cert_dir / "mikrotik-ca.crt"
+            installed.write_text("OLD CERT\n", encoding="utf-8")
+            invalid = Path(root) / "invalid.crt"
+            invalid.write_text("not a certificate\n", encoding="utf-8")
+
+            result = run_bash(
+                f'init_paths; install_ca "{invalid}"',
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid CA certificate", result.stderr)
+            self.assertEqual(
+                installed.read_text(encoding="utf-8"),
+                "OLD CERT\n",
+            )
+
+    def test_interactive_collector_reads_secrets_without_echo(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("read -r -s ROUTER_PASSWORD", source)
+        self.assertIn("read -r -s TELEGRAM_TOKEN", source)
