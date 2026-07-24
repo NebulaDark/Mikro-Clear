@@ -1,309 +1,439 @@
-# Установка Mikro-Clear с GitHub
+# Установка Mikro-Clear из Git
 
-Документ описывает целевой способ установки Mikro-Clear из GitHub на SELKS.
-Актуальная production-модель после деплоя 2026-07-06: systemd запускает пакетный
-entrypoint:
-
-```text
-/opt/mikroclear-venv/bin/python -m mikroclear
-WorkingDirectory=/
-```
-
-Проект устанавливается в существующее виртуальное окружение:
+Эта инструкция предназначена для чистой установки, повторного запуска и
+обновления Mikro-Clear непосредственно на сервере SELKS. Установка выполняется
+из локального Git checkout одним скриптом:
 
 ```text
-/opt/mikroclear-venv
+scripts/install-selks.sh
 ```
 
-Нейтральный рабочий каталог обязателен, пока существует
-`/usr/local/bin/mikroclear.py`: при `WorkingDirectory=/usr/local/bin` этот
-legacy-файл перехватывает имя `mikroclear`, и пакетный entrypoint фактически не
-запускается.
+Скрипт не подключается к другим серверам и не обновляет репозиторий. Он всегда
+собирает и устанавливает точный зафиксированный `HEAD`, поэтому перед запуском
+оператор сам выбирает нужный тег или commit.
 
-## Что делает установка
+## Поддерживаемая система
 
-1. Клонирует репозиторий Mikro-Clear из GitHub.
-2. Собирает wheel-артефакт из текущего кода.
-3. Загружает wheel на SELKS.
-4. Устанавливает wheel в `/opt/mikroclear-venv`.
-5. Проверяет импорт пакета.
-6. Перезапускает `mikroclear.service`.
-7. Проверяет статус и последние логи.
+Официальная матрица проверки включает Debian 12 и Debian 13. Более новая версия
+Debian или другой Linux с systemd также может работать: жёсткой проверки имени
+и версии дистрибутива нет. Обязательны:
 
-## Предварительные условия
+- Python 3.11 или новее с `venv` и `ensurepip`;
+- systemd как активная init-система;
+- Git, OpenSSL, util-linux и стандартные GNU utilities;
+- `apt-get`, если установщику потребуется поставить недостающие системные
+  пакеты;
+- не менее 512 MiB свободного места в `/opt`, плюс размер текущего virtualenv
+  при обновлении;
+- локальный доступ к `eve.json`.
 
-На локальной машине:
+Установщик запускается от `root`. Если системной команды не хватает, он покажет
+точный список и отдельно спросит разрешение на `apt-get update` и
+`apt-get install`. Другие менеджеры пакетов автоматически не вызываются.
 
-- доступ к приватному репозиторию GitHub;
-- Python 3.11+;
-- SSH-доступ к SELKS через alias `selks`;
-- файл `/home/mgm/.ssh/config` содержит подключение к SELKS;
-- локальный checkout чистый перед сборкой.
+## Получение проверяемой версии
 
-На SELKS:
-
-- существует `/opt/mikroclear-venv`;
-- в venv уже доступны runtime-зависимости проекта;
-- существует `/etc/mikroclear/mikroclear.env`;
-- существует `/var/lib/mikroclear`;
-- `mikroclear.service` использует package entrypoint;
-- пользователь, выполняющий финальную установку, имеет `sudo`.
-
-Проверка текущего entrypoint:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'systemctl show mikroclear.service --property=ExecStart --no-pager'
-```
-
-Ожидаемо:
-
-```text
-ExecStart=... /opt/mikroclear-venv/bin/python -m mikroclear ...
-```
-
-## 1. Получить код из GitHub
-
-Для чистой установки:
+Выполните эти команды непосредственно на SELKS:
 
 ```bash
 git clone https://github.com/paveltarasov50-coder/Mikro-Clear.git
 cd Mikro-Clear
+git switch --detach <tag-or-commit>
+git status --short
+git rev-parse HEAD
 ```
 
-Для проверки конкретной feature-ветки до merge:
+Замените `<tag-or-commit>` на проверенный тег или полный commit SHA. Незакоммиченные
+файлы checkout не войдут в артефакт: установщик использует `git archive HEAD`.
+
+## Автоматическая установка
+
+### Выбор режима в меню
+
+Для запуска меню:
+
+```bash
+sudo ./scripts/install-selks.sh
+```
+
+Для новой установки предлагаются ровно два варианта:
+
+```text
+1) Интерактивная настройка
+2) Шаблон конфигурации
+```
+
+Если полная установка уже существует, повторный запуск без аргументов считается
+обновлением текущего runtime.
+
+### Вариант 1: интерактивная настройка
+
+Режим можно выбрать в меню или явно:
+
+```bash
+sudo ./scripts/install-selks.sh --interactive
+```
+
+Скрипт запросит:
+
+- имя, пароль, адрес и API-порт RouterOS;
+- режим TLS, имя сервера и путь к CA-сертификату;
+- включение Telegram, токен и Chat ID;
+- включение управления mangle;
+- подтверждение итоговой конфигурации.
+
+Пароль RouterOS и Telegram-токен вводятся без отображения. В итоговом резюме
+секреты заменяются на `***`. Значения с переводом строки отклоняются.
+
+При проверяемом TLS исходный CA-сертификат валидируется OpenSSL и копируется в:
+
+```text
+/etc/mikroclear/certs/mikrotik-ca.crt
+```
+
+После записи конфигурации установщик собирает wheel из committed `HEAD`,
+создаёт отдельный candidate virtualenv, переключает runtime, запускает сервис и
+выполняет acceptance-проверку.
+
+### Вариант 2: шаблон конфигурации
+
+Режим можно выбрать в меню или явно:
+
+```bash
+sudo ./scripts/install-selks.sh --config-template
+```
+
+Он создаёт каталоги, virtualenv, unit и файл:
+
+```text
+/etc/mikroclear/mikroclear.env
+```
+
+Сервис при этом не запускается. Заполните конфигурацию:
+
+```bash
+sudoedit /etc/mikroclear/mikroclear.env
+sudo install -o root -g mikroclear -m 0640 \
+  /path/to/routeros-ca.crt \
+  /etc/mikroclear/certs/mikrotik-ca.crt
+sudo openssl x509 \
+  -in /etc/mikroclear/certs/mikrotik-ca.crt \
+  -noout
+```
+
+Если RouterOS TLS отключён или временно разрешена работа без проверки
+сертификата, отдельный CA-файл не требуется. После заполнения конфигурации:
+
+```bash
+sudo ./scripts/install-selks.sh --start
+```
+
+`--start` проверяет обязательные параметры, доступ к `eve.json`, запускает
+сервис и выполняет ту же acceptance-проверку.
+
+## Пользователь сервиса и файловая раскладка
+
+Runtime работает не от root, а от системного пользователя и группы
+`mikroclear`.
+
+| Путь | Владелец | Режим | Назначение |
+|---|---|---:|---|
+| `/opt/mikroclear-venv` | root:root | доступ на чтение/исполнение | Python runtime |
+| `/etc/mikroclear` | root:mikroclear | `0750` | конфигурация |
+| `/etc/mikroclear/certs` | root:mikroclear | `0750` | сертификаты |
+| `/etc/mikroclear/mikroclear.env` | root:mikroclear | `0640` | параметры и секреты |
+| `/etc/mikroclear/certs/mikrotik-ca.crt` | root:mikroclear | `0640` | CA RouterOS |
+| `/var/lib/mikroclear` | mikroclear:mikroclear | `0700` | состояние и audit log |
+| `/var/backups/mikroclear` | root:root | `0700` | резервные копии обновлений |
+| `/etc/systemd/system/mikroclear.service` | root:root | `0644` | systemd unit |
+
+Unit использует:
+
+```text
+User=mikroclear
+Group=mikroclear
+WorkingDirectory=/
+EnvironmentFile=/etc/mikroclear/mikroclear.env
+ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
+```
+
+## Доступ к eve.json
+
+Ожидаемый путь:
+
+```text
+/opt/SELKS/docker/containers-data/suricata/logs/eve.json
+```
+
+Установщик только проверяет чтение от имени `mikroclear`:
+
+```bash
+sudo -u mikroclear test -r \
+  /opt/SELKS/docker/containers-data/suricata/logs/eve.json
+```
+
+Он не выполняет `chmod`, `chown`, `setfacl` и не меняет SELKS/Docker
+автоматически. При ошибке скрипт выводит `namei`, `stat` и рекомендуемую команду
+для группы либо ACL. Оператор должен изучить текущую модель прав, применить
+минимальное изменение и повторить проверку.
+
+## Acceptance после запуска
+
+Установщик ждёт до 90 секунд и принимает установку только при выполнении всех
+условий:
+
+- `ActiveState=active`, `SubState=running`, `NRestarts=0`;
+- `User=mikroclear`, `Group=mikroclear`, `WorkingDirectory=/`;
+- процесс действительно запущен от `mikroclear`;
+- импорт `mikroclear` идёт из active virtualenv;
+- каталог состояния доступен на запись, а `eve.json` — на чтение;
+- журнал содержит `Connected to MikroTik`;
+- журнал не содержит `Traceback` или fatal-сообщение Telegram worker;
+- при включённом Telegram журнал содержит `Telegram polling worker started`, а
+  число задач не меньше двух.
+
+Ручная проверка:
+
+```bash
+systemctl show mikroclear.service \
+  --property=ActiveState,SubState,NRestarts,TasksCurrent,User,Group,WorkingDirectory,MainPID \
+  --no-pager
+journalctl -u mikroclear.service -n 100 --no-pager |
+  sed -E 's#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g'
+```
+
+Если Telegram включён, отправьте тестовому боту:
+
+```text
+/status
+```
+
+Ожидаемый ответ должен показывать uptime, подключение RouterOS, актуальный путь
+`eve.json`, address-list, режим monitor-only, Telegram unblock, dry-run и список
+модулей. Для write-команд сначала сохраняйте `MIKROCLEAR_BOT_DRY_RUN=true`.
+
+## Обновление
+
+Перейдите в checkout, выберите новый проверенный commit и запустите:
 
 ```bash
 git fetch origin
-git checkout feature/canonical-module-ownership
-git pull --ff-only
+git switch --detach <new-tag-or-commit>
+git rev-parse HEAD
+sudo ./scripts/install-selks.sh
 ```
 
-Для production deploy после merge использовать только `main`:
+При существующей полной установке скрипт:
+
+1. проверяет конфигурацию и доступ к `eve.json`;
+2. сохраняет unit, env, CA, manifest, `pip freeze` и точный старый virtualenv;
+3. собирает candidate из нового committed `HEAD`;
+4. останавливает сервис только перед переключением;
+5. переключает virtualenv переименованием в пределах `/opt`;
+6. устанавливает unit и выполняет acceptance;
+7. сохраняет предыдущий runtime в timestamp-каталоге backup.
+
+Для обновления одновременно с повторным вводом конфигурации используйте:
 
 ```bash
-git checkout main
-git pull --ff-only
+sudo ./scripts/install-selks.sh --interactive
 ```
 
-## 2. Создать локальное окружение сборки
+Режим `--config-template` никогда не перезаписывает существующую установку.
+
+## Rollback
+
+При неуспешном acceptance обновления скрипт автоматически:
+
+- останавливает неуспешный сервис;
+- перемещает failed virtualenv в каталог backup;
+- возвращает точный предыдущий virtualenv;
+- восстанавливает unit, env, CA и manifest;
+- выполняет `daemon-reload`, запускает старую версию и проверяет её состояние.
+
+Установщик возвращает ненулевой код даже после успешного автоматического
+rollback. Если восстановленная версия не стала `active/running` с
+`NRestarts=0`, выводится `ROLLBACK FAILED` и путь к backup. Не удаляйте этот
+каталог до расследования.
+
+Проверить резервные копии:
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip setuptools wheel
-.venv/bin/python -m pip install -r requirements.txt
+sudo ls -la /var/backups/mikroclear
+sudo find /var/backups/mikroclear -maxdepth 2 -type f -printf '%M %u:%g %p\n'
 ```
 
-Если зависимости уже установлены, повторная установка не обязательна.
-
-## 3. Проверить код до сборки
+## Диагностика
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
-PYTHONPYCACHEPREFIX=/tmp/mikroclear-pycache git ls-files '*.py' | xargs .venv/bin/python -m py_compile
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -c "import mikroclear.app as app; svc = app.build_service(); print(type(svc).__name__)"
+systemctl status mikroclear.service --no-pager --lines=30
+systemctl show mikroclear.service \
+  --property=ActiveState,SubState,NRestarts,TasksCurrent,User,Group,WorkingDirectory,MainPID \
+  --no-pager
+sudo journalctl -u mikroclear.service -n 100 --no-pager |
+  sed -E 's#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g'
+sudo stat -c '%U:%G %a %n' \
+  /etc/mikroclear \
+  /etc/mikroclear/certs \
+  /etc/mikroclear/mikroclear.env \
+  /etc/mikroclear/certs/mikrotik-ca.crt \
+  /var/lib/mikroclear
 ```
 
-Ожидаемо:
+Не публикуйте содержимое env-файла, пароли, токены и Bot API URL без
+маскировки.
+
+## Ручная установка
+
+Автоматический скрипт — основной и более безопасный путь. Этот раздел описывает
+его ручной эквивалент для аудита или восстановления.
+
+### 1. Зависимости и committed snapshot
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  git openssl python3 python3-venv python3-pip systemd util-linux
+
+git rev-parse HEAD
+install_root="$(mktemp -d /var/tmp/mikroclear-manual.XXXXXX)"
+git archive HEAD | tar -x -C "${install_root}"
+```
+
+### 2. Сборка и проверка wheel
+
+```bash
+python3 -m venv "${install_root}/build-venv"
+"${install_root}/build-venv/bin/python" -m pip install 'setuptools>=68' wheel
+mkdir -p "${install_root}/dist"
+"${install_root}/build-venv/bin/python" -m pip wheel \
+  --no-deps --no-build-isolation \
+  --wheel-dir "${install_root}/dist" \
+  "${install_root}"
+"${install_root}/build-venv/bin/python" \
+  "${install_root}/scripts/validate_wheel_artifact.py" \
+  "${install_root}"/dist/mikro_clear-*.whl
+sha256sum "${install_root}"/dist/mikro_clear-*.whl
+```
+
+Не устанавливайте `requirements.txt` в production runtime.
+
+### 3. Identity, каталоги и конфигурация
+
+```bash
+sudo groupadd --system mikroclear 2>/dev/null || true
+sudo useradd --system --gid mikroclear --no-create-home \
+  --home-dir /nonexistent --shell /usr/sbin/nologin \
+  mikroclear 2>/dev/null || true
+sudo install -d -o root -g mikroclear -m 0750 \
+  /etc/mikroclear /etc/mikroclear/certs
+sudo install -d -o mikroclear -g mikroclear -m 0700 /var/lib/mikroclear
+sudo install -d -o root -g root -m 0700 /var/backups/mikroclear
+sudo install -o root -g mikroclear -m 0640 \
+  "${install_root}/config/mikroclear.env.example" \
+  /etc/mikroclear/mikroclear.env
+sudoedit /etc/mikroclear/mikroclear.env
+```
+
+Минимально заполните RouterOS user, password, IP, port, state dir и EVE path.
+Секретные значения в документации намеренно не приводятся:
 
 ```text
-OK
-MikroClearService
+MIKROCLEAR_ROUTER_USERNAME=""
+MIKROCLEAR_ROUTER_PASSWORD=""
+MIKROCLEAR_ROUTER_IP=""
+MIKROCLEAR_ROUTER_PORT=8729
+MIKROCLEAR_STATE_DIR=/var/lib/mikroclear
+MIKROCLEAR_EVE_JSON=/opt/SELKS/docker/containers-data/suricata/logs/eve.json
+MIKROCLEAR_CA_FILE=/etc/mikroclear/certs/mikrotik-ca.crt
+MIKROCLEAR_TELEGRAM_TOKEN=""
 ```
 
-Проверка отсутствия runtime-зависимости от retired module:
+Для проверяемого RouterOS TLS:
 
 ```bash
-grep -R "from mikroclear import legacy_runtime" src tests || true
-grep -R "import mikroclear.legacy_runtime" src tests || true
+sudo openssl x509 -in /path/to/routeros-ca.crt -noout
+sudo install -o root -g mikroclear -m 0640 \
+  /path/to/routeros-ca.crt \
+  /etc/mikroclear/certs/mikrotik-ca.crt
 ```
 
-Ожидаемо: команды ничего не выводят.
-
-## 4. Собрать wheel
-
-Рекомендуемая команда для этого репозитория:
+### 4. Candidate virtualenv и EVE
 
 ```bash
-rm -rf dist
-.venv/bin/python -m pip wheel --no-build-isolation --no-deps -w dist .
+sudo python3 -m venv /opt/.mikroclear-venv.candidate
+sudo /opt/.mikroclear-venv.candidate/bin/python -m pip install \
+  "${install_root}"/dist/mikro_clear-*.whl
+cd /
+/opt/.mikroclear-venv.candidate/bin/python -c \
+  'import pathlib, mikroclear; print(pathlib.Path(mikroclear.__file__).resolve())'
+sudo -u mikroclear test -r \
+  /opt/SELKS/docker/containers-data/suricata/logs/eve.json
+sudo -u mikroclear test -w /var/lib/mikroclear
 ```
 
-Проверить артефакт:
+Импорт должен указывать внутрь candidate `site-packages`.
+
+### 5. Backup и переключение
+
+Для чистой установки пропустите копирование старых файлов. При обновлении:
 
 ```bash
-.venv/bin/python scripts/validate_wheel_artifact.py dist/mikro_clear-0.1.0-py3-none-any.whl
-sha256sum dist/mikro_clear-0.1.0-py3-none-any.whl
+backup_dir="/var/backups/mikroclear/$(date -u +%Y%m%dT%H%M%SZ)"
+sudo install -d -o root -g root -m 0700 "${backup_dir}"
+sudo cp -a /etc/systemd/system/mikroclear.service "${backup_dir}/"
+sudo cp -a /etc/mikroclear/mikroclear.env "${backup_dir}/"
+sudo cp -a /etc/mikroclear/certs/mikrotik-ca.crt "${backup_dir}/"
+sudo cp -a /var/lib/mikroclear/install-manifest "${backup_dir}/"
+sudo /opt/mikroclear-venv/bin/python -m pip freeze |
+  sudo tee "${backup_dir}/pip-freeze.txt" >/dev/null
+sudo systemctl stop mikroclear.service
+sudo mv /opt/mikroclear-venv /opt/.mikroclear-venv.rollback
 ```
 
-Ожидаемо:
-
-```text
-wheel ok: dist/mikro_clear-0.1.0-py3-none-any.whl
-```
-
-## 5. Подготовить SELKS
-
-Каталог для deploy-артефактов:
+Переключение:
 
 ```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'install -d -m 700 /var/tmp/mikroclear-deploy && stat -c "%U:%G %a %n" /var/tmp/mikroclear-deploy'
+sudo mv /opt/.mikroclear-venv.candidate /opt/mikroclear-venv
+sudo install -o root -g root -m 0644 \
+  "${install_root}/systemd/mikroclear.service" \
+  /etc/systemd/system/mikroclear.service
+sudo systemd-analyze verify /etc/systemd/system/mikroclear.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now mikroclear.service
 ```
 
-Загрузить wheel:
+Выполните acceptance-команды из раздела выше. Только после успеха перенесите
+старый runtime в backup:
 
 ```bash
-scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new \
-  dist/mikro_clear-0.1.0-py3-none-any.whl \
-  selks:/var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl
+sudo mv /opt/.mikroclear-venv.rollback "${backup_dir}/venv"
 ```
 
-Загрузить unit с пакетным entrypoint:
+### 6. Ручной rollback
+
+Если новая версия не прошла проверку:
 
 ```bash
-scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new \
-  systemd/mikroclear.service \
-  selks:/var/tmp/mikroclear-deploy/mikroclear-codex.service
+sudo systemctl stop mikroclear.service
+sudo mv /opt/mikroclear-venv "${backup_dir}/failed-venv"
+sudo mv /opt/.mikroclear-venv.rollback /opt/mikroclear-venv
+sudo install -o root -g root -m 0644 \
+  "${backup_dir}/mikroclear.service" \
+  /etc/systemd/system/mikroclear.service
+sudo install -o root -g mikroclear -m 0640 \
+  "${backup_dir}/mikroclear.env" \
+  /etc/mikroclear/mikroclear.env
+sudo install -o root -g mikroclear -m 0640 \
+  "${backup_dir}/mikrotik-ca.crt" \
+  /etc/mikroclear/certs/mikrotik-ca.crt
+sudo systemctl daemon-reload
+sudo systemctl start mikroclear.service
+systemctl show mikroclear.service \
+  --property=ActiveState,SubState,NRestarts \
+  --no-pager
 ```
 
-Проверить SHA-256 обоих кандидатов на SELKS и синтаксис unit:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sha256sum /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl /var/tmp/mikroclear-deploy/mikroclear-codex.service && systemd-analyze verify /var/tmp/mikroclear-deploy/mikroclear-codex.service'
-```
-
-Контрольные суммы должны совпадать с локальными.
-
-До первой мутации сохранить точную копию эффективного unit:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo install -o root -g root -m 600 /etc/systemd/system/mikroclear.service /var/tmp/mikroclear-deploy/mikroclear.service.rollback && sha256sum /etc/systemd/system/mikroclear.service /var/tmp/mikroclear-deploy/mikroclear.service.rollback'
-```
-
-Предыдущий проверенный wheel также должен оставаться в
-`/var/tmp/mikroclear-deploy` под отдельным именем до завершения acceptance.
-
-## 6. Установить wheel в production venv
-
-Эта команда требует `sudo`, потому что `/opt/mikroclear-venv` принадлежит root:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo /opt/mikroclear-venv/bin/python -m pip install --no-deps --force-reinstall /var/tmp/mikroclear-deploy/mikro_clear-0.1.0-py3-none-any.whl'
-```
-
-Проверить установленный пакет:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikroclear-venv/bin/python -m pip show mikro-clear | sed -n "1,14p"'
-```
-
-Проверить импорт из нейтрального рабочего каталога:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'cd / && /opt/mikroclear-venv/bin/python -c "import mikroclear; print(mikroclear.__file__); print(mikroclear.__path__)"'
-```
-
-Путь должен указывать в `site-packages`, а `mikroclear.__path__` должен
-существовать.
-
-Проверить service factory без запуска runtime-loop:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  '/opt/mikroclear-venv/bin/python -c "import mikroclear.app as app; svc = app.build_service(); print(type(svc).__name__)"'
-```
-
-Ожидаемо:
-
-```text
-MikroClearService
-```
-
-## 7. Установить unit и перезапустить сервис
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo install -o root -g root -m 644 /var/tmp/mikroclear-deploy/mikroclear-codex.service /etc/systemd/system/mikroclear.service && sudo systemctl daemon-reload && sudo systemd-analyze verify /etc/systemd/system/mikroclear.service && sudo systemctl restart mikroclear.service && systemctl status mikroclear.service --no-pager --lines=30'
-```
-
-Проверить machine-readable status:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'systemctl show mikroclear.service --property=ActiveState,SubState,ExecStart,WorkingDirectory,NRestarts,TasksCurrent --no-pager'
-```
-
-Ожидаемо:
-
-```text
-ActiveState=active
-SubState=running
-NRestarts=0
-TasksCurrent=2
-WorkingDirectory=/
-ExecStart=... /opt/mikroclear-venv/bin/python -m mikroclear ...
-```
-
-`TasksCurrent` должен быть не меньше `2`. После полного long-poll окна журнал
-должен содержать marker запуска Telegram worker и не содержать traceback.
-
-## 8. Проверить логи
-
-Никогда не выводить Telegram token без маскировки.
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo journalctl -u mikroclear.service -n 100 --no-pager | sed -E "s#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g"'
-```
-
-Нужно проверить:
-
-- нет `Traceback`;
-- нет `NameError`;
-- сервис пишет `Starting Mikro-Clear`;
-- RouterOS подключение успешно;
-- мониторинг `eve.json` поднялся;
-- нет необработанных Telegram token в выводе.
-
-## 9. Rollback
-
-Если acceptance не прошёл, восстановить и предыдущий wheel, и точную резервную
-копию unit:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo /opt/mikroclear-venv/bin/python -m pip install --no-deps --force-reinstall /var/tmp/mikroclear-deploy/<previous-wheel>.whl && sudo install -o root -g root -m 644 /var/tmp/mikroclear-deploy/mikroclear.service.rollback /etc/systemd/system/mikroclear.service && sudo systemctl daemon-reload && sudo systemd-analyze verify /etc/systemd/system/mikroclear.service'
-```
-
-Затем:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'sudo systemctl restart mikroclear.service && systemctl show mikroclear.service --property=ActiveState,SubState,WorkingDirectory,NRestarts,TasksCurrent --no-pager && sha256sum /etc/systemd/system/mikroclear.service'
-```
-
-Legacy script rollback сохраняется только как аварийный путь, если systemd unit
-явно возвращают на:
-
-```text
-/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py
-```
-
-Для текущей production-модели целевой rollback всегда восстанавливает оба
-изменяемых артефакта: предыдущий wheel и предыдущий unit.
-
-## 10. Что не делать
-
-- Не коммитить `.env` с секретами.
-- Не хранить Telegram token в README, issues, logs или shell snippets.
-- Не менять RouterOS/firewall вручную в ходе package deploy.
-- Не переключать `ExecStart`, если текущий package entrypoint уже работает.
-- Не использовать `WorkingDirectory=/usr/local/bin` с пакетным entrypoint.
-- Не запускать runtime-loop локально с production `.env`.
-- Не использовать `MIKROCATA_*` как новые имена переменных.
+Сохраните commit SHA, SHA-256 wheel и вывод проверок. План полного
+воспроизведения приведён в
+[`install-test-reproduction.md`](install-test-reproduction.md).

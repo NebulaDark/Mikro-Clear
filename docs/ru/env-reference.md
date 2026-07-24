@@ -18,6 +18,17 @@ config/mikroclear.env.example
 
 Не хранить реальные пароли и Telegram token в git.
 
+Файл должен принадлежать `root:mikroclear` и иметь режим `0640`:
+
+```bash
+sudo chown root:mikroclear /etc/mikroclear/mikroclear.env
+sudo chmod 0640 /etc/mikroclear/mikroclear.env
+```
+
+Каталог `/etc/mikroclear` должен иметь режим `0750`. CA-сертификат хранится в
+`/etc/mikroclear/certs/mikrotik-ca.crt`, также принадлежит
+`root:mikroclear` и имеет режим `0640`.
+
 ## Формат значений
 
 Boolean:
@@ -58,7 +69,8 @@ value1,value2,value3
 только как временный аварийный режим.
 
 `MIKROCLEAR_CA_FILE`
-: Путь к CA certificate для проверки RouterOS API-SSL.
+: Путь к CA certificate для проверки RouterOS API-SSL. Канонический путь:
+`/etc/mikroclear/certs/mikrotik-ca.crt`.
 
 `MIKROCLEAR_ROUTER_TLS_SERVER_NAME`
 : Имя или IP для проверки certificate SAN/CN при TLS. Должно совпадать с
@@ -261,7 +273,7 @@ MIKROCLEAR_ROUTER_PASSWORD=
 MIKROCLEAR_ROUTER_IP=192.168.10.1
 MIKROCLEAR_USE_SSL=true
 MIKROCLEAR_ROUTER_PORT=8729
-MIKROCLEAR_CA_FILE=/etc/mikrocata/certs/mikrotik-ca.crt
+MIKROCLEAR_CA_FILE=/etc/mikroclear/certs/mikrotik-ca.crt
 MIKROCLEAR_ROUTER_TLS_SERVER_NAME=192.168.10.1
 
 MIKROCLEAR_BLOCK_LIST_NAME=Suricata
