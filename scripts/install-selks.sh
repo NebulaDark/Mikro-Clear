@@ -40,6 +40,8 @@ CANDIDATE_VENV=""
 ROLLBACK_VENV=""
 HAD_PREVIOUS_INSTALL=false
 WHEEL_PATH=""
+WORK_DIR=""
+ACTIVATION_EPOCH=""
 
 die() {
     printf 'ERROR: %s\n' "$1" >&2
@@ -161,6 +163,7 @@ collect_missing_commands() {
         date
         df
         dirname
+        du
         flock
         getent
         git
@@ -177,7 +180,9 @@ collect_missing_commands() {
         python3
         rm
         runuser
+        sed
         sha256sum
+        sleep
         stat
         systemctl
         systemd-analyze
@@ -278,19 +283,19 @@ build_candidate_wheel() {
 
     mkdir -p "${output_dir}"
     python3 -m venv "${build_venv}"
-    "${build_venv}/bin/python" -m pip install "setuptools>=68" wheel
+    "${build_venv}/bin/python" -m pip install "setuptools>=68" wheel >&2
     "${build_venv}/bin/python" -m pip wheel \
         --no-deps \
         --no-build-isolation \
         --wheel-dir "${output_dir}" \
-        "${snapshot}"
+        "${snapshot}" >&2
 
     wheels=("${output_dir}"/mikro_clear-*.whl)
     [[ "${#wheels[@]}" == "1" && -f "${wheels[0]}" ]] ||
         die "expected exactly one Mikro-Clear wheel"
     "${build_venv}/bin/python" \
         "${snapshot}/scripts/validate_wheel_artifact.py" \
-        "${wheels[0]}"
+        "${wheels[0]}" >&2
     printf '%s\n' "${wheels[0]}"
 }
 
@@ -660,13 +665,13 @@ collect_interactive_config() {
 configure_interactively() {
     local content
 
-    collect_interactive_config
+    collect_interactive_config || return 1
     if [[ "${USE_SSL}" == "true" &&
         "${ALLOW_SELF_SIGNED}" == "false" ]]; then
-        install_ca "${CA_SOURCE}"
+        install_ca "${CA_SOURCE}" || return 1
     fi
-    content="$(render_config)"
-    write_config_atomic "${content}"
+    content="$(render_config)" || return 1
+    write_config_atomic "${content}" || return 1
 }
 
 acquire_install_lock() {
@@ -700,21 +705,28 @@ prepare_candidate_venv() {
     local wheel="$1"
     local import_path
 
-    prepare_candidate_paths
-    [[ ! -e "${CANDIDATE_VENV}" ]] ||
+    prepare_candidate_paths || return 1
+    if [[ -e "${CANDIDATE_VENV}" ]]; then
         die "candidate venv already exists: ${CANDIDATE_VENV}"
-    python3 -m venv "${CANDIDATE_VENV}"
-    "${CANDIDATE_VENV}/bin/python" -m pip install "${wheel}"
+        return 1
+    fi
+    python3 -m venv "${CANDIDATE_VENV}" || return 1
+    "${CANDIDATE_VENV}/bin/python" -m pip install "${wheel}" ||
+        return 1
     if "${CANDIDATE_VENV}/bin/python" -m pip show mcp >/dev/null 2>&1; then
         die "candidate runtime unexpectedly contains mcp"
+        return 1
     fi
     import_path="$(
         cd /
         "${CANDIDATE_VENV}/bin/python" -c \
             'import pathlib, mikroclear; print(pathlib.Path(mikroclear.__file__).resolve())'
-    )"
-    [[ "${import_path}" == "${CANDIDATE_VENV}"/lib/python*/site-packages/mikroclear/* ]] ||
+    )" || return 1
+    if [[ "${import_path}" != \
+        "${CANDIDATE_VENV}"/lib/python*/site-packages/mikroclear/* ]]; then
         die "candidate import is outside candidate site-packages: ${import_path}"
+        return 1
+    fi
 }
 
 backup_file_if_present() {
@@ -723,6 +735,7 @@ backup_file_if_present() {
 
     if [[ -f "${source}" ]]; then
         cp -a -- "${source}" "${BACKUP_DIR}/${backup_name}"
+        printf '%s\n' "${backup_name}" >>"${BACKUP_DIR}/backup-inventory"
     fi
 }
 
@@ -736,6 +749,8 @@ create_backup() {
     [[ ! -e "${BACKUP_DIR}" ]] ||
         die "backup directory already exists: ${BACKUP_DIR}"
     install_owned_dir root root 0700 "${BACKUP_DIR}"
+    : >"${BACKUP_DIR}/backup-inventory"
+    chmod 0600 "${BACKUP_DIR}/backup-inventory"
     backup_file_if_present "${UNIT_FILE}" "mikroclear.service"
     backup_file_if_present "${ENV_FILE}" "mikroclear.env"
     backup_file_if_present "${CA_FILE}" "mikrotik-ca.crt"
@@ -748,14 +763,18 @@ create_backup() {
 }
 
 switch_candidate_venv() {
-    [[ -d "${CANDIDATE_VENV}" ]] ||
+    if [[ ! -d "${CANDIDATE_VENV}" ]]; then
         die "candidate venv is missing: ${CANDIDATE_VENV}"
+        return 1
+    fi
 
     if [[ -d "${VENV_DIR}" ]]; then
         HAD_PREVIOUS_INSTALL=true
-        [[ ! -e "${ROLLBACK_VENV}" ]] ||
+        if [[ -e "${ROLLBACK_VENV}" ]]; then
             die "rollback venv path already exists: ${ROLLBACK_VENV}"
-        mv -- "${VENV_DIR}" "${ROLLBACK_VENV}"
+            return 1
+        fi
+        mv -- "${VENV_DIR}" "${ROLLBACK_VENV}" || return 1
     else
         HAD_PREVIOUS_INSTALL=false
     fi
@@ -763,7 +782,7 @@ switch_candidate_venv() {
     if ! mv -- "${CANDIDATE_VENV}" "${VENV_DIR}"; then
         if [[ "${HAD_PREVIOUS_INSTALL}" == "true" &&
             -d "${ROLLBACK_VENV}" ]]; then
-            mv -- "${ROLLBACK_VENV}" "${VENV_DIR}"
+            mv -- "${ROLLBACK_VENV}" "${VENV_DIR}" || true
         fi
         return 1
     fi
@@ -801,15 +820,26 @@ finalize_successful_update() {
 install_unit_candidate() {
     local temporary
 
-    temporary="$(mktemp "$(dirname "${UNIT_FILE}")/.mikroclear.XXXXXX.service")"
-    install -m 0644 \
+    temporary="$(
+        mktemp "$(dirname "${UNIT_FILE}")/.mikroclear.XXXXXX.service"
+    )" || return 1
+    if ! install -m 0644 \
         "${REPO_ROOT}/systemd/mikroclear.service" \
-        "${temporary}"
-    if [[ "${TEST_MODE}" != "1" ]]; then
-        chown root:root "${temporary}"
-        systemd-analyze verify "${temporary}"
+        "${temporary}"; then
+        rm -f -- "${temporary}"
+        return 1
     fi
-    mv -T "${temporary}" "${UNIT_FILE}"
+    if [[ "${TEST_MODE}" != "1" ]]; then
+        if ! chown root:root "${temporary}" ||
+            ! systemd-analyze verify "${temporary}"; then
+            rm -f -- "${temporary}"
+            return 1
+        fi
+    fi
+    if ! mv -T "${temporary}" "${UNIT_FILE}"; then
+        rm -f -- "${temporary}"
+        return 1
+    fi
 }
 
 write_manifest() {
@@ -817,24 +847,400 @@ write_manifest() {
     local commit
     local wheel_sha=""
     local temporary
+    local python_version
 
-    commit="$(repo_commit)"
+    commit="$(repo_commit)" || return 1
     if [[ -n "${WHEEL_PATH}" && -f "${WHEEL_PATH}" ]]; then
-        wheel_sha="$(sha256sum "${WHEEL_PATH}" | awk '{print $1}')"
+        wheel_sha="$(
+            sha256sum "${WHEEL_PATH}" | awk '{print $1}'
+        )" || return 1
     fi
-    temporary="$(mktemp "${STATE_DIR}/.install-manifest.XXXXXX")"
-    printf '%s\n' \
+    if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+        die "runtime Python is missing: ${VENV_DIR}/bin/python"
+        return 1
+    fi
+    python_version="$("${VENV_DIR}/bin/python" --version 2>&1)" ||
+        return 1
+    temporary="$(mktemp "${STATE_DIR}/.install-manifest.XXXXXX")" ||
+        return 1
+    if ! printf '%s\n' \
         "status=${status}" \
         "commit=${commit}" \
         "wheel_sha256=${wheel_sha}" \
-        "python=$("${VENV_DIR}/bin/python" --version 2>&1)" \
+        "python=${python_version}" \
         "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        >"${temporary}"
-    chmod 0600 "${temporary}"
-    if [[ "${TEST_MODE}" != "1" ]]; then
-        chown "${SERVICE_USER}:${SERVICE_GROUP}" "${temporary}"
+        >"${temporary}"; then
+        rm -f -- "${temporary}"
+        return 1
     fi
-    mv -T "${temporary}" "${MANIFEST_FILE}"
+    if ! chmod 0600 "${temporary}"; then
+        rm -f -- "${temporary}"
+        return 1
+    fi
+    if [[ "${TEST_MODE}" != "1" ]]; then
+        if ! chown "${SERVICE_USER}:${SERVICE_GROUP}" "${temporary}"; then
+            rm -f -- "${temporary}"
+            return 1
+        fi
+    fi
+    if ! mv -T "${temporary}" "${MANIFEST_FILE}"; then
+        rm -f -- "${temporary}"
+        return 1
+    fi
+}
+
+read_env_value() {
+    local key="$1"
+    local line
+    local value
+
+    [[ "${key}" =~ ^[A-Z][A-Z0-9_]*$ ]] ||
+        die "invalid environment key: ${key}"
+    line="$(grep -m 1 "^${key}=" "${ENV_FILE}" || true)"
+    [[ -n "${line}" ]] || return 1
+    value="${line#*=}"
+    if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+        value="${value:1:${#value}-2}"
+        value="${value//\\\"/\"}"
+        value="${value//\\\\/\\}"
+    fi
+    printf '%s\n' "${value}"
+}
+
+validate_existing_config() {
+    local use_ssl
+    local allow_self_signed
+
+    [[ -f "${ENV_FILE}" ]] ||
+        die "existing configuration is missing: ${ENV_FILE}"
+    validate_config_text "${ENV_FILE}" ||
+        die "existing configuration is incomplete: ${ENV_FILE}"
+    use_ssl="$(read_env_value MIKROCLEAR_USE_SSL || printf 'true\n')"
+    allow_self_signed="$(
+        read_env_value MIKROCLEAR_ALLOW_SELF_SIGNED_CERTS ||
+            printf 'false\n'
+    )"
+    if [[ "${use_ssl}" == "true" &&
+        "${allow_self_signed}" != "true" ]]; then
+        validate_ca_source "${CA_FILE}"
+    fi
+}
+
+existing_install() {
+    [[ -d "${VENV_DIR}" && -f "${ENV_FILE}" && -f "${UNIT_FILE}" ]]
+}
+
+stop_service() {
+    systemctl stop mikroclear.service >/dev/null 2>&1 || true
+}
+
+start_service() {
+    systemctl enable --now mikroclear.service
+}
+
+reload_service_manager() {
+    systemctl daemon-reload
+}
+
+service_properties() {
+    systemctl show mikroclear.service \
+        --property=ActiveState,SubState,NRestarts,TasksCurrent,User,Group,WorkingDirectory,MainPID \
+        --no-pager
+}
+
+service_journal() {
+    journalctl -u mikroclear.service \
+        --since "@${ACTIVATION_EPOCH}" \
+        --no-pager
+}
+
+property_value() {
+    local properties="$1"
+    local key="$2"
+
+    awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, "=") + 1); exit}' \
+        <<<"${properties}"
+}
+
+acceptance_probe() {
+    local properties
+    local journal
+    local main_pid
+    local process_user
+    local tasks_current
+    local telegram_enable
+    local import_path
+
+    properties="$(service_properties)" || return 1
+    [[ "$(property_value "${properties}" ActiveState)" == "active" ]] || return 1
+    [[ "$(property_value "${properties}" SubState)" == "running" ]] || return 1
+    [[ "$(property_value "${properties}" NRestarts)" == "0" ]] || return 1
+    [[ "$(property_value "${properties}" User)" == "${SERVICE_USER}" ]] || return 1
+    [[ "$(property_value "${properties}" Group)" == "${SERVICE_GROUP}" ]] || return 1
+    [[ "$(property_value "${properties}" WorkingDirectory)" == "/" ]] || return 1
+
+    main_pid="$(property_value "${properties}" MainPID)"
+    [[ "${main_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+    process_user="$(ps -o user= -p "${main_pid}" | tr -d '[:space:]')"
+    [[ "${process_user}" == "${SERVICE_USER}" ]] || return 1
+
+    import_path="$(
+        cd /
+        "${VENV_DIR}/bin/python" -c \
+            'import pathlib, mikroclear; print(pathlib.Path(mikroclear.__file__).resolve())'
+    )" || return 1
+    [[ "${import_path}" == "${VENV_DIR}"/lib/python*/site-packages/mikroclear/* ]] ||
+        return 1
+    verify_eve_access || return 1
+    run_as_service_user test -w "${STATE_DIR}" || return 1
+
+    journal="$(service_journal)" || return 1
+    grep -Fq "Connected to MikroTik" <<<"${journal}" || return 1
+    if grep -Eq "Traceback|Fatal Telegram polling worker error" <<<"${journal}"; then
+        return 1
+    fi
+
+    telegram_enable="$(
+        read_env_value MIKROCLEAR_TELEGRAM_ENABLE ||
+            printf 'false\n'
+    )"
+    if [[ "${telegram_enable}" == "true" ]]; then
+        grep -Fq "Telegram polling worker started" <<<"${journal}" || return 1
+        tasks_current="$(property_value "${properties}" TasksCurrent)"
+        [[ "${tasks_current}" =~ ^[0-9]+$ && "${tasks_current}" -ge 2 ]] ||
+            return 1
+    fi
+}
+
+show_diagnostics() {
+    {
+        systemctl status mikroclear.service --no-pager --lines=30 || true
+        journalctl -u mikroclear.service -n 100 --no-pager || true
+    } 2>&1 |
+        sed -E 's#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g' >&2
+}
+
+accept_install() {
+    local timeout="${1:-90}"
+    local deadline
+
+    ACTIVATION_EPOCH="$(date +%s)"
+    start_service || return 1
+    deadline=$((ACTIVATION_EPOCH + timeout))
+    while (("$(date +%s)" <= deadline)); do
+        if acceptance_probe; then
+            return 0
+        fi
+        sleep 2
+    done
+    show_diagnostics
+    return 1
+}
+
+restore_backup_file() {
+    local backup_name="$1"
+    local destination="$2"
+
+    if [[ -f "${BACKUP_DIR}/${backup_name}" ]]; then
+        cp -a -- "${BACKUP_DIR}/${backup_name}" "${destination}"
+    elif [[ -f "${BACKUP_DIR}/backup-inventory" ]] &&
+        ! grep -Fxq "${backup_name}" "${BACKUP_DIR}/backup-inventory"; then
+        rm -f -- "${destination}"
+    fi
+}
+
+restore_backup_files() {
+    restore_backup_file "mikroclear.service" "${UNIT_FILE}"
+    restore_backup_file "mikroclear.env" "${ENV_FILE}"
+    restore_backup_file "mikrotik-ca.crt" "${CA_FILE}"
+    restore_backup_file "install-manifest" "${MANIFEST_FILE}"
+}
+
+verify_rollback_health() {
+    local properties
+
+    properties="$(service_properties)" || return 1
+    [[ "$(property_value "${properties}" ActiveState)" == "active" ]] &&
+        [[ "$(property_value "${properties}" SubState)" == "running" ]] &&
+        [[ "$(property_value "${properties}" NRestarts)" == "0" ]]
+}
+
+rollback_update() {
+    stop_service || {
+        printf 'ROLLBACK FAILED; backup: %s\n' "${BACKUP_DIR}" >&2
+        return 2
+    }
+    restore_previous_venv || {
+        printf 'ROLLBACK FAILED; backup: %s\n' "${BACKUP_DIR}" >&2
+        return 2
+    }
+    restore_backup_files || {
+        printf 'ROLLBACK FAILED; backup: %s\n' "${BACKUP_DIR}" >&2
+        return 2
+    }
+    reload_service_manager || {
+        printf 'ROLLBACK FAILED; backup: %s\n' "${BACKUP_DIR}" >&2
+        return 2
+    }
+    start_service || {
+        printf 'ROLLBACK FAILED; backup: %s\n' "${BACKUP_DIR}" >&2
+        return 2
+    }
+    if ! verify_rollback_health; then
+        printf 'ROLLBACK FAILED; backup: %s\n' "${BACKUP_DIR}" >&2
+        return 2
+    fi
+    printf 'Update failed; previous installation restored from %s\n' \
+        "${BACKUP_DIR}" >&2
+}
+
+install_or_update() {
+    if [[ "${HAD_PREVIOUS_INSTALL}" == "true" &&
+        -z "${BACKUP_DIR}" ]]; then
+        create_backup
+    fi
+    if ! prepare_candidate_venv "${WHEEL_PATH}"; then
+        if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
+            restore_backup_files
+        fi
+        return 1
+    fi
+    if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
+        stop_service
+    fi
+    if ! switch_candidate_venv; then
+        return 1
+    fi
+    if ! install_unit_candidate ||
+        ! reload_service_manager ||
+        ! accept_install 90; then
+        if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
+            rollback_update || return $?
+        else
+            stop_service
+        fi
+        return 1
+    fi
+    if ! write_manifest active ||
+        ! finalize_successful_update; then
+        if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
+            rollback_update || return $?
+        else
+            stop_service
+        fi
+        return 1
+    fi
+}
+
+prepare_install_artifact() {
+    local timestamp
+    local snapshot
+    local build_output
+
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    WORK_DIR="$(target_path "/var/tmp/mikroclear-install.${timestamp}.$$")"
+    install -d -m 0700 "${WORK_DIR}"
+    snapshot="${WORK_DIR}/source"
+    build_output="${WORK_DIR}/build"
+    create_source_snapshot "${snapshot}"
+    WHEEL_PATH="$(build_candidate_wheel "${snapshot}" "${build_output}")"
+}
+
+run_preflight() {
+    local missing=()
+    local required_kib=524288
+    local current_kib
+
+    check_root
+    mapfile -t missing < <(collect_missing_commands)
+    if (("${#missing[@]}" > 0)); then
+        printf 'Missing commands: %s\n' "${missing[*]}" >&2
+        offer_apt_install "${missing[@]}"
+        mapfile -t missing < <(collect_missing_commands)
+        (("${#missing[@]}" == 0)) ||
+            die "system dependencies are still missing: ${missing[*]}"
+    fi
+    [[ -d /run/systemd/system ]] ||
+        die "systemd is not the active init system"
+    check_python_runtime
+    repo_commit >/dev/null ||
+        die "current directory has no committed Git HEAD"
+    if [[ -d "${VENV_DIR}" ]]; then
+        current_kib="$(du -sk "${VENV_DIR}" | awk '{print $1}')"
+        required_kib=$((required_kib + current_kib))
+    fi
+    check_available_space /opt "${required_kib}"
+}
+
+install_template_mode() {
+    if existing_install; then
+        die "existing installation found; template mode will not modify it"
+        return 1
+    fi
+    install_layout
+    write_template_config
+    verify_eve_access
+    prepare_install_artifact
+    HAD_PREVIOUS_INSTALL=false
+    prepare_candidate_venv "${WHEEL_PATH}"
+    switch_candidate_venv
+    install_unit_candidate
+    reload_service_manager
+    write_manifest template
+    printf '%s\n' \
+        "Template installed. Fill ${CANONICAL_ENV_FILE}, then run:" \
+        "  sudo ./scripts/install-selks.sh --start"
+}
+
+install_interactive_mode() {
+    if existing_install; then
+        HAD_PREVIOUS_INSTALL=true
+    else
+        HAD_PREVIOUS_INSTALL=false
+    fi
+    install_layout
+    prepare_install_artifact
+    if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
+        create_backup
+    fi
+    if ! configure_interactively; then
+        if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
+            restore_backup_files
+        fi
+        return 1
+    fi
+    if ! validate_existing_config ||
+        ! verify_eve_access; then
+        if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
+            restore_backup_files
+        fi
+        return 1
+    fi
+    install_or_update
+}
+
+install_update_mode() {
+    existing_install ||
+        die "existing installation is incomplete; use an explicit clean-install mode"
+    HAD_PREVIOUS_INSTALL=true
+    install_layout
+    validate_existing_config
+    verify_eve_access
+    prepare_install_artifact
+    install_or_update
+}
+
+start_existing_install() {
+    existing_install ||
+        die "existing installation is incomplete"
+    validate_existing_config
+    verify_eve_access
+    reload_service_manager
+    if ! accept_install 90; then
+        stop_service
+        return 1
+    fi
+    write_manifest active
 }
 
 main() {
@@ -843,10 +1249,24 @@ main() {
     ((parse_rc == 2)) && return 0
     ((parse_rc == 0)) || return "${parse_rc}"
     init_paths
+    acquire_install_lock
+    run_preflight
 
     if [[ -z "${INSTALL_MODE}" ]]; then
-        INSTALL_MODE="$(choose_install_mode)"
+        if existing_install; then
+            INSTALL_MODE="update"
+        else
+            INSTALL_MODE="$(choose_install_mode)"
+        fi
     fi
+
+    case "${INSTALL_MODE}" in
+        template) install_template_mode ;;
+        interactive) install_interactive_mode ;;
+        existing) start_existing_install ;;
+        update) install_update_mode ;;
+        *) die "unsupported install mode: ${INSTALL_MODE}" ;;
+    esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

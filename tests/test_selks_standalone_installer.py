@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import shlex
 import subprocess
 import tempfile
 from unittest import TestCase
@@ -553,3 +554,331 @@ class SelksStandaloneInstallerTests(TestCase):
 
         self.assertIn("-m pip show mcp", source)
         self.assertIn("candidate runtime unexpectedly contains mcp", source)
+
+    def test_candidate_preparation_stops_when_venv_creation_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            candidate = Path(root) / "candidate"
+            result = run_bash(
+                "prepare_candidate_paths(){ "
+                f"CANDIDATE_VENV={shlex.quote(str(candidate))}; "
+                "}; "
+                "python3(){ return 1; }; "
+                "if prepare_candidate_venv fixture.whl; then exit 0; "
+                "else exit 1; fi"
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(f"{candidate}/bin/python", result.stderr)
+
+    def test_candidate_switch_stops_when_candidate_is_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            current = Path(root) / "current"
+            current.mkdir()
+            result = run_bash(
+                f"CANDIDATE_VENV={shlex.quote(str(Path(root) / 'missing'))}; "
+                f"VENV_DIR={shlex.quote(str(current))}; "
+                f"ROLLBACK_VENV={shlex.quote(str(Path(root) / 'rollback'))}; "
+                'events=""; mv(){ events+=" mv"; return 0; }; '
+                'if switch_candidate_venv; then rc=0; else rc=$?; fi; '
+                'printf "%s|%s\\n" "$rc" "$events"'
+            )
+
+        self.assertEqual(result.stdout, "1|\n")
+
+    def test_failed_update_runs_rollback_and_returns_nonzero(self):
+        result = run_bash(
+            'events=""; '
+            'create_backup(){ events+=" backup"; }; '
+            'prepare_candidate_venv(){ events+=" prepare"; }; '
+            'stop_service(){ events+=" stop"; }; '
+            'switch_candidate_venv(){ events+=" switch"; }; '
+            'install_unit_candidate(){ events+=" unit"; }; '
+            'reload_service_manager(){ events+=" reload"; }; '
+            'accept_install(){ events+=" accept"; return 1; }; '
+            'rollback_update(){ events+=" rollback"; return 0; }; '
+            "HAD_PREVIOUS_INSTALL=true; WHEEL_PATH=fixture.whl; "
+            'install_or_update || rc=$?; printf "%s|%s\\n" "${rc:-0}" "$events"'
+        )
+
+        self.assertEqual(
+            result.stdout,
+            "1| backup prepare stop switch unit reload accept rollback\n",
+        )
+
+    def test_clean_failure_stops_without_rollback(self):
+        result = run_bash(
+            'events=""; '
+            'create_backup(){ events+=" backup"; }; '
+            'prepare_candidate_venv(){ events+=" prepare"; }; '
+            'stop_service(){ events+=" stop"; }; '
+            'switch_candidate_venv(){ events+=" switch"; }; '
+            'install_unit_candidate(){ events+=" unit"; }; '
+            'reload_service_manager(){ events+=" reload"; }; '
+            'accept_install(){ events+=" accept"; return 1; }; '
+            'rollback_update(){ events+=" rollback"; return 0; }; '
+            "HAD_PREVIOUS_INSTALL=false; WHEEL_PATH=fixture.whl; "
+            'install_or_update || rc=$?; printf "%s|%s\\n" "${rc:-0}" "$events"'
+        )
+
+        self.assertEqual(
+            result.stdout,
+            "1| prepare switch unit reload accept stop\n",
+        )
+
+    def test_rollback_restores_previous_files_and_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            active_venv = Path(root) / "opt/mikroclear-venv"
+            rollback_venv = Path(root) / "opt/.mikroclear-venv.rollback"
+            active_venv.mkdir(parents=True)
+            rollback_venv.mkdir()
+            (active_venv / "version").write_text("new\n", encoding="utf-8")
+            (rollback_venv / "version").write_text("old\n", encoding="utf-8")
+
+            active_files = {
+                "etc/systemd/system/mikroclear.service": b"new unit\n",
+                "etc/mikroclear/mikroclear.env": b"NEW=1\n",
+                "etc/mikroclear/certs/mikrotik-ca.crt": b"new cert\n",
+                "var/lib/mikroclear/install-manifest": b"commit=new\n",
+            }
+            for relative, content in active_files.items():
+                path = Path(root) / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            backup = Path(root) / "var/backups/mikroclear/test-backup"
+            backup.mkdir(parents=True)
+            backup_files = {
+                "mikroclear.service": b"old unit\n",
+                "mikroclear.env": b"OLD=1\n",
+                "mikrotik-ca.crt": b"old cert\n",
+                "install-manifest": b"commit=old\n",
+            }
+            for name, content in backup_files.items():
+                (backup / name).write_bytes(content)
+
+            result = run_bash(
+                "init_paths; "
+                'BACKUP_DIR="$(target_path /var/backups/mikroclear/test-backup)"; '
+                'ROLLBACK_VENV="$(target_path /opt/.mikroclear-venv.rollback)"; '
+                "stop_service(){ :; }; reload_service_manager(){ :; }; "
+                "start_service(){ :; }; verify_rollback_health(){ return 0; }; "
+                "rollback_update",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (active_venv / "version").read_text(encoding="utf-8"),
+                "old\n",
+            )
+            expected_active = {
+                "etc/systemd/system/mikroclear.service": b"old unit\n",
+                "etc/mikroclear/mikroclear.env": b"OLD=1\n",
+                "etc/mikroclear/certs/mikrotik-ca.crt": b"old cert\n",
+                "var/lib/mikroclear/install-manifest": b"commit=old\n",
+            }
+            for relative, content in expected_active.items():
+                with self.subTest(relative=relative):
+                    self.assertEqual((Path(root) / relative).read_bytes(), content)
+
+    def test_env_reader_does_not_execute_file_contents(self):
+        with tempfile.TemporaryDirectory() as root:
+            env_file = Path(root) / "etc/mikroclear/mikroclear.env"
+            marker = Path(root) / "executed"
+            env_file.parent.mkdir(parents=True)
+            env_file.write_text(
+                "MIKROCLEAR_TELEGRAM_ENABLE=true\n"
+                f"EVIL=$(touch {marker})\n",
+                encoding="utf-8",
+            )
+
+            result = run_bash(
+                "init_paths; read_env_value MIKROCLEAR_TELEGRAM_ENABLE",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "true\n")
+            self.assertFalse(marker.exists())
+
+    def test_incomplete_existing_config_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            env_file = Path(root) / "etc/mikroclear/mikroclear.env"
+            env_file.parent.mkdir(parents=True)
+            env_file.write_text(
+                'MIKROCLEAR_ROUTER_USERNAME="api"\n'
+                'MIKROCLEAR_ROUTER_PASSWORD=""\n',
+                encoding="utf-8",
+            )
+
+            result = run_bash(
+                "init_paths; validate_existing_config",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("existing configuration is incomplete", result.stderr)
+
+    def test_template_mode_preserves_existing_running_install(self):
+        result = run_bash(
+            'events=""; existing_install(){ return 0; }; '
+            'stop_service(){ events+=" stop"; }; '
+            'write_template_config(){ events+=" write"; }; '
+            'install_template_mode || rc=$?; '
+            'printf "%s|%s\\n" "${rc:-0}" "$events"'
+        )
+
+        self.assertEqual(result.stdout, "1|\n")
+        self.assertIn("existing installation", result.stderr)
+
+    def test_acceptance_checks_required_markers_conditionally(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        for required in (
+            "Connected to MikroTik",
+            "Telegram polling worker started",
+            "NRestarts",
+            "TasksCurrent",
+            "User",
+            "Group",
+            "WorkingDirectory",
+            "Traceback",
+            "Fatal Telegram polling worker error",
+        ):
+            self.assertIn(required, source)
+
+    def test_rollback_health_requires_every_status_property(self):
+        result = run_bash(
+            "service_properties(){ printf '%s\\n' "
+            "'ActiveState=inactive' 'SubState=dead' 'NRestarts=0'; }; "
+            "if verify_rollback_health; then exit 0; else exit 1; fi"
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_interactive_failure_restores_backup_before_switch(self):
+        result = run_bash(
+            'events=""; existing_install(){ return 0; }; '
+            'install_layout(){ events+=" layout"; }; '
+            'prepare_install_artifact(){ events+=" artifact"; }; '
+            'create_backup(){ events+=" backup"; }; '
+            'configure_interactively(){ events+=" configure"; return 1; }; '
+            'restore_backup_files(){ events+=" restore"; }; '
+            'validate_existing_config(){ events+=" validate"; }; '
+            'verify_eve_access(){ events+=" eve"; }; '
+            'install_or_update(){ events+=" install"; }; '
+            'install_interactive_mode || rc=$?; '
+            'printf "%s|%s\\n" "${rc:-0}" "$events"'
+        )
+
+        self.assertEqual(
+            result.stdout,
+            "1| layout artifact backup configure restore\n",
+        )
+
+    def test_start_failure_stops_service_and_does_not_write_manifest(self):
+        result = run_bash(
+            'events=""; existing_install(){ return 0; }; '
+            'validate_existing_config(){ events+=" validate"; }; '
+            'verify_eve_access(){ events+=" eve"; }; '
+            'reload_service_manager(){ events+=" reload"; }; '
+            'accept_install(){ events+=" accept"; return 1; }; '
+            'stop_service(){ events+=" stop"; }; '
+            'write_manifest(){ events+=" manifest"; }; '
+            'start_existing_install || rc=$?; '
+            'printf "%s|%s\\n" "${rc:-0}" "$events"'
+        )
+
+        self.assertEqual(
+            result.stdout,
+            "1| validate eve reload accept stop\n",
+        )
+
+    def test_diagnostics_mask_telegram_bot_token(self):
+        result = run_bash(
+            "systemctl(){ printf '%s\\n' "
+            "'request https://api.telegram.org/bot123456:SECRET/getUpdates'; }; "
+            "journalctl(){ printf '%s\\n' "
+            "'request https://api.telegram.org/bot123456:SECRET/getUpdates'; }; "
+            "show_diagnostics"
+        )
+        combined = result.stdout + result.stderr
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("123456:SECRET", combined)
+        self.assertIn("bot***MASKED***", combined)
+
+    def test_configure_interactively_stops_after_collection_failure(self):
+        result = run_bash(
+            'events=""; '
+            'collect_interactive_config(){ events+=" collect"; '
+            "USE_SSL=false; ALLOW_SELF_SIGNED=false; return 1; }; "
+            'render_config(){ events+=" render"; }; '
+            'write_config_atomic(){ events+=" write"; }; '
+            'if configure_interactively; then rc=0; else rc=$?; fi; '
+            'printf "%s|%s\\n" "$rc" "$events"'
+        )
+
+        self.assertEqual(result.stdout, "1| collect\n")
+
+    def test_unit_install_propagates_copy_failure_in_conditional_context(self):
+        with tempfile.TemporaryDirectory() as root:
+            unit_dir = Path(root) / "etc/systemd/system"
+            unit_dir.mkdir(parents=True)
+            result = run_bash(
+                "init_paths; install(){ return 1; }; mv(){ return 0; }; "
+                "if install_unit_candidate; then exit 0; else exit 1; fi",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_acceptance_stops_when_service_start_fails(self):
+        result = run_bash(
+            "start_service(){ return 1; }; "
+            "acceptance_probe(){ return 0; }; "
+            "if accept_install 1; then exit 0; else exit 1; fi"
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_rollback_stops_when_venv_restore_fails(self):
+        result = run_bash(
+            'events=""; stop_service(){ events+=" stop"; }; '
+            'restore_previous_venv(){ events+=" venv"; return 1; }; '
+            'restore_backup_files(){ events+=" files"; }; '
+            'reload_service_manager(){ events+=" reload"; }; '
+            'start_service(){ events+=" start"; }; '
+            'verify_rollback_health(){ events+=" health"; }; '
+            'if rollback_update; then rc=0; else rc=$?; fi; '
+            'printf "%s|%s\\n" "$rc" "$events"'
+        )
+
+        self.assertEqual(result.stdout, "2| stop venv\n")
+
+    def test_manifest_fails_when_runtime_python_is_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            state_dir = Path(root) / "var/lib/mikroclear"
+            state_dir.mkdir(parents=True)
+            result = run_bash(
+                "init_paths; repo_commit(){ printf 'abc123\\n'; }; "
+                "if write_manifest active; then exit 0; else exit 1; fi",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+        self.assertNotEqual(result.returncode, 0)
