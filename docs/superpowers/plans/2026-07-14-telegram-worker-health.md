@@ -8,8 +8,8 @@
 
 **Tech Stack:** Python 3.11+, `threading`, `unittest`, systemd `Restart=on-failure`.
 
-**Status:** Tasks 1-3, Task 4 review, and local merge completed and verified on
-2026-07-24. Artifact build and staged deploy remain pending.
+**Status:** Tasks 1-3, Task 4 review, local merge, and clean artifact build
+completed and verified on 2026-07-24. Staged deploy remains pending.
 
 ## Global Constraints
 
@@ -284,9 +284,15 @@ Merge result on 2026-07-24: `main` fast-forwarded to `9534a3f`; the existing
 uncommitted dependency files remained outside the merge. The merged tree passed
 286 tests.
 
-- [ ] **Step 3: Build from committed HEAD in a clean temporary source tree**
+- [x] **Step 3: Build from committed HEAD in a clean temporary source tree**
 
 Build with `pip wheel --no-deps --no-build-isolation`, validate with `python -m zipfile -t`, and record SHA-256. Do not build from the dirty main checkout.
+
+Build result on 2026-07-24: the wheel was created from `git archive` in a
+temporary clean source tree, passed ZIP and project validation, contained the
+runtime package and polling worker, and excluded the uncommitted MCP dependency
+from its metadata. The deploy report records the final artifact commit and
+SHA-256.
 
 - [ ] **Step 4: Deploy with rollback ready**
 
