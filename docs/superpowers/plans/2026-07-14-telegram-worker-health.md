@@ -8,10 +8,10 @@
 
 **Tech Stack:** Python 3.11+, `threading`, `unittest`, systemd `Restart=on-failure`.
 
-**Status:** Tasks 1-3, Task 4 review, local merge, clean artifact build, repeat
-staged deploy, acceptance, and automatic rollback completed on 2026-07-24.
-The failed acceptance was traced to legacy module shadowing caused by
-`WorkingDirectory=/usr/local/bin`. The unit correction and repeat deploy remain.
+**Status:** Completed on 2026-07-24. The failed acceptance was traced to legacy
+module shadowing caused by `WorkingDirectory=/usr/local/bin`. Corrected wheel
+and unit artifacts were deployed from commit `27665e6`; the package runtime and
+Telegram worker passed production acceptance.
 
 ## Global Constraints
 
@@ -331,9 +331,38 @@ Rollback result: wheel SHA-256
 was restored; the service returned to `active/running`, `NRestarts=0`, and the
 pre-deploy `polling.py` SHA.
 
-- [ ] **Step 7: Report privileged remainder**
+- [x] **Step 7: Report privileged remainder**
 
 If helper and sudoers still differ, report exact candidate hashes and root install commands. Do not claim a full helper/reset deploy until root-owned files match.
+
+Privileged remainder on 2026-07-24:
+
+- installed `mikroclear-mask-env` and `mikroclear-service-env` match the
+  repository;
+- installed `mikroclear-telegram-getupdates-probe` SHA-256 is
+  `3a846d5d3cc885381c2cf89a547dcaf8dfec59ba5674dd9e1d8d1a56453842c2`,
+  while the repository candidate is
+  `84e98a726f43c8e74a5ddf98d41c5269d8afe6e10e775507f8efbef6316cf982`;
+- `/etc/sudoers.d/mikroclear-mcp-selks` is not readable by the MCP SSH account,
+  so its repository candidate SHA-256
+  `e8b53c5ea21f0f693d2ac6d44834ca076b59f0e60e143b0302ea384b88297b0c`
+  is not claimed as installed;
+- helper/sudoers installation remains a separate root-operator action and was
+  not included in the runtime deploy.
+
+Exact root-operator follow-up from the repository checkout:
+
+```bash
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'install -d -m 700 /var/tmp/mikroclear-root-install/scripts'
+scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new -r \
+  deploy selks:/var/tmp/mikroclear-root-install/
+scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new \
+  scripts/install-selks-codex-sudoers.sh \
+  selks:/var/tmp/mikroclear-root-install/scripts/
+ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
+  'cd /var/tmp/mikroclear-root-install && sudo ./scripts/install-selks-codex-sudoers.sh mcp-selks'
+```
 
 ---
 
@@ -347,6 +376,20 @@ If helper and sudoers still differ, report exact candidate hashes and root insta
 - [x] **Step 1: Add a regression test for a neutral working directory**
 - [x] **Step 2: Set both package-entrypoint units to `WorkingDirectory=/`**
 - [x] **Step 3: Run focused and full local verification**
-- [ ] **Step 4: Commit, push, and build a clean wheel from committed HEAD**
-- [ ] **Step 5: Deploy the wheel and corrected unit with both rollback artifacts ready**
-- [ ] **Step 6: Repeat the full runtime acceptance window**
+- [x] **Step 4: Commit, push, and build a clean wheel from committed HEAD**
+- [x] **Step 5: Deploy the wheel and corrected unit with both rollback artifacts ready**
+- [x] **Step 6: Repeat the full runtime acceptance window**
+
+Production result:
+
+- commit: `27665e65264e9cadf733337d8f486fc802fa6d13`;
+- wheel SHA-256:
+  `7751da6029f190d2b4eae5d0ab1ed60904e089e1c9b3c76505136c6010addb0a`;
+- unit SHA-256:
+  `2609bfb42c1242d1ad510d3167a15545de5d21e7aa90c2b6f9b77c7151532e8f`;
+- rollback wheel and unit were staged and hash-verified before mutation;
+- after more than one long-poll window: `active/running`, `Result=success`,
+  `NRestarts=0`, `TasksCurrent=2`, `WorkingDirectory=/`;
+- package import resolved to `site-packages`, the worker-start marker was
+  present, RouterOS connected, installed runtime SHAs matched local sources,
+  and no fatal worker error or traceback appeared.

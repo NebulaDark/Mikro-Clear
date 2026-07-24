@@ -165,6 +165,13 @@ Telegram worker, хотя SHA установленных модулей совп
 пакетных deploy; отдельная гипотеза о Telegram `allowed_updates` требует
 повторной проверки после успешного запуска пакетного worker.
 
+Исправленный wheel из коммита `27665e6` и unit с `WorkingDirectory=/` были
+развёрнуты 2026-07-24. После полного long-poll окна сервис оставался
+`active/running`, `NRestarts=0`, `TasksCurrent=2`; импорт разрешался в
+`site-packages`, журнал содержал `Telegram polling worker started`, RouterOS
+был подключён, а fatal worker error и traceback отсутствовали. Подготовленные
+rollback wheel и unit не потребовались.
+
 ## Вывод расследования
 
 Для отсутствующего worker при staged deploy root cause подтверждён: legacy
