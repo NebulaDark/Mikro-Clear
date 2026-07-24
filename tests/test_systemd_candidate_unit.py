@@ -47,11 +47,30 @@ class SystemdCandidateUnitTests(TestCase):
                 self.assertEqual(working_directories, ["WorkingDirectory=/"])
 
     def test_candidate_uses_primary_mikroclear_env_only(self):
-        service_lines = section_lines(CANDIDATE_UNIT, "Service")
-        current = "EnvironmentFile=-/etc/mikroclear/mikroclear.env"
+        for unit_path in (PRODUCTION_UNIT, CANDIDATE_UNIT):
+            with self.subTest(unit=str(unit_path)):
+                service_lines = section_lines(unit_path, "Service")
+                current = "EnvironmentFile=/etc/mikroclear/mikroclear.env"
 
-        self.assertIn(current, service_lines)
-        self.assertNotIn("EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env", service_lines)
+                self.assertIn(current, service_lines)
+                self.assertNotIn(
+                    "EnvironmentFile=-/etc/mikroclear/mikroclear.env",
+                    service_lines,
+                )
+                self.assertNotIn(
+                    "EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env",
+                    service_lines,
+                )
+
+    def test_units_run_as_dedicated_mikroclear_user(self):
+        for unit_path in (PRODUCTION_UNIT, CANDIDATE_UNIT):
+            with self.subTest(unit=str(unit_path)):
+                service_lines = section_lines(unit_path, "Service")
+
+                self.assertIn("User=mikroclear", service_lines)
+                self.assertIn("Group=mikroclear", service_lines)
+                self.assertNotIn("User=root", service_lines)
+                self.assertNotIn("Group=root", service_lines)
 
     def test_candidate_uses_primary_state_and_config_paths_only(self):
         service_lines = section_lines(CANDIDATE_UNIT, "Service")

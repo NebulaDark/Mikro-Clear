@@ -30,9 +30,10 @@ class SystemdUnitTests(TestCase):
 
     def test_service_uses_primary_mikroclear_env_only(self):
         service_lines = section_lines("Service")
-        current = "EnvironmentFile=-/etc/mikroclear/mikroclear.env"
+        current = "EnvironmentFile=/etc/mikroclear/mikroclear.env"
 
         self.assertIn(current, service_lines)
+        self.assertNotIn("EnvironmentFile=-/etc/mikroclear/mikroclear.env", service_lines)
         self.assertNotIn("EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env", service_lines)
 
     def test_service_uses_package_entrypoint(self):
@@ -57,5 +58,7 @@ class SystemdUnitTests(TestCase):
         ):
             self.assertIn(directive, service_lines)
 
-        self.assertIn("User=root", service_lines)
-        self.assertIn("Group=root", service_lines)
+        self.assertIn("User=mikroclear", service_lines)
+        self.assertIn("Group=mikroclear", service_lines)
+        self.assertNotIn("User=root", service_lines)
+        self.assertNotIn("Group=root", service_lines)
