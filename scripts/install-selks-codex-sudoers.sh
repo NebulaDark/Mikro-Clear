@@ -8,6 +8,13 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 SUDOERS_SOURCE="${REPO_ROOT}/deploy/sudoers.d/mikroclear-mcp-selks"
 SUDOERS_TARGET="/etc/sudoers.d/mikroclear-mcp-selks"
+tmp_sudoers=""
+
+cleanup() {
+    if [[ -n "${tmp_sudoers:-}" ]]; then
+        rm -f "${tmp_sudoers}"
+    fi
+}
 
 install_helper() {
     local source_path="$1"
@@ -30,9 +37,8 @@ main() {
     install_helper "${REPO_ROOT}/deploy/bin/mikroclear-service-env" "/usr/local/sbin/mikroclear-service-env"
     install_helper "${REPO_ROOT}/deploy/bin/mikroclear-telegram-getupdates-probe" "/usr/local/sbin/mikroclear-telegram-getupdates-probe"
 
-    local tmp_sudoers
     tmp_sudoers="$(mktemp /tmp/mikroclear-codex-sudoers.XXXXXX)"
-    trap 'rm -f "${tmp_sudoers}"' EXIT
+    trap cleanup EXIT
 
     sed "1s/^mcp-selks /${EXPECTED_USER} /" "${SUDOERS_SOURCE}" > "${tmp_sudoers}"
     chmod 0440 "${tmp_sudoers}"
