@@ -335,34 +335,21 @@ pre-deploy `polling.py` SHA.
 
 If helper and sudoers still differ, report exact candidate hashes and root install commands. Do not claim a full helper/reset deploy until root-owned files match.
 
-Privileged remainder on 2026-07-24:
+Privileged follow-up completed on 2026-07-24:
 
-- installed `mikroclear-mask-env` and `mikroclear-service-env` match the
-  repository;
-- installed `mikroclear-telegram-getupdates-probe` SHA-256 is
-  `3a846d5d3cc885381c2cf89a547dcaf8dfec59ba5674dd9e1d8d1a56453842c2`,
-  while the repository candidate is
+- all three installed helper SHA-256 values match the repository, including
+  `mikroclear-telegram-getupdates-probe`
   `84e98a726f43c8e74a5ddf98d41c5269d8afe6e10e775507f8efbef6316cf982`;
-- `/etc/sudoers.d/mikroclear-mcp-selks` is not readable by the MCP SSH account,
-  so its repository candidate SHA-256
-  `e8b53c5ea21f0f693d2ac6d44834ca076b59f0e60e143b0302ea384b88297b0c`
-  is not claimed as installed;
-- helper/sudoers installation remains a separate root-operator action and was
-  not included in the runtime deploy.
-
-Exact root-operator follow-up from the repository checkout:
-
-```bash
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'install -d -m 700 /var/tmp/mikroclear-root-install/scripts'
-scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new -r \
-  deploy selks:/var/tmp/mikroclear-root-install/
-scp -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new \
-  scripts/install-selks-codex-sudoers.sh \
-  selks:/var/tmp/mikroclear-root-install/scripts/
-ssh -F /home/mgm/.ssh/config -o StrictHostKeyChecking=accept-new selks \
-  'cd /var/tmp/mikroclear-root-install && sudo ./scripts/install-selks-codex-sudoers.sh mcp-selks'
-```
+- the candidate sudoers policy passed `visudo -cf`, was installed by root, and
+  both exact `systemctl status` and `journalctl` commands work through
+  `sudo -n`;
+- the first successful install exposed an EXIT-trap lifetime bug after file
+  installation; commit `dce8a41` added a regression test and safe cleanup;
+- the corrected installer was rerun on SELKS and returned
+  `INSTALLER_EXIT=0`;
+- the read-only Telegram probe reports matching config/runtime token
+  fingerprints, no webhook, an empty queue, and
+  `allowed_updates=["message","callback_query"]`; no reset was performed.
 
 ---
 

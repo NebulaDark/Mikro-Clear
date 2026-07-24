@@ -172,23 +172,27 @@ Telegram worker, хотя SHA установленных модулей совп
 был подключён, а fatal worker error и traceback отсутствовали. Подготовленные
 rollback wheel и unit не потребовались.
 
+После deploy ручные `/status` и read-only часть `/mangle` успешно прошли через
+production worker. Обновлённый read-only probe подтвердил одинаковые
+fingerprints config/runtime token, отсутствие webhook, пустую очередь и
+`allowed_updates=["message","callback_query"]`. Reset не выполнялся, поскольку
+текущее Telegram subscription state уже корректно.
+
+Root-оператор также установил актуальные diagnostic helpers и sudoers policy.
+Первый запуск installer установил файлы, но обнаружил EXIT-trap lifetime bug;
+исправление и regression test опубликованы в `dce8a41`. Повторный запуск
+исправленного installer завершился с `INSTALLER_EXIT=0`.
+
 ## Вывод расследования
 
 Для отсутствующего worker при staged deploy root cause подтверждён: legacy
 module shadowing из-за рабочего каталога systemd unit.
 
-Для исходного поведения Telegram updates рабочая гипотеза всё ещё требует
-контролируемого теста после исправленного deploy:
-
-- Telegram-side state этого bot token/identity меняется вне SELKS;
-- в результате обычные `message` updates не доходят до production poller;
-- у бота остается только `callback_query` path, поэтому не появляются ни
-  `/status` ответы, ни новые inline-кнопки/lock UI.
-
-Конкурирующие Telegram-side объяснения остаются открытыми: неполный reset
-subscription state или внешний consumer этого token. Отличие установленного
-polling artifact от локального кода исключено сравнением SHA, но ранее этот
-artifact не достигал выполнения из-за module shadowing.
+Текущий Telegram message/callback path подтверждён ручными командами и
+read-only probe. Ранее зафиксированный дрейф Telegram `allowed_updates` не
+воспроизводится; его историческая внешняя причина не доказана, но активного
+операционного дефекта больше нет. Отличие установленного polling artifact от
+локального кода исключено сравнением SHA, а package shadowing устранён.
 
 Что было исключено:
 
