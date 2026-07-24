@@ -416,3 +416,140 @@ class SelksStandaloneInstallerTests(TestCase):
 
         self.assertIn("read -r -s ROUTER_PASSWORD", source)
         self.assertIn("read -r -s TELEGRAM_TOKEN", source)
+
+    def test_candidate_switch_and_restore_are_exact(self):
+        with tempfile.TemporaryDirectory() as root:
+            opt = Path(root) / "opt"
+            current = opt / "mikroclear-venv"
+            candidate = opt / ".mikroclear-venv.candidate"
+            current.mkdir(parents=True)
+            candidate.mkdir()
+            (current / "version").write_text("old\n", encoding="utf-8")
+            (candidate / "version").write_text("new\n", encoding="utf-8")
+
+            result = run_bash(
+                "init_paths; "
+                'CANDIDATE_VENV="$(target_path /opt/.mikroclear-venv.candidate)"; '
+                'ROLLBACK_VENV="$(target_path /opt/.mikroclear-venv.rollback)"; '
+                "switch_candidate_venv; restore_previous_venv",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (current / "version").read_text(encoding="utf-8"),
+                "old\n",
+            )
+
+    def test_clean_candidate_switch_has_no_rollback_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            opt = Path(root) / "opt"
+            candidate = opt / ".mikroclear-venv.candidate"
+            candidate.mkdir(parents=True)
+            (candidate / "version").write_text("new\n", encoding="utf-8")
+
+            result = run_bash(
+                "init_paths; "
+                'CANDIDATE_VENV="$(target_path /opt/.mikroclear-venv.candidate)"; '
+                'ROLLBACK_VENV="$(target_path /opt/.mikroclear-venv.rollback)"; '
+                'switch_candidate_venv; printf "%s\\n" "$HAD_PREVIOUS_INSTALL"',
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "false\n")
+            self.assertEqual(
+                (opt / "mikroclear-venv/version").read_text(encoding="utf-8"),
+                "new\n",
+            )
+            self.assertFalse((opt / ".mikroclear-venv.rollback").exists())
+
+    def test_backup_preserves_unit_env_ca_and_manifest(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixtures = {
+                "etc/systemd/system/mikroclear.service": b"unit\n",
+                "etc/mikroclear/mikroclear.env": b"SECRET=value\n",
+                "etc/mikroclear/certs/mikrotik-ca.crt": b"certificate\n",
+                "var/lib/mikroclear/install-manifest": b"commit=old\n",
+            }
+            for relative, content in fixtures.items():
+                source = Path(root) / relative
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(content)
+
+            result = run_bash(
+                "init_paths; "
+                'BACKUP_DIR="$(target_path /var/backups/mikroclear/test-backup)"; '
+                "create_backup",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            backup = Path(root) / "var/backups/mikroclear/test-backup"
+            expected = {
+                "mikroclear.service": b"unit\n",
+                "mikroclear.env": b"SECRET=value\n",
+                "mikrotik-ca.crt": b"certificate\n",
+                "install-manifest": b"commit=old\n",
+            }
+            for name, content in expected.items():
+                with self.subTest(name=name):
+                    self.assertEqual((backup / name).read_bytes(), content)
+
+    def test_successful_update_archives_exact_previous_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            opt = Path(root) / "opt"
+            rollback = opt / ".mikroclear-venv.rollback"
+            rollback.mkdir(parents=True)
+            (rollback / "version").write_text("old\n", encoding="utf-8")
+            backup = Path(root) / "var/backups/mikroclear/test-backup"
+            backup.mkdir(parents=True)
+
+            result = run_bash(
+                "init_paths; "
+                'ROLLBACK_VENV="$(target_path /opt/.mikroclear-venv.rollback)"; '
+                'BACKUP_DIR="$(target_path /var/backups/mikroclear/test-backup)"; '
+                "finalize_successful_update",
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (backup / "venv/version").read_text(encoding="utf-8"),
+                "old\n",
+            )
+            self.assertFalse(rollback.exists())
+
+    def test_second_installer_cannot_take_held_lock(self):
+        with tempfile.TemporaryDirectory() as root:
+            result = run_bash(
+                "init_paths; "
+                'LOCK_FILE="$(target_path /run/lock/mikroclear-install.lock)"; '
+                'mkdir -p "$(dirname "$LOCK_FILE")"; '
+                'exec 8>"$LOCK_FILE"; flock -n 8; acquire_install_lock',
+                env={
+                    "MIKROCLEAR_INSTALLER_TEST_MODE": "1",
+                    "MIKROCLEAR_INSTALLER_TEST_ROOT": root,
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("another installer is running", result.stderr)
+
+    def test_candidate_runtime_explicitly_rejects_mcp(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("-m pip show mcp", source)
+        self.assertIn("candidate runtime unexpectedly contains mcp", source)

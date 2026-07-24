@@ -16,20 +16,30 @@ CANONICAL_CERT_DIR="/etc/mikroclear/certs"
 CANONICAL_ENV_FILE="/etc/mikroclear/mikroclear.env"
 CANONICAL_CA_FILE="/etc/mikroclear/certs/mikrotik-ca.crt"
 CANONICAL_STATE_DIR="/var/lib/mikroclear"
+CANONICAL_MANIFEST_FILE="/var/lib/mikroclear/install-manifest"
 CANONICAL_BACKUP_ROOT="/var/backups/mikroclear"
 CANONICAL_VENV_DIR="/opt/mikroclear-venv"
 CANONICAL_UNIT_FILE="/etc/systemd/system/mikroclear.service"
 CANONICAL_EVE_PATH="/opt/SELKS/docker/containers-data/suricata/logs/eve.json"
+CANONICAL_LOCK_FILE="/run/lock/mikroclear-install.lock"
 
 CONFIG_DIR="${CANONICAL_CONFIG_DIR}"
 CERT_DIR="${CANONICAL_CERT_DIR}"
 ENV_FILE="${CANONICAL_ENV_FILE}"
 CA_FILE="${CANONICAL_CA_FILE}"
 STATE_DIR="${CANONICAL_STATE_DIR}"
+MANIFEST_FILE="${CANONICAL_MANIFEST_FILE}"
 BACKUP_ROOT="${CANONICAL_BACKUP_ROOT}"
 VENV_DIR="${CANONICAL_VENV_DIR}"
 UNIT_FILE="${CANONICAL_UNIT_FILE}"
 EVE_PATH="${CANONICAL_EVE_PATH}"
+LOCK_FILE="${CANONICAL_LOCK_FILE}"
+
+BACKUP_DIR=""
+CANDIDATE_VENV=""
+ROLLBACK_VENV=""
+HAD_PREVIOUS_INSTALL=false
+WHEEL_PATH=""
 
 die() {
     printf 'ERROR: %s\n' "$1" >&2
@@ -104,10 +114,12 @@ init_paths() {
     ENV_FILE="$(target_path "${CANONICAL_ENV_FILE}")"
     CA_FILE="$(target_path "${CANONICAL_CA_FILE}")"
     STATE_DIR="$(target_path "${CANONICAL_STATE_DIR}")"
+    MANIFEST_FILE="$(target_path "${CANONICAL_MANIFEST_FILE}")"
     BACKUP_ROOT="$(target_path "${CANONICAL_BACKUP_ROOT}")"
     VENV_DIR="$(target_path "${CANONICAL_VENV_DIR}")"
     UNIT_FILE="$(target_path "${CANONICAL_UNIT_FILE}")"
     EVE_PATH="$(target_path "${CANONICAL_EVE_PATH}")"
+    LOCK_FILE="$(target_path "${CANONICAL_LOCK_FILE}")"
 }
 
 target_path() {
@@ -142,23 +154,36 @@ has_command() {
 collect_missing_commands() {
     local command_name
     local required=(
+        awk
+        chmod
+        chown
+        cp
+        date
         df
+        dirname
         flock
         getent
         git
+        grep
         groupadd
         install
         journalctl
+        mkdir
+        mktemp
+        mv
         namei
         openssl
         ps
         python3
+        rm
         runuser
         sha256sum
         stat
         systemctl
         systemd-analyze
+        tail
         tar
+        tr
         useradd
     )
 
@@ -642,6 +667,174 @@ configure_interactively() {
     fi
     content="$(render_config)"
     write_config_atomic "${content}"
+}
+
+acquire_install_lock() {
+    local lock_dir
+
+    lock_dir="$(dirname "${LOCK_FILE}")"
+    if [[ ! -d "${lock_dir}" ]]; then
+        install -d -m 0755 "${lock_dir}"
+    fi
+    exec 9>"${LOCK_FILE}"
+    flock -n 9 || die "another installer is running: ${LOCK_FILE}"
+}
+
+prepare_candidate_paths() {
+    local timestamp
+
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    if [[ -z "${CANDIDATE_VENV}" ]]; then
+        CANDIDATE_VENV="$(
+            target_path "/opt/.mikroclear-venv.candidate.$$"
+        )"
+    fi
+    if [[ -z "${ROLLBACK_VENV}" ]]; then
+        ROLLBACK_VENV="$(
+            target_path "/opt/.mikroclear-venv.rollback.${timestamp}"
+        )"
+    fi
+}
+
+prepare_candidate_venv() {
+    local wheel="$1"
+    local import_path
+
+    prepare_candidate_paths
+    [[ ! -e "${CANDIDATE_VENV}" ]] ||
+        die "candidate venv already exists: ${CANDIDATE_VENV}"
+    python3 -m venv "${CANDIDATE_VENV}"
+    "${CANDIDATE_VENV}/bin/python" -m pip install "${wheel}"
+    if "${CANDIDATE_VENV}/bin/python" -m pip show mcp >/dev/null 2>&1; then
+        die "candidate runtime unexpectedly contains mcp"
+    fi
+    import_path="$(
+        cd /
+        "${CANDIDATE_VENV}/bin/python" -c \
+            'import pathlib, mikroclear; print(pathlib.Path(mikroclear.__file__).resolve())'
+    )"
+    [[ "${import_path}" == "${CANDIDATE_VENV}"/lib/python*/site-packages/mikroclear/* ]] ||
+        die "candidate import is outside candidate site-packages: ${import_path}"
+}
+
+backup_file_if_present() {
+    local source="$1"
+    local backup_name="$2"
+
+    if [[ -f "${source}" ]]; then
+        cp -a -- "${source}" "${BACKUP_DIR}/${backup_name}"
+    fi
+}
+
+create_backup() {
+    local timestamp
+
+    if [[ -z "${BACKUP_DIR}" ]]; then
+        timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+        BACKUP_DIR="${BACKUP_ROOT}/${timestamp}"
+    fi
+    [[ ! -e "${BACKUP_DIR}" ]] ||
+        die "backup directory already exists: ${BACKUP_DIR}"
+    install_owned_dir root root 0700 "${BACKUP_DIR}"
+    backup_file_if_present "${UNIT_FILE}" "mikroclear.service"
+    backup_file_if_present "${ENV_FILE}" "mikroclear.env"
+    backup_file_if_present "${CA_FILE}" "mikrotik-ca.crt"
+    backup_file_if_present "${MANIFEST_FILE}" "install-manifest"
+    if [[ -x "${VENV_DIR}/bin/python" ]]; then
+        "${VENV_DIR}/bin/python" -m pip freeze \
+            >"${BACKUP_DIR}/pip-freeze.txt"
+        chmod 0600 "${BACKUP_DIR}/pip-freeze.txt"
+    fi
+}
+
+switch_candidate_venv() {
+    [[ -d "${CANDIDATE_VENV}" ]] ||
+        die "candidate venv is missing: ${CANDIDATE_VENV}"
+
+    if [[ -d "${VENV_DIR}" ]]; then
+        HAD_PREVIOUS_INSTALL=true
+        [[ ! -e "${ROLLBACK_VENV}" ]] ||
+            die "rollback venv path already exists: ${ROLLBACK_VENV}"
+        mv -- "${VENV_DIR}" "${ROLLBACK_VENV}"
+    else
+        HAD_PREVIOUS_INSTALL=false
+    fi
+
+    if ! mv -- "${CANDIDATE_VENV}" "${VENV_DIR}"; then
+        if [[ "${HAD_PREVIOUS_INSTALL}" == "true" &&
+            -d "${ROLLBACK_VENV}" ]]; then
+            mv -- "${ROLLBACK_VENV}" "${VENV_DIR}"
+        fi
+        return 1
+    fi
+}
+
+restore_previous_venv() {
+    local failed_venv
+
+    [[ -d "${ROLLBACK_VENV}" ]] ||
+        die "rollback venv is missing: ${ROLLBACK_VENV}"
+    if [[ -n "${BACKUP_DIR}" ]]; then
+        failed_venv="${BACKUP_DIR}/failed-venv"
+    else
+        failed_venv="$(target_path "/opt/.mikroclear-venv.failed.$$")"
+    fi
+    [[ ! -e "${failed_venv}" ]] ||
+        die "failed venv archive already exists: ${failed_venv}"
+    if [[ -d "${VENV_DIR}" ]]; then
+        mv -- "${VENV_DIR}" "${failed_venv}"
+    fi
+    mv -- "${ROLLBACK_VENV}" "${VENV_DIR}"
+}
+
+finalize_successful_update() {
+    if [[ ! -d "${ROLLBACK_VENV}" ]]; then
+        return 0
+    fi
+    [[ -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]] ||
+        die "backup directory is unavailable for previous venv"
+    [[ ! -e "${BACKUP_DIR}/venv" ]] ||
+        die "backup venv already exists: ${BACKUP_DIR}/venv"
+    mv -- "${ROLLBACK_VENV}" "${BACKUP_DIR}/venv"
+}
+
+install_unit_candidate() {
+    local temporary
+
+    temporary="$(mktemp "$(dirname "${UNIT_FILE}")/.mikroclear.XXXXXX.service")"
+    install -m 0644 \
+        "${REPO_ROOT}/systemd/mikroclear.service" \
+        "${temporary}"
+    if [[ "${TEST_MODE}" != "1" ]]; then
+        chown root:root "${temporary}"
+        systemd-analyze verify "${temporary}"
+    fi
+    mv -T "${temporary}" "${UNIT_FILE}"
+}
+
+write_manifest() {
+    local status="$1"
+    local commit
+    local wheel_sha=""
+    local temporary
+
+    commit="$(repo_commit)"
+    if [[ -n "${WHEEL_PATH}" && -f "${WHEEL_PATH}" ]]; then
+        wheel_sha="$(sha256sum "${WHEEL_PATH}" | awk '{print $1}')"
+    fi
+    temporary="$(mktemp "${STATE_DIR}/.install-manifest.XXXXXX")"
+    printf '%s\n' \
+        "status=${status}" \
+        "commit=${commit}" \
+        "wheel_sha256=${wheel_sha}" \
+        "python=$("${VENV_DIR}/bin/python" --version 2>&1)" \
+        "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        >"${temporary}"
+    chmod 0600 "${temporary}"
+    if [[ "${TEST_MODE}" != "1" ]]; then
+        chown "${SERVICE_USER}:${SERVICE_GROUP}" "${temporary}"
+    fi
+    mv -T "${temporary}" "${MANIFEST_FILE}"
 }
 
 main() {
