@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 INSTALL_MODE=""
+# Exposed for source-based CLI contract tests and operator wrappers.
+# shellcheck disable=SC2034
 START_ONLY=false
 TEST_MODE="${MIKROCLEAR_INSTALLER_TEST_MODE:-0}"
 TEST_ROOT="${MIKROCLEAR_INSTALLER_TEST_ROOT:-}"
@@ -70,6 +72,8 @@ parse_args() {
                 ;;
             --start)
                 INSTALL_MODE="existing"
+                # Exported state for callers that source this script.
+                # shellcheck disable=SC2034
                 START_ONLY=true
                 ((selected += 1))
                 ;;
@@ -578,9 +582,10 @@ install_ca() {
 validate_router_port() {
     local port="$1"
 
-    [[ "${port}" =~ ^[0-9]+$ ]] &&
-        ((port >= 1 && port <= 65535)) ||
+    if [[ ! "${port}" =~ ^[0-9]+$ ]] ||
+        ((port < 1 || port > 65535)); then
         die "RouterOS port must be between 1 and 65535"
+    fi
 }
 
 read_yes_no() {
