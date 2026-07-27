@@ -32,6 +32,7 @@ class Settings:
     telegram_system_cooldown_seconds: int = 300
     telegram_unblock_enable: bool = True
     telegram_unblock_ttl_seconds: int = 24 * 3600
+    telegram_whitelist_control_enable: bool = False
     telegram_updates_interval_seconds: int = 5
     telegram_long_poll_seconds: int = 25
     wan_ip: str = ""
@@ -53,6 +54,8 @@ class Settings:
     ignore_list_location: str = "/var/lib/mikroclear/ignore-tzsp0.conf"
     telegram_lock_file: str = "/var/lib/mikroclear/telegram-rate-limit.lock"
     telegram_unblock_state_file: str = "/var/lib/mikroclear/telegram-unblock-actions.json"
+    dynamic_whitelist_file: str = "/var/lib/mikroclear/dynamic-whitelist.json"
+    telegram_whitelist_state_file: str = "/var/lib/mikroclear/telegram-whitelist-actions.json"
     save_lists: tuple[str, ...] = ("Suricata",)
     save_interval: int = 300
     asset_resolver_enable: bool = True
@@ -130,6 +133,10 @@ class Settings:
             telegram_system_cooldown_seconds=env_int("MIKROCLEAR_TELEGRAM_SYSTEM_COOLDOWN_SECONDS", 300),
             telegram_unblock_enable=env_bool("MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE", True),
             telegram_unblock_ttl_seconds=env_int("MIKROCLEAR_TELEGRAM_UNBLOCK_TTL_SECONDS", 24 * 3600),
+            telegram_whitelist_control_enable=env_bool(
+                "MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE",
+                False,
+            ),
             telegram_updates_interval_seconds=env_int("MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS", 5),
             telegram_long_poll_seconds=env_int("MIKROCLEAR_TELEGRAM_LONG_POLL_SECONDS", 25),
             wan_ip=wan_ip,
@@ -164,6 +171,18 @@ class Settings:
                 env_str(
                     "MIKROCLEAR_TELEGRAM_UNBLOCK_STATE_FILE",
                     os.path.join(state_dir, "telegram-unblock-actions.json"),
+                )
+            ),
+            dynamic_whitelist_file=os.path.abspath(
+                env_str(
+                    "MIKROCLEAR_DYNAMIC_WHITELIST_FILE",
+                    os.path.join(state_dir, "dynamic-whitelist.json"),
+                )
+            ),
+            telegram_whitelist_state_file=os.path.abspath(
+                env_str(
+                    "MIKROCLEAR_TELEGRAM_WHITELIST_STATE_FILE",
+                    os.path.join(state_dir, "telegram-whitelist-actions.json"),
                 )
             ),
             save_lists=env_csv("MIKROCLEAR_SAVE_LISTS", (block_list_name,)),

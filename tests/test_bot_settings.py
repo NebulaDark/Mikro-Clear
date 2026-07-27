@@ -17,7 +17,11 @@ class BotSettingsTests(TestCase):
         self.assertTrue(settings.dry_run)
         self.assertEqual(settings.allowed_chat_ids, ())
         self.assertEqual(settings.admin_chat_ids, ())
-        self.assertEqual(settings.modules, ("status", "asset_resolver", "mangle_control", "parental_control"))
+        self.assertEqual(
+            settings.modules,
+            ("status", "asset_resolver", "mangle_control", "parental_control", "whitelist_control"),
+        )
+        self.assertIn("whitelist_control", BotSettings.from_env().modules)
 
     def test_env_overrides(self):
         env = {

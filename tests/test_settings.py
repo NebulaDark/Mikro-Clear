@@ -57,6 +57,15 @@ class SettingsTests(TestCase):
             settings = Settings.from_env()
 
         self.assertEqual(settings.state_dir, str(Path("/tmp/mikroclear-state").resolve()))
+        self.assertFalse(settings.telegram_whitelist_control_enable)
+        self.assertEqual(
+            settings.dynamic_whitelist_file,
+            str(Path("/tmp/mikroclear-state/dynamic-whitelist.json").resolve()),
+        )
+        self.assertEqual(
+            settings.telegram_whitelist_state_file,
+            str(Path("/tmp/mikroclear-state/telegram-whitelist-actions.json").resolve()),
+        )
         self.assertEqual(
             settings.telegram_unblock_state_file,
             str(Path("/tmp/mikroclear-state/telegram-unblock-actions.json").resolve()),

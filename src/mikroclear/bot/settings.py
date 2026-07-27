@@ -15,7 +15,13 @@ class BotSettings:
     dry_run: bool = True
     admin_chat_ids: tuple[str, ...] = ()
     allowed_chat_ids: tuple[str, ...] = ()
-    modules: tuple[str, ...] = ("status", "asset_resolver", "mangle_control", "parental_control")
+    modules: tuple[str, ...] = (
+        "status",
+        "asset_resolver",
+        "mangle_control",
+        "parental_control",
+        "whitelist_control",
+    )
     audit_log: str = "/var/lib/mikroclear/bot-audit.log"
 
     @classmethod
@@ -27,7 +33,13 @@ class BotSettings:
             allowed_chat_ids=parse_chat_ids(env_str("MIKROCLEAR_BOT_ALLOWED_CHAT_IDS", "")),
             modules=env_csv(
                 "MIKROCLEAR_BOT_MODULES",
-                ("status", "asset_resolver", "mangle_control", "parental_control"),
+                (
+                    "status",
+                    "asset_resolver",
+                    "mangle_control",
+                    "parental_control",
+                    "whitelist_control",
+                ),
             ),
             audit_log=env_str("MIKROCLEAR_BOT_AUDIT_LOG", "/var/lib/mikroclear/bot-audit.log"),
         )
