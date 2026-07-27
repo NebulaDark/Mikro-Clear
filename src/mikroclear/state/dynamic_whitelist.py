@@ -69,13 +69,17 @@ class DynamicWhitelistStore:
             return set()
         try:
             document = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise DynamicWhitelistError(
                 f"cannot read managed whitelist: {type(exc).__name__}"
             ) from exc
         if not isinstance(document, dict) or set(document) != {"version", "addresses"}:
             raise DynamicWhitelistError("managed whitelist schema is invalid")
-        if document["version"] != 1 or not isinstance(document["addresses"], list):
+        if (
+            type(document["version"]) is not int
+            or document["version"] != 1
+            or not isinstance(document["addresses"], list)
+        ):
             raise DynamicWhitelistError("managed whitelist version or addresses is invalid")
         values = document["addresses"]
         if any(

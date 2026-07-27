@@ -47,6 +47,24 @@ class DynamicWhitelistStoreTests(TestCase):
             with self.assertRaises(DynamicWhitelistError):
                 DynamicWhitelistStore(path)
 
+    def test_boolean_version_fails_closed(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "dynamic-whitelist.json")
+            path.write_text('{"version":true,"addresses":[]}', encoding="utf-8")
+            with self.assertRaises(DynamicWhitelistError):
+                DynamicWhitelistStore(path)
+
+    def test_invalid_utf8_fails_closed_without_exposing_content(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "dynamic-whitelist.json")
+            path.write_bytes(b'{"version":1,"addresses":["\xff"]}')
+            with self.assertRaises(DynamicWhitelistError) as raised:
+                DynamicWhitelistStore(path)
+            self.assertEqual(
+                str(raised.exception),
+                "cannot read managed whitelist: UnicodeDecodeError",
+            )
+
     def test_write_is_private_and_leaves_no_temp_file(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp, "dynamic-whitelist.json")
