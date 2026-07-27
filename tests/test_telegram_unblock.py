@@ -223,6 +223,38 @@ class TelegramUnblockFlowTests(unittest.TestCase):
         self.assertTrue(result.retryable)
         self.assertEqual(result.status_code, 503)
 
+    def test_unblock_passes_list_name_before_address(self):
+        from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
+
+        address_list = object()
+
+        class Client:
+            def paths(self):
+                return address_list, None, object()
+
+            def run_with_reconnect(self, _name, operation):
+                return operation()
+
+        with patch(
+            "mikroclear.telegram.unblock_handler.remove_from_address_list",
+            return_value=1,
+        ) as remove:
+            handler = TelegramUnblockHandler(
+                Settings(whitelist_ips=()),
+                get_router_client=lambda: Client(),
+                log=Mock(),
+            )
+            result = handler.handle_unblock_action(
+                {
+                    "wanted_ip": "192.168.98.200",
+                    "list_name": "Suricata",
+                    "sid": "2025701",
+                }
+            )
+
+        remove.assert_called_once_with(address_list, "Suricata", "192.168.98.200")
+        self.assertTrue(result.success)
+
     def test_routeros_failure_returns_callback_text_and_logs_result(self):
         class FailingClient:
             def run_with_reconnect(self, operation_name, func):

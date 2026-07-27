@@ -40,7 +40,7 @@ class TelegramUnblockHandler:
         def remove_batch() -> bool:
             address_list, address_list_v6, _resources = client.paths()
             target_list = address_list_v6 if ":" in wanted_ip and address_list_v6 is not None else address_list
-            return remove_from_address_list(target_list, wanted_ip, list_name) > 0
+            return remove_from_address_list(target_list, list_name, wanted_ip) > 0
 
         try:
             removed = client.run_with_reconnect("telegram unblock", remove_batch)
