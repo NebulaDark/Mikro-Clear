@@ -130,6 +130,7 @@ class TelegramNotifier:
         sanitize_exception_text: Callable[..., str],
         now: Callable[[], float],
         send_message: Callable[..., TelegramSendResult] = send_telegram_message,
+        whitelist_keyboard_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.settings = settings
         self.peer_formatter = peer_formatter
@@ -138,6 +139,7 @@ class TelegramNotifier:
         self.sanitize_exception_text = sanitize_exception_text
         self.now = now
         self.send_message = send_message
+        self.whitelist_keyboard_factory = whitelist_keyboard_factory
         self.last_sent = 0.0
         self.lock = TelegramRateLimitLock(settings.telegram_lock_file, now=now, debug_log=debug_log)
 
@@ -250,13 +252,23 @@ class TelegramNotifier:
                 self.log(f"Could not create Telegram unblock token for {wanted_ip}: {exc}")
 
         if token:
-            return build_unblock_keyboard(str(wanted_ip), token)
-
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "AbuseIPDB", "url": f"https://www.abuseipdb.com/check/{wanted_ip}"},
-                    {"text": "VirusTotal", "url": f"https://www.virustotal.com/gui/ip-address/{wanted_ip}"},
+            reply_markup = build_unblock_keyboard(str(wanted_ip), token)
+        else:
+            reply_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "AbuseIPDB", "url": f"https://www.abuseipdb.com/check/{wanted_ip}"},
+                        {"text": "VirusTotal", "url": f"https://www.virustotal.com/gui/ip-address/{wanted_ip}"},
+                    ]
                 ]
-            ]
-        }
+            }
+
+        if self.whitelist_keyboard_factory is None:
+            return reply_markup
+        return self.whitelist_keyboard_factory(
+            reply_markup,
+            event=event,
+            wanted_ip=str(wanted_ip),
+            action_type=action_type,
+            now=now,
+        )

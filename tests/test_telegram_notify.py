@@ -12,6 +12,7 @@ from mikroclear.telegram.notify import (
     edit_telegram_reply_markup,
     send_telegram_message,
 )
+from mikroclear.telegram.whitelist_actions import append_managed_exception_button
 
 
 class TelegramNotifyFormattingTests(TestCase):
@@ -90,6 +91,32 @@ class TelegramNotifyDeliveryTests(TestCase):
             },
         }
 
+    def make_notifier(self, *, whitelist_keyboard_factory=None):
+        self.send_message = Mock(return_value=TelegramSendResult(ok=True))
+        return TelegramNotifier(
+            Settings(
+                enable_telegram=True,
+                telegram_token="token",
+                telegram_chatid="chat-1",
+                telegram_unblock_state_file=str(
+                    Path(self._state_tmp.name) / "telegram-unblock-actions.json"
+                ),
+            ),
+            peer_formatter=None,
+            log=Mock(),
+            debug_log=Mock(),
+            sanitize_exception_text=lambda exc, token: str(exc),
+            now=Mock(return_value=100.0),
+            send_message=self.send_message,
+            whitelist_keyboard_factory=whitelist_keyboard_factory,
+        )
+
+    def setUp(self):
+        self._state_tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._state_tmp.cleanup()
+
     def test_alert_keyboard_uses_confirm_callback_without_routeros_dependency(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "telegram-unblock-actions.json"
@@ -122,6 +149,51 @@ class TelegramNotifyDeliveryTests(TestCase):
         button = reply_markup["inline_keyboard"][0][0]
         self.assertEqual(button["text"], "🔓 Unblock 48.209.138.168")
         self.assertTrue(button["callback_data"].startswith("unblock_confirm:"))
+        self.assertEqual(len(reply_markup["inline_keyboard"]), 2)
+        self.assertEqual(
+            [button["text"] for button in reply_markup["inline_keyboard"][1]],
+            ["AbuseIPDB", "VirusTotal"],
+        )
+
+    def test_notifier_passes_existing_markup_to_extension_factory(self):
+        extension = Mock(
+            side_effect=lambda markup, **_context: append_managed_exception_button(
+                markup,
+                address="192.168.98.200",
+                token="whitelist-token",
+            )
+        )
+        notifier = self.make_notifier(whitelist_keyboard_factory=extension)
+
+        notifier.send_alert(
+            event=self.sample_event(),
+            wanted_ip="192.168.98.200",
+            src_ip="192.168.10.10",
+            wanted_port=445,
+            action_type="BLOCKED",
+        )
+
+        extension.assert_called_once()
+        original = extension.call_args.args[0]
+        self.assertEqual(
+            original["inline_keyboard"][0][0]["text"],
+            "🔓 Unblock 192.168.98.200",
+        )
+        self.assertEqual(
+            extension.call_args.kwargs,
+            {
+                "event": self.sample_event(),
+                "wanted_ip": "192.168.98.200",
+                "action_type": "BLOCKED",
+                "now": 100,
+            },
+        )
+        rows = self.send_message.call_args.kwargs["reply_markup"]["inline_keyboard"]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(
+            rows[2][0]["text"],
+            "🛡 Добавить в исключения 192.168.98.200",
+        )
 
     def test_send_telegram_message_posts_expected_payload(self):
         response = Mock(status_code=200, text="ok")
