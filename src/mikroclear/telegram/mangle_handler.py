@@ -9,10 +9,21 @@ import secrets
 from time import time
 from typing import Any, Callable
 
-from mikroclear.bot.mangle_control import build_mangle_confirm_keyboard, build_mangle_keyboard, format_mangle_status
+from mikroclear.bot.audit import BotAuditLog
+from mikroclear.bot.mangle_control import (
+    build_mangle_confirm_keyboard,
+    build_mangle_control_keyboard,
+    build_mangle_status_keyboard,
+    format_mangle_status,
+)
+from mikroclear.bot.menu import MenuView
+from mikroclear.bot.settings import BotSettings
 from mikroclear.routeros.mangle import get_managed_mangle_rule, list_managed_mangle_rules, set_mangle_rule_disabled
 from mikroclear.security import mask_known_secret, sanitize_exception_text
-from mikroclear.telegram.commands import RetryableTelegramDeliveryError
+from mikroclear.telegram.commands import (
+    RetryableTelegramDeliveryError,
+    raise_for_retryable_delivery,
+)
 
 
 def _command_name(text: Any) -> str:
@@ -56,10 +67,14 @@ class TelegramMangleHandler:
         *,
         get_router_client: Callable[[], Any],
         log: Callable[[str], None],
+        bot_settings: BotSettings | None = None,
+        audit: BotAuditLog | None = None,
         now: Callable[[], float] = time,
         token_factory: Callable[[], str] | None = None,
     ) -> None:
         self.settings = settings
+        self.bot_settings = bot_settings or BotSettings.from_env()
+        self.audit = audit or BotAuditLog(Path(self.bot_settings.audit_log))
         self.get_router_client = get_router_client
         self.log = log
         self.now = now
@@ -132,9 +147,59 @@ class TelegramMangleHandler:
     def _cancel_token(self, token: str, *, now: int) -> bool:
         return self._consume_token(token, now=now) is not None
 
-    def _api(self) -> Any:
+    def _read_rules(self) -> list[Any]:
         client = self.get_router_client()
-        return client.ensure_connected()
+        return client.run_with_reconnect(
+            "telegram mangle read",
+            lambda: list_managed_mangle_rules(
+                client.ensure_connected(),
+                self.settings,
+            ),
+        )
+
+    def _read_rule(self, rule_id: str) -> Any:
+        client = self.get_router_client()
+        return client.run_with_reconnect(
+            "telegram mangle read",
+            lambda: get_managed_mangle_rule(
+                client.ensure_connected(),
+                rule_id,
+                self.settings,
+            ),
+        )
+
+    def control_view(
+        self,
+        *,
+        chat_id: str,
+        user_id: str,
+        update_id: str = "",
+    ) -> MenuView:
+        rules = self._read_rules()
+        self.log(
+            f"Telegram /mangle managed rules: {len(rules)} for chat {chat_id}"
+        )
+        return MenuView(
+            "<b>Mangle</b>",
+            build_mangle_control_keyboard(
+                rules,
+                token_factory=lambda rule, action: self.create_action_token(
+                    rule.rule_id,
+                    action,
+                    chat_id,
+                    user_id,
+                    now=int(self.now()),
+                    source_update_id=update_id,
+                ),
+            ),
+        )
+
+    def status_view(self) -> MenuView:
+        rules = self._read_rules()
+        return MenuView(
+            format_mangle_status(rules),
+            build_mangle_status_keyboard(),
+        )
 
     def _send_status(
         self,
@@ -146,34 +211,173 @@ class TelegramMangleHandler:
         timeout: int,
         update_id: str = "",
     ) -> None:
-        rules = list_managed_mangle_rules(self._api(), self.settings)
-        self.log(f"Telegram /mangle managed rules: {len(rules)} for chat {chat_id}")
+        view = self.control_view(
+            chat_id=chat_id,
+            user_id=user_id,
+            update_id=update_id,
+        )
         result = send_message(
             token=token,
             chat_id=chat_id,
-            text=format_mangle_status(rules),
-            reply_markup=build_mangle_keyboard(
-                rules,
-                token_factory=lambda rule, action: self.create_action_token(
-                    rule.rule_id,
-                    action,
-                    chat_id,
-                    user_id,
-                    now=int(self.now()),
-                    source_update_id=update_id,
-                ),
-            ),
+            text=view.text,
+            reply_markup=view.reply_markup,
             timeout=timeout,
         )
         if getattr(result, "ok", True) is False:
             response_text = mask_known_secret(str(getattr(result, "response_text", "")), token)
             self.log(f"TELEGRAM MANGLE STATUS SEND FAILED: {response_text}")
 
+    @staticmethod
+    def _edit_or_send_view(
+        view: MenuView,
+        *,
+        message_id: Any,
+        edit_message: Callable[..., Any] | None,
+        send_message: Callable[..., Any],
+        token: str,
+        chat_id: str,
+        timeout: int,
+    ) -> Any:
+        if edit_message is not None and message_id not in (None, ""):
+            response = edit_message(
+                token=token,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=view.text,
+                reply_markup=view.reply_markup,
+                timeout=timeout,
+            )
+            raise_for_retryable_delivery(response)
+            if getattr(response, "ok", True) is not False:
+                return response
+        response = send_message(
+            token=token,
+            chat_id=chat_id,
+            text=view.text,
+            reply_markup=view.reply_markup,
+            timeout=timeout,
+        )
+        raise_for_retryable_delivery(response)
+        return response
+
+    def _record_audit(
+        self,
+        outcome: str,
+        chat_id: str,
+        user_id: str,
+        target: str = "",
+        detail: str = "",
+    ) -> None:
+        if self.audit is not None:
+            self.audit.record(
+                "mangle.change",
+                outcome,
+                chat_id,
+                user_id,
+                target,
+                detail,
+            )
+
     def _payload_matches_requester(self, payload: dict[str, Any], chat_id: str, user_id: str) -> bool:
         return (
             str(payload.get("requester_chat_id", "")) == str(chat_id)
             and str(payload.get("requester_user_id", "")) == str(user_id)
         )
+
+    def _apply_change(
+        self,
+        payload: dict[str, Any],
+        *,
+        callback_id: str,
+        message_id: Any,
+        chat_id: str,
+        user_id: str,
+        answer_callback: Callable[[str, str, bool], None],
+        send_message: Callable[..., Any],
+        edit_message: Callable[..., Any] | None,
+        telegram_token: str,
+        timeout: int,
+        update_id: str,
+    ) -> None:
+        rule_id = str(payload.get("rule_id", ""))
+        action = str(payload.get("action", ""))
+        try:
+            rule = self._read_rule(rule_id)
+        except Exception as exc:
+            self.log(
+                "TELEGRAM MANGLE READ BEFORE UPDATE FAILED: "
+                f"{type(exc).__name__}"
+            )
+            self._record_audit("failure", chat_id, user_id, rule_id, action)
+            answer_callback(callback_id, "Could not update mangle rule", True)
+            return
+        if rule is None:
+            self._record_audit("stale", chat_id, user_id, rule_id, action)
+            answer_callback(
+                callback_id,
+                "Mangle rule is no longer managed",
+                True,
+            )
+            return
+
+        self._record_audit("attempted", chat_id, user_id, rule_id, action)
+        if self.bot_settings.dry_run:
+            self._record_audit("dry-run", chat_id, user_id, rule_id, action)
+            answer_text = "Dry-run: no change applied"
+        else:
+            disabled = action == "disable"
+            try:
+                client = self.get_router_client()
+                client.run_with_reconnect(
+                    "telegram mangle control",
+                    lambda: set_mangle_rule_disabled(
+                        client.ensure_connected(),
+                        rule_id,
+                        disabled,
+                        self.settings,
+                    ),
+                )
+            except Exception as exc:
+                self.log(
+                    f"TELEGRAM MANGLE UPDATE FAILED: {type(exc).__name__}"
+                )
+                self._record_audit(
+                    "failure",
+                    chat_id,
+                    user_id,
+                    rule_id,
+                    action,
+                )
+                answer_callback(
+                    callback_id,
+                    "Could not update mangle rule",
+                    True,
+                )
+                return
+            self._record_audit("success", chat_id, user_id, rule_id, action)
+            answer_text = "Mangle rule updated"
+
+        try:
+            view = self.control_view(
+                chat_id=chat_id,
+                user_id=user_id,
+                update_id=update_id,
+            )
+            self._edit_or_send_view(
+                view,
+                message_id=message_id,
+                edit_message=edit_message,
+                send_message=send_message,
+                token=telegram_token,
+                chat_id=chat_id,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            self.log(
+                "TELEGRAM MANGLE POST-WRITE STATUS FAILED: "
+                f"{sanitize_exception_text(exc, self.settings.telegram_token)}"
+            )
+        answer_callback(callback_id, answer_text, False)
 
     def handle_message(
         self,
@@ -215,6 +419,7 @@ class TelegramMangleHandler:
         telegram_token: str,
         timeout: int,
         now: int,
+        edit_message: Callable[..., Any] | None = None,
         update_id: str = "",
     ) -> bool:
         data = str(callback.get("data", ""))
@@ -225,10 +430,18 @@ class TelegramMangleHandler:
         message = callback.get("message") or {}
         chat = message.get("chat") or {}
         chat_id = str(chat.get("id", ""))
+        message_id = message.get("message_id")
         user = callback.get("from") or {}
         user_id = str(user.get("id", ""))
 
         if not auth.can_write(chat_id):
+            self._record_audit(
+                "denied",
+                chat_id,
+                user_id,
+                "",
+                data.split(":", 2)[1] if ":" in data else "",
+            )
             answer_callback(callback_id, "Unauthorized", True)
             self.log(f"Rejected Telegram mangle callback from unauthorized chat {chat_id}")
             return True
@@ -241,28 +454,99 @@ class TelegramMangleHandler:
         action_token = parts[2] if len(parts) > 2 else ""
 
         if action_name == "refresh":
-            self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=telegram_token, timeout=timeout, update_id=update_id)
+            try:
+                view = self.control_view(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    update_id=update_id,
+                )
+                self._edit_or_send_view(
+                    view,
+                    message_id=message_id,
+                    edit_message=edit_message,
+                    send_message=send_message,
+                    token=telegram_token,
+                    chat_id=chat_id,
+                    timeout=timeout,
+                )
+            except RetryableTelegramDeliveryError:
+                raise
+            except Exception as exc:
+                self.log(
+                    "TELEGRAM MANGLE REFRESH FAILED: "
+                    f"{sanitize_exception_text(exc, self.settings.telegram_token)}"
+                )
+                answer_callback(
+                    callback_id,
+                    "Could not read mangle rules",
+                    True,
+                )
+                return True
             answer_callback(callback_id, "Mangle status refreshed", False)
             return True
 
         if action_name == "request":
             payload = self._peek_token(action_token, now=now)
             if not payload:
+                self._record_audit("stale", chat_id, user_id)
                 answer_callback(callback_id, "Mangle request expired or already used", True)
                 return True
             if not self._payload_matches_requester(payload, chat_id, user_id):
+                self._record_audit(
+                    "denied",
+                    chat_id,
+                    user_id,
+                    str(payload.get("rule_id", "")),
+                    str(payload.get("action", "")),
+                )
                 answer_callback(callback_id, "Unauthorized", True)
                 return True
-            rule = get_managed_mangle_rule(self._api(), str(payload.get("rule_id", "")), self.settings)
+            if not self.settings.mangle_require_confirmation:
+                payload = self._consume_token(action_token, now=now)
+                if not payload:
+                    self._record_audit("stale", chat_id, user_id)
+                    answer_callback(
+                        callback_id,
+                        "Mangle request expired or already used",
+                        True,
+                    )
+                    return True
+                self._apply_change(
+                    payload,
+                    callback_id=callback_id,
+                    message_id=message_id,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    answer_callback=answer_callback,
+                    send_message=send_message,
+                    edit_message=edit_message,
+                    telegram_token=telegram_token,
+                    timeout=timeout,
+                    update_id=update_id,
+                )
+                return True
+            rule = self._read_rule(str(payload.get("rule_id", "")))
             if rule is None:
+                self._record_audit(
+                    "stale",
+                    chat_id,
+                    user_id,
+                    str(payload.get("rule_id", "")),
+                    str(payload.get("action", "")),
+                )
                 answer_callback(callback_id, "Mangle rule is no longer managed", True)
                 return True
             label = "Enable" if payload.get("action") == "enable" else "Disable"
-            send_message(
+            self._edit_or_send_view(
+                MenuView(
+                    f"Confirm mangle change?\n\nRule: {rule.name}\nAction: {label}",
+                    build_mangle_confirm_keyboard(action_token),
+                ),
+                message_id=message_id,
+                edit_message=edit_message,
+                send_message=send_message,
                 token=telegram_token,
                 chat_id=chat_id,
-                text=f"Confirm mangle change?\n\nRule: {rule.name}\nAction: {label}",
-                reply_markup=build_mangle_confirm_keyboard(action_token),
                 timeout=timeout,
             )
             answer_callback(callback_id, "Confirm mangle change in chat", False)
@@ -271,47 +555,79 @@ class TelegramMangleHandler:
         if action_name == "cancel":
             payload = self._peek_token(action_token, now=now)
             if not payload:
+                self._record_audit("stale", chat_id, user_id)
                 answer_callback(callback_id, "Mangle request expired or already used", True)
             elif not self._payload_matches_requester(payload, chat_id, user_id):
+                self._record_audit(
+                    "denied",
+                    chat_id,
+                    user_id,
+                    str(payload.get("rule_id", "")),
+                    str(payload.get("action", "")),
+                )
                 answer_callback(callback_id, "Unauthorized", True)
             elif self._cancel_token(action_token, now=now):
+                self._record_audit(
+                    "cancelled",
+                    chat_id,
+                    user_id,
+                    str(payload.get("rule_id", "")),
+                    str(payload.get("action", "")),
+                )
+                view = self.control_view(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    update_id=update_id,
+                )
+                self._edit_or_send_view(
+                    view,
+                    message_id=message_id,
+                    edit_message=edit_message,
+                    send_message=send_message,
+                    token=telegram_token,
+                    chat_id=chat_id,
+                    timeout=timeout,
+                )
                 answer_callback(callback_id, "Mangle change cancelled", False)
             else:
+                self._record_audit("stale", chat_id, user_id)
                 answer_callback(callback_id, "Mangle request expired or already used", True)
             return True
 
         if action_name == "confirm":
             payload = self._peek_token(action_token, now=now)
             if not payload:
+                self._record_audit("stale", chat_id, user_id)
                 answer_callback(callback_id, "Mangle request expired or already used", True)
                 return True
             if not self._payload_matches_requester(payload, chat_id, user_id):
+                self._record_audit(
+                    "denied",
+                    chat_id,
+                    user_id,
+                    str(payload.get("rule_id", "")),
+                    str(payload.get("action", "")),
+                )
                 answer_callback(callback_id, "Unauthorized", True)
                 return True
             payload = self._consume_token(action_token, now=now)
             if not payload:
+                self._record_audit("stale", chat_id, user_id)
                 answer_callback(callback_id, "Mangle request expired or already used", True)
                 return True
-            disabled = payload.get("action") == "disable"
-            try:
-                client = self.get_router_client()
-                client.run_with_reconnect(
-                    "telegram mangle control",
-                    lambda: set_mangle_rule_disabled(client.ensure_connected(), str(payload.get("rule_id", "")), disabled, self.settings),
-                )
-            except Exception as exc:
-                self.log(f"TELEGRAM MANGLE UPDATE FAILED: {sanitize_exception_text(exc, self.settings.telegram_token)}")
-                answer_callback(callback_id, "Could not update mangle rule", True)
-                return True
-
-            try:
-                self._send_status(send_message=send_message, chat_id=chat_id, user_id=user_id, token=telegram_token, timeout=timeout, update_id=update_id)
-            except Exception as exc:
-                self.log(
-                    "TELEGRAM MANGLE POST-WRITE STATUS FAILED: "
-                    f"{sanitize_exception_text(exc, self.settings.telegram_token)}"
-                )
-            answer_callback(callback_id, "Mangle rule updated", False)
+            self._apply_change(
+                payload,
+                callback_id=callback_id,
+                message_id=message_id,
+                chat_id=chat_id,
+                user_id=user_id,
+                answer_callback=answer_callback,
+                send_message=send_message,
+                edit_message=edit_message,
+                telegram_token=telegram_token,
+                timeout=timeout,
+                update_id=update_id,
+            )
             return True
 
         return False

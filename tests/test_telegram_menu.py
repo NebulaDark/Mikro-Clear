@@ -37,6 +37,31 @@ class FakeMangleMenu:
         )
 
 
+class SplitMangleMenu:
+    def status_view(self):
+        return MenuView(
+            "Chain: prerouting\nPackets: 7",
+            {
+                "inline_keyboard": [
+                    [{"text": "🔄 Обновить", "callback_data": "menu:v1:status:mangle"}],
+                    [{"text": "⬅️ Назад", "callback_data": "menu:v1:status"}],
+                ]
+            },
+        )
+
+    def control_view(self, *, chat_id, user_id, update_id=""):
+        return MenuView(
+            "<b>Mangle</b>",
+            {
+                "inline_keyboard": [
+                    [{"text": "✅ Site", "callback_data": "mangle:request:token"}],
+                    [{"text": "🔄 Обновить", "callback_data": "mangle:refresh"}],
+                    [{"text": "⬅️ Назад", "callback_data": "menu:v1:root"}],
+                ]
+            },
+        )
+
+
 class FakeWhitelistMenu:
     def menu_view(self, *, page, chat_id, user_id, now):
         return MenuView(
@@ -241,6 +266,35 @@ class TelegramMenuTests(unittest.TestCase):
         self.assertEqual(
             edit.call_args.kwargs["text"],
             "exceptions page=3 chat=admin user=u now=123",
+        )
+
+    def test_status_and_control_routes_keep_mangle_surfaces_separate(self):
+        handler, _send, edit = make_handler(mangle=SplitMangleMenu())
+
+        self.assertTrue(
+            handle_callback(
+                handler,
+                "menu:v1:status:mangle",
+                chat_id="reader",
+            )[0]
+        )
+        self.assertIn("Chain: prerouting", edit.call_args.kwargs["text"])
+        self.assertNotIn(
+            "mangle:request:",
+            json.dumps(edit.call_args.kwargs["reply_markup"]),
+        )
+
+        self.assertTrue(
+            handle_callback(
+                handler,
+                "menu:v1:mangle",
+                chat_id="admin",
+            )[0]
+        )
+        self.assertNotIn("Chain:", edit.call_args.kwargs["text"])
+        self.assertIn(
+            "mangle:request:",
+            json.dumps(edit.call_args.kwargs["reply_markup"]),
         )
 
     def test_absent_adapter_returns_exact_unavailable_answer(self):

@@ -27,7 +27,7 @@ def format_mangle_status(rules: list[MangleRule]) -> str:
     return "\n\n".join(parts)
 
 
-def build_mangle_keyboard(
+def build_mangle_control_keyboard(
     rules: list[MangleRule],
     *,
     token_factory: Callable[[MangleRule, str], str],
@@ -35,11 +35,47 @@ def build_mangle_keyboard(
     rows: list[list[dict[str, str]]] = []
     for rule in rules:
         action = "enable" if rule.disabled else "disable"
-        label = "Enable" if rule.disabled else "Disable"
         token = token_factory(rule, action)
-        rows.append([{"text": f"{label} {rule.name}", "callback_data": f"mangle:request:{token}"}])
-    rows.append([{"text": "Refresh", "callback_data": "mangle:refresh"}])
+        icon = "❌" if rule.disabled else "✅"
+        rows.append(
+            [
+                {
+                    "text": f"{icon} {rule.name}",
+                    "callback_data": f"mangle:request:{token}",
+                }
+            ]
+        )
+    rows.extend(
+        [
+            [{"text": "🔄 Обновить", "callback_data": "mangle:refresh"}],
+            [{"text": "⬅️ Назад", "callback_data": "menu:v1:root"}],
+        ]
+    )
     return {"inline_keyboard": rows}
+
+
+def build_mangle_keyboard(
+    rules: list[MangleRule],
+    *,
+    token_factory: Callable[[MangleRule, str], str],
+) -> dict[str, object]:
+    """Compatibility alias for the original /mangle keyboard builder."""
+
+    return build_mangle_control_keyboard(rules, token_factory=token_factory)
+
+
+def build_mangle_status_keyboard() -> dict[str, object]:
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "🔄 Обновить",
+                    "callback_data": "menu:v1:status:mangle",
+                }
+            ],
+            [{"text": "⬅️ Назад", "callback_data": "menu:v1:status"}],
+        ]
+    }
 
 
 def build_mangle_confirm_keyboard(token: str) -> dict[str, object]:
@@ -53,4 +89,10 @@ def build_mangle_confirm_keyboard(token: str) -> dict[str, object]:
     }
 
 
-__all__ = ["build_mangle_confirm_keyboard", "build_mangle_keyboard", "format_mangle_status"]
+__all__ = [
+    "build_mangle_confirm_keyboard",
+    "build_mangle_control_keyboard",
+    "build_mangle_keyboard",
+    "build_mangle_status_keyboard",
+    "format_mangle_status",
+]
