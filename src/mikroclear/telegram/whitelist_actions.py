@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -9,7 +11,7 @@ import re
 import secrets
 import tempfile
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from mikroclear.state.dynamic_whitelist import is_managed_private_ipv4
 
@@ -62,6 +64,7 @@ class WhitelistActionStore:
         token_factory: Callable[[], str] | None = None,
     ) -> None:
         self.path = Path(path)
+        self.lock_path = self.path.with_name(f"{self.path.name}.lock")
         self.token_factory = token_factory or (lambda: secrets.token_urlsafe(12))
         self._lock = threading.RLock()
 
@@ -107,12 +110,13 @@ class WhitelistActionStore:
             "source_reply_markup": source_reply_markup,
         }
         with self._lock:
-            state = self._read_state()
-            self._remove_expired(state, created_at)
-            if token in state:
-                raise ValueError("whitelist action token collision")
-            state[token] = payload
-            self._write_state(state)
+            with self._transaction_lock():
+                state = self._read_state()
+                self._remove_expired(state, created_at)
+                if token in state:
+                    raise ValueError("whitelist action token collision")
+                state[token] = payload
+                self._write_state(state)
         return token
 
     def peek(
@@ -126,18 +130,19 @@ class WhitelistActionStore:
         if not isinstance(token, str) or TOKEN_RE.fullmatch(token) is None:
             return None
         with self._lock:
-            state = self._read_state()
-            changed = self._remove_expired(state, int(now))
-            payload = state.get(token)
-            if changed:
-                self._write_state(state)
-            if payload is None or not self._matches_requester(
-                payload,
-                chat_id=chat_id,
-                user_id=user_id,
-            ):
-                return None
-            return dict(payload)
+            with self._transaction_lock():
+                state = self._read_state()
+                changed = self._remove_expired(state, int(now))
+                payload = state.get(token)
+                if changed:
+                    self._write_state(state)
+                if payload is None or not self._matches_requester(
+                    payload,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                ):
+                    return None
+                return dict(payload)
 
     def consume(
         self,
@@ -150,20 +155,21 @@ class WhitelistActionStore:
         if not isinstance(token, str) or TOKEN_RE.fullmatch(token) is None:
             return None
         with self._lock:
-            state = self._read_state()
-            changed = self._remove_expired(state, int(now))
-            payload = state.get(token)
-            if payload is None or not self._matches_requester(
-                payload,
-                chat_id=chat_id,
-                user_id=user_id,
-            ):
-                if changed:
-                    self._write_state(state)
-                return None
-            state.pop(token)
-            self._write_state(state)
-            return dict(payload)
+            with self._transaction_lock():
+                state = self._read_state()
+                changed = self._remove_expired(state, int(now))
+                payload = state.get(token)
+                if payload is None or not self._matches_requester(
+                    payload,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                ):
+                    if changed:
+                        self._write_state(state)
+                    return None
+                state.pop(token)
+                self._write_state(state)
+                return dict(payload)
 
     def cancel(
         self,
@@ -235,6 +241,33 @@ class WhitelistActionStore:
         for token in expired:
             state.pop(token)
         return bool(expired)
+
+    @contextmanager
+    def _transaction_lock(self) -> Iterator[None]:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            flags = (
+                os.O_CREAT
+                | os.O_RDWR
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            descriptor = os.open(self.lock_path, flags, 0o600)
+            os.fchmod(descriptor, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except OSError as exc:
+            if "descriptor" in locals():
+                os.close(descriptor)
+            raise WhitelistActionStoreError(
+                f"cannot lock whitelist actions: {type(exc).__name__}"
+            ) from exc
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
     def _read_state(self) -> dict[str, dict[str, Any]]:
         if not self.path.exists():

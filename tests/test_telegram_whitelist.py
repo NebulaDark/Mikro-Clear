@@ -2,11 +2,13 @@ import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import threading
 from unittest import TestCase
 
 from mikroclear.telegram.unblock import build_unblock_keyboard
 from mikroclear.telegram.whitelist_actions import (
     WhitelistActionStore,
+    WhitelistActionStoreError,
     append_managed_exception_button,
     build_whitelist_confirm_keyboard,
     parse_whitelist_callback,
@@ -14,6 +16,142 @@ from mikroclear.telegram.whitelist_actions import (
 
 
 class TelegramWhitelistActionTests(TestCase):
+    def test_two_store_instances_allow_exactly_one_concurrent_consume(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "actions.json")
+            creator = WhitelistActionStore(
+                path,
+                token_factory=lambda: "consume123",
+            )
+            token = creator.create(
+                kind="add_confirm",
+                address="192.168.98.200",
+                list_name="Suricata",
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+                ttl_seconds=300,
+            )
+            first = WhitelistActionStore(path)
+            second = WhitelistActionStore(path)
+            first_at_write = threading.Event()
+            second_has_read = threading.Event()
+            original_first_write = first._write_state
+            original_second_read = second._read_state
+
+            def pause_first_write(state):
+                first_at_write.set()
+                second_has_read.wait(0.25)
+                original_first_write(state)
+
+            def observe_second_read():
+                state = original_second_read()
+                second_has_read.set()
+                return state
+
+            first._write_state = pause_first_write
+            second._read_state = observe_second_read
+            results = []
+            errors = []
+
+            def consume(store):
+                try:
+                    results.append(
+                        store.consume(
+                            token,
+                            now=101,
+                            chat_id="chat-1",
+                            user_id="user-1",
+                        )
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            second_thread = threading.Thread(
+                target=lambda: (
+                    first_at_write.wait(),
+                    consume(second),
+                ),
+            )
+            first_thread = threading.Thread(target=consume, args=(first,))
+            second_thread.start()
+            first_thread.start()
+            first_thread.join(2)
+            second_thread.join(2)
+
+            self.assertFalse(first_thread.is_alive())
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(
+                sum(payload is not None for payload in results),
+                1,
+            )
+
+    def test_two_store_instances_preserve_both_concurrent_creates(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "actions.json")
+            first = WhitelistActionStore(
+                path,
+                token_factory=lambda: "created01",
+            )
+            second = WhitelistActionStore(
+                path,
+                token_factory=lambda: "created02",
+            )
+            first_at_write = threading.Event()
+            second_has_read = threading.Event()
+            original_first_write = first._write_state
+            original_second_read = second._read_state
+
+            def pause_first_write(state):
+                first_at_write.set()
+                second_has_read.wait(0.25)
+                original_first_write(state)
+
+            def observe_second_read():
+                state = original_second_read()
+                second_has_read.set()
+                return state
+
+            first._write_state = pause_first_write
+            second._read_state = observe_second_read
+            errors = []
+
+            def create(store, address):
+                try:
+                    store.create(
+                        kind="add_confirm",
+                        address=address,
+                        list_name="Suricata",
+                        chat_id="chat-1",
+                        user_id="user-1",
+                        now=100,
+                        ttl_seconds=300,
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            second_thread = threading.Thread(
+                target=lambda: (
+                    first_at_write.wait(),
+                    create(second, "192.168.98.201"),
+                ),
+            )
+            first_thread = threading.Thread(
+                target=create,
+                args=(first, "192.168.98.200"),
+            )
+            second_thread.start()
+            first_thread.start()
+            first_thread.join(2)
+            second_thread.join(2)
+
+            self.assertFalse(first_thread.is_alive())
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(errors, [])
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(set(persisted), {"created01", "created02"})
+
     def test_action_token_is_single_use_expiring_and_requester_bound(self):
         with TemporaryDirectory() as tmp:
             actions = WhitelistActionStore(
@@ -172,6 +310,8 @@ class TelegramWhitelistActionTests(TestCase):
                 },
             )
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            lock_path = path.with_name(f"{path.name}.lock")
+            self.assertEqual(os.stat(lock_path).st_mode & 0o777, 0o600)
             self.assertFalse(
                 actions.cancel(
                     token,
@@ -224,6 +364,60 @@ class TelegramWhitelistActionTests(TestCase):
                 with self.assertRaises(ValueError):
                     actions.create(**values)
 
+    def test_malformed_persisted_state_fails_closed(self):
+        malformed_documents = (
+            "{",
+            json.dumps({"token123": {}}),
+        )
+        for document in malformed_documents:
+            with self.subTest(document=document), TemporaryDirectory() as tmp:
+                path = Path(tmp, "actions.json")
+                path.write_text(document, encoding="utf-8")
+                actions = WhitelistActionStore(path)
+
+                with self.assertRaises(WhitelistActionStoreError):
+                    actions.peek(
+                        "token123",
+                        now=101,
+                        chat_id="chat-1",
+                        user_id="user-1",
+                    )
+
+    def test_token_collision_fails_without_replacing_existing_action(self):
+        with TemporaryDirectory() as tmp:
+            actions = WhitelistActionStore(
+                Path(tmp, "actions.json"),
+                token_factory=lambda: "collision123",
+            )
+            actions.create(
+                kind="add_confirm",
+                address="192.168.98.200",
+                list_name="Suricata",
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+                ttl_seconds=300,
+            )
+
+            with self.assertRaisesRegex(ValueError, "collision"):
+                actions.create(
+                    kind="add_confirm",
+                    address="192.168.98.201",
+                    list_name="Suricata",
+                    chat_id="chat-1",
+                    user_id="user-1",
+                    now=101,
+                    ttl_seconds=300,
+                )
+
+            payload = actions.peek(
+                "collision123",
+                now=102,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(payload["address"], "192.168.98.200")
+
     def test_parse_whitelist_callback_accepts_only_approved_namespace(self):
         approved = {
             "add-request",
@@ -251,6 +445,22 @@ class TelegramWhitelistActionTests(TestCase):
         ):
             with self.subTest(data=data):
                 self.assertIsNone(parse_whitelist_callback(data))
+
+    def test_longest_callback_accepts_24_byte_token_below_telegram_limit(self):
+        token = "A" * 24
+        callback = f"whitelist:v1:remove-confirm:{token}"
+
+        self.assertEqual(
+            parse_whitelist_callback(callback),
+            ("remove-confirm", token),
+        )
+        self.assertEqual(len(callback.encode("utf-8")), 52)
+        self.assertLessEqual(len(callback.encode("utf-8")), 64)
+        self.assertIsNone(
+            parse_whitelist_callback(
+                f"whitelist:v1:remove-confirm:{token}A"
+            )
+        )
 
     def test_append_exception_action_keeps_existing_rows(self):
         existing = build_unblock_keyboard(
