@@ -5,6 +5,7 @@ from unittest.mock import Mock, call
 
 from mikroclear.bot.auth import BotAuth
 from mikroclear.bot.menu import MenuView, build_launcher_markup
+from mikroclear.bot.modules.exceptions import build_exceptions_view
 from mikroclear.bot.modules.status import StatusSnapshot
 from mikroclear.bot.settings import BotSettings
 from mikroclear.settings import Settings
@@ -397,6 +398,55 @@ class TelegramMenuTests(unittest.TestCase):
         answer.assert_not_called()
         send.assert_not_called()
         edit.assert_not_called()
+
+
+class ExceptionsMenuViewTests(unittest.TestCase):
+    def test_exceptions_view_separates_system_and_managed_entries(self):
+        view = build_exceptions_view(
+            system_entries=("10.0.0.0/8", "1.1.1.1"),
+            managed_entries=("192.168.98.200",),
+            page=0,
+            page_size=8,
+            remove_token_factory=lambda _address: "remove1234",
+        )
+
+        self.assertIn("Системные — только просмотр", view.text)
+        self.assertIn("🔒 10.0.0.0/8", view.text)
+        self.assertIn("Добавлены через Telegram", view.text)
+        self.assertIn("🛡 192.168.98.200", view.text)
+        self.assertIn(
+            "whitelist:v1:remove-request:",
+            json.dumps(view.reply_markup),
+        )
+
+    def test_exceptions_view_paginates_managed_entries(self):
+        managed = tuple(f"10.0.0.{index}" for index in range(1, 18))
+
+        view = build_exceptions_view(
+            (),
+            managed,
+            page=1,
+            page_size=8,
+            remove_token_factory=lambda value: value,
+        )
+
+        callbacks = json.dumps(view.reply_markup)
+        self.assertIn("menu:v1:exceptions:0", callbacks)
+        self.assertIn("menu:v1:exceptions:2", callbacks)
+
+    def test_pagination_counts_system_and_managed_rows_together(self):
+        system = tuple(f"10.{index}.0.0/16" for index in range(9))
+
+        view = build_exceptions_view(
+            system,
+            ("192.168.98.200",),
+            page=1,
+            page_size=8,
+            remove_token_factory=lambda value: value,
+        )
+
+        self.assertIn("🔒 10.8.0.0/16", view.text)
+        self.assertIn("🛡 192.168.98.200", view.text)
 
 
 if __name__ == "__main__":
