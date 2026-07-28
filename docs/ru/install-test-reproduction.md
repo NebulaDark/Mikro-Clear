@@ -122,17 +122,59 @@ alert проверьте по DHCP, ARP и инвентарю стенда, чт
    MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true
    MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=true
    MIKROCLEAR_MANGLE_CONTROL_ENABLE=true
+   MIKROCLEAR_MANGLE_COMMENT_PREFIX=MC:
+   MIKROCLEAR_MANGLE_ALLOWED_CHAINS=prerouting
+   MIKROCLEAR_MANGLE_ALLOWED_ACTIONS=mark-routing
    MIKROCLEAR_BOT_ENABLE=true
    MIKROCLEAR_BOT_DRY_RUN=false
    MIKROCLEAR_BOT_MODULES=status,mangle_control,whitelist_control
    ```
 
    В `MIKROCLEAR_BOT_ADMIN_CHAT_IDS` должен быть только заранее одобренный
-   тестовый admin chat. На тестовом RouterOS заранее подготовьте хотя бы одно
-   безопасное managed fixture rule без IP-адресов: имя `STAND-MANGLE`,
-   comment=`MC:STAND-MANGLE`, chain=`prerouting`, action=`mark-routing`.
-   Comment prefix, chain и action должны входить в одобренную Mangle
-   конфигурацию стенда.
+   тестовый admin chat.
+
+   Для Mangle используйте только отдельный fixture `STAND-MANGLE`. Его
+   одновременно невозможное для этого изолированного стенда условие содержит
+   два зарезервированных TEST-NET адреса: source `192.0.2.1/32` и destination
+   `198.51.100.1/32`. Не считайте сам статус TEST-NET достаточной защитой:
+   сначала сверьте оба адреса с инвентарём стенда, а затем выполните на
+   тестовом RouterOS read-only preflight:
+
+   ```routeros
+   /ip/address/print where address~"192.0.2.1"
+   /ip/address/print where address~"198.51.100.1"
+   /ip/dhcp-server/lease/print where address="192.0.2.1"
+   /ip/dhcp-server/lease/print where address="198.51.100.1"
+   /ip/arp/print where address="192.0.2.1"
+   /ip/arp/print where address="198.51.100.1"
+   /routing/route/print where dst-address="192.0.2.1/32"
+   /routing/route/print where dst-address="198.51.100.1/32"
+   /routing/table/print where name="MC-STAND-TEST"
+   /ip/firewall/mangle/print where comment="MC:STAND-MANGLE"
+   ```
+
+   Все команды должны вернуть пустой результат. В отдельной сети также не
+   должно быть генератора трафика с этой парой source/destination. Если
+   найден адрес, lease, ARP, маршрут, таблица или правило, остановите сценарий:
+   не создавайте fixture и выберите другой чистый snapshot стенда.
+
+   RouterOS v7 требует заранее созданную routing table для
+   `new-routing-mark`. Только после успешного preflight создайте отдельную
+   пустую таблицу и изначально выключенное правило:
+
+   ```routeros
+   /routing/table/add fib name=MC-STAND-TEST
+   /ip/firewall/mangle/add action=mark-routing chain=prerouting comment="MC:STAND-MANGLE" disabled=yes dst-address=198.51.100.1/32 new-routing-mark=MC-STAND-TEST passthrough=yes src-address=192.0.2.1/32
+   /routing/route/print where routing-table="MC-STAND-TEST"
+   /ip/firewall/mangle/print detail stats where comment="MC:STAND-MANGLE"
+   ```
+
+   Первая проверка после создания должна снова показать пустую таблицу
+   маршрутов. Вторая должна показать comment=`MC:STAND-MANGLE`,
+   chain=`prerouting`, action=`mark-routing`,
+   new-routing-mark=`MC-STAND-TEST`, исходное `disabled=yes` и нулевые
+   counters. Comment prefix, chain и action точно совпадают с явно заданной
+   выше Mangle-конфигурацией.
 3. До первого alert докажите пустой managed baseline. В admin chat выполните
    `/status`: ожидаются `bot dry-run: off`,
    `telegram whitelist control: on`, правильные `state-dir` и
@@ -181,12 +223,21 @@ alert проверьте по DHCP, ARP и инвентарю стенда, чт
     `192.168.250.250` в `Suricata` и новый `BLOCKED` alert.
 12. Повторите `/status`: он снова должен показать `managed whitelist: 0` и не
     раскрывать список managed addresses.
-13. Проверьте Mangle двумя независимыми поверхностями. В корневом меню компактная
-    кнопка fixture должна отражать фактическое состояние:
-    `✅ STAND-MANGLE` для enabled или `❌ STAND-MANGLE` для disabled.
-    В `Статус` → `🔀 Mangle` ожидается подробное состояние того же fixture с
-    chain, action, `Packets:` и `Bytes:`. Выполните обычный подтверждённый
-    toggle и верните правило в исходное состояние.
+13. Проверьте Mangle двумя независимыми поверхностями. Поскольку fixture создан
+    с `disabled=yes`, точный путь управления сначала имеет вид
+    `🛡 Mikro-Clear` → `🔀 Mangle` → `❌ STAND-MANGLE`. Нажмите кнопку правила
+    и затем `✅ Confirm`: после повторного чтения RouterOS меню должно показать
+    `✅ STAND-MANGLE`, а read-only `print` — `disabled=no`. Нажмите уже
+    включённую кнопку, снова подтвердите действие и дождитесь фактической
+    последовательности `❌ STAND-MANGLE` → `✅ STAND-MANGLE` → `❌ STAND-MANGLE`.
+    Итоговый `print` обязан снова показать `disabled=yes`.
+    Так правило возвращается в исходное выключенное состояние без команды
+    удаления или reset.
+
+    Отдельно откройте `🛡 Mikro-Clear` → `📊 Статус` → `🔀 Mangle`.
+    Ожидается подробное состояние того же fixture с `❌ STAND-MANGLE`,
+    chain, action, `Packets:` и `Bytes:`. Counters должны остаться нулевыми:
+    это подтверждает, что TEST-NET условие не совпало с трафиком стенда.
 14. Выполните обычный `🔓 Unblock 192.168.250.250`. При искусственно
     воспроизведённом частичном результате alert должен показать
     `🔄 Повторить разблокировку`; retry не должен повторно записывать исключение.
