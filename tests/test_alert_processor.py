@@ -22,6 +22,102 @@ def alert_event(src_ip="9.9.9.9", dest_ip="192.168.10.15"):
 
 
 class AlertProcessorTests(TestCase):
+    def test_dynamic_whitelist_suppresses_routeros_and_blocked_notification(self):
+        effective = {"values": ()}
+        config = AlertProcessorConfig(
+            severities=("2",),
+            listen_interfaces=("tzsp0",),
+            whitelist_ips=(),
+            whitelist_provider=lambda: tuple(effective["values"]),
+            block_list_name="Suricata",
+            timeout="1d",
+        )
+        effective["values"] = ("192.168.98.200",)
+        address_list = Mock()
+        send = Mock()
+
+        process_single_alert(
+            alert_event(src_ip="192.168.98.200"),
+            address_list,
+            None,
+            config=config,
+            ignore_predicate=lambda _event: False,
+            send_telegram=send,
+            log=Mock(),
+            debug_log=Mock(),
+        )
+
+        address_list.add.assert_not_called()
+        send.assert_not_called()
+
+    def test_process_single_alert_uses_one_effective_whitelist_snapshot(self):
+        provider = Mock(
+            side_effect=[
+                ("192.168.98.200",),
+                (),
+            ]
+        )
+        config = AlertProcessorConfig(
+            severities=("2",),
+            listen_interfaces=("tzsp0",),
+            whitelist_ips=(),
+            whitelist_provider=provider,
+            block_list_name="Suricata",
+            timeout="1d",
+        )
+        address_list = Mock()
+
+        process_single_alert(
+            alert_event(src_ip="192.168.98.200"),
+            address_list,
+            None,
+            config=config,
+            ignore_predicate=lambda _event: False,
+            send_telegram=Mock(),
+            log=Mock(),
+            debug_log=Mock(),
+        )
+
+        provider.assert_called_once_with()
+        address_list.add.assert_not_called()
+
+    def test_process_alert_batch_selects_with_system_and_suppresses_with_one_effective_snapshot(self):
+        provider = Mock(return_value=("192.168.98.200",))
+        config = AlertProcessorConfig(
+            severities=("1", "2"),
+            listen_interfaces=("tzsp0",),
+            whitelist_ips=(),
+            whitelist_provider=provider,
+            block_list_name="Suricata",
+            timeout="1d",
+        )
+        client = Mock()
+        client.paths.return_value = (Mock(), None, object())
+        client.run_with_reconnect.side_effect = lambda _name, func: func()
+        processed = []
+        external = alert_event(src_ip="8.8.8.8", dest_ip="1.1.1.1")
+        managed = alert_event(
+            src_ip="192.168.98.200",
+            dest_ip="8.8.8.8",
+        )
+
+        process_alert_batch(
+            [external, managed],
+            client=client,
+            config=config,
+            validate_event=lambda event: event,
+            process_single=lambda event, _address_list, _address_list_v6: processed.append(event),
+            save_restore=Mock(),
+            last_save_time=0,
+            save_interval=300,
+            now=lambda: 100,
+            log=Mock(),
+            debug_log=Mock(),
+        )
+
+        provider.assert_called_once_with()
+        self.assertEqual(processed, [external])
+
     def test_process_alert_batch_deduplicates_by_target_and_runs_save_callback(self):
         client = Mock()
         address_list = Mock()

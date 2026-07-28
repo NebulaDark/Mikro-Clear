@@ -3,6 +3,8 @@ from pathlib import Path
 import tempfile
 from unittest import TestCase
 
+from mikroclear.runtime.providers import RuntimeProviders
+from mikroclear.settings import Settings
 from mikroclear.state.address_list_store import add_saved_lists, save_lists
 from mikroclear.state.files import StateStoreConfig
 from mikroclear.state.uptime import check_tik_uptime, parse_routeros_uptime
@@ -29,6 +31,43 @@ class FakeAddressList:
 
 
 class StateStoreTests(TestCase):
+    def test_runtime_restore_config_uses_current_managed_whitelist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            saved_lists = state_dir / "lists.json"
+            saved_lists.write_text(
+                '{"list":"Suricata","address":"192.168.98.200","timeout":"1d","comment":"managed"}\n'
+                '{"list":"Suricata","address":"9.9.9.9","timeout":"1d","comment":"external"}\n',
+                encoding="utf-8",
+            )
+            providers = RuntimeProviders(
+                settings=Settings(
+                    whitelist_ips=("172.16.0.0/12",),
+                    dynamic_whitelist_file=str(state_dir / "dynamic-whitelist.json"),
+                    save_lists_location=str(saved_lists),
+                ),
+                version="test",
+                service_start_time=0,
+            )
+            providers.dynamic_whitelist.add("192.168.98.200")
+
+            config = providers.state_store_config()
+            address_list = FakeAddressList()
+            add_saved_lists(
+                address_list,
+                config=config,
+                debug_log=lambda _message: None,
+            )
+
+            self.assertEqual(
+                config.whitelist_ips,
+                ("172.16.0.0/12", "192.168.98.200"),
+            )
+            self.assertEqual(
+                [row["address"] for row in address_list.added],
+                ["9.9.9.9"],
+            )
+
     def test_parse_routeros_uptime(self):
         self.assertEqual(parse_routeros_uptime("1w2d3h4m5s"), 788645)
 

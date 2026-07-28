@@ -113,6 +113,14 @@ class AppEntrypointTests(TestCase):
             service = app.build_service()
 
         providers = service.deps.get_router_client.__self__
+        self.assertIs(
+            providers.pipeline.config.whitelist_provider.__self__,
+            providers.whitelist_policy,
+        )
+        self.assertIs(
+            providers.pipeline.config.whitelist_provider.__func__,
+            providers.whitelist_policy.snapshot.__func__,
+        )
         self.assertEqual(type(providers.notifier).__name__, TelegramNotifier.__name__)
         self.assertIs(providers.pipeline.send_telegram.__self__, providers.notifier)
         self.assertIs(providers.pipeline.send_telegram.__func__, providers.notifier.send_alert.__func__)

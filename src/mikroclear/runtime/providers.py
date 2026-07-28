@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime as dt
 import os
+from pathlib import Path
 from time import sleep, time
 from typing import Any
 
@@ -14,6 +15,7 @@ from mikroclear.routeros.client import RouterOSClient
 from mikroclear.security import sanitize_exception_text
 from mikroclear.settings import Settings
 from mikroclear.state.address_list_store import add_saved_lists, save_lists
+from mikroclear.state.dynamic_whitelist import DynamicWhitelistStore
 from mikroclear.state.files import StateStoreConfig
 from mikroclear.state.uptime import check_tik_uptime
 from mikroclear.suricata.alert_logic import is_ip_in_whitelist, is_valid_ip
@@ -21,6 +23,7 @@ from mikroclear.suricata.eve_tailer import EveJsonTailer
 from mikroclear.suricata.events import validate_event
 from mikroclear.suricata.ignore_rules import IgnoreRules
 from mikroclear.suricata.pipeline import AlertPipeline, AlertProcessorConfig
+from mikroclear.suricata.whitelist_policy import WhitelistPolicy
 from mikroclear.telegram.formatting import escape_html_safe
 from mikroclear.telegram.notify import TelegramNotifier
 from mikroclear.telegram.mangle_handler import TelegramMangleHandler
@@ -42,6 +45,13 @@ class RuntimeProviders:
     service: MikroClearService | None = None
 
     def __post_init__(self) -> None:
+        self.dynamic_whitelist = DynamicWhitelistStore(
+            Path(self.settings.dynamic_whitelist_file)
+        )
+        self.whitelist_policy = WhitelistPolicy(
+            self.settings.whitelist_ips,
+            self.dynamic_whitelist,
+        )
         self.bot_settings = BotSettings.from_env()
         self.ignore_rules = IgnoreRules(log=log, debug_log=self.debug_log)
         self.tailer = EveJsonTailer(
@@ -164,6 +174,7 @@ class RuntimeProviders:
             severities=self.settings.severity,
             listen_interfaces=self.settings.listen_interfaces,
             whitelist_ips=self.settings.whitelist_ips,
+            whitelist_provider=self.whitelist_policy.snapshot,
             block_list_name=self.settings.block_list_name,
             timeout=self.settings.timeout,
             monitor_only=self.settings.monitor_only,
@@ -179,7 +190,7 @@ class RuntimeProviders:
             save_lists=self.settings.save_lists,
             block_list_name=self.settings.block_list_name,
             timeout=self.settings.timeout,
-            whitelist_ips=self.settings.whitelist_ips,
+            whitelist_ips=self.whitelist_policy.snapshot(),
         )
 
     def save_restore_lists(self, client: Any) -> None:
