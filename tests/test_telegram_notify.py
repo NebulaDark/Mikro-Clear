@@ -5,7 +5,13 @@ from unittest.mock import Mock, patch
 
 from mikroclear.settings import Settings
 from mikroclear.telegram.formatting import format_alert_message, format_system_message, strip_asset_source_suffix
-from mikroclear.telegram.notify import TelegramNotifier, TelegramSendResult, send_telegram_message
+from mikroclear.telegram.notify import (
+    TelegramNotifier,
+    TelegramSendResult,
+    edit_telegram_message,
+    edit_telegram_reply_markup,
+    send_telegram_message,
+)
 
 
 class TelegramNotifyFormattingTests(TestCase):
@@ -180,3 +186,91 @@ class TelegramNotifyDeliveryTests(TestCase):
 
         self.assertFalse(result.ok)
         self.assertEqual(result.response_text, "failed /bot***MASKED***/sendMessage")
+
+    def test_edit_message_posts_text_and_inline_markup(self):
+        response = Mock(status_code=200, text="ok")
+        with patch("mikroclear.telegram.notify.requests.post", return_value=response) as post:
+            result = edit_telegram_message(
+                "token",
+                "chat",
+                42,
+                "Статус",
+                {"inline_keyboard": []},
+                timeout=7,
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(post.call_args.args[0].endswith("/editMessageText"))
+        self.assertEqual(post.call_args.kwargs["data"]["message_id"], 42)
+        self.assertEqual(post.call_args.kwargs["data"]["text"], "Статус")
+        self.assertEqual(
+            post.call_args.kwargs["data"]["reply_markup"],
+            '{"inline_keyboard": []}',
+        )
+
+    def test_edit_reply_markup_does_not_resend_alert_text(self):
+        response = Mock(status_code=200, text="ok")
+        with patch("mikroclear.telegram.notify.requests.post", return_value=response) as post:
+            result = edit_telegram_reply_markup(
+                "token",
+                "chat",
+                42,
+                {"inline_keyboard": [[{"text": "✅", "callback_data": "noop"}]]},
+                timeout=7,
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(post.call_args.args[0].endswith("/editMessageReplyMarkup"))
+        self.assertNotIn("text", post.call_args.kwargs["data"])
+
+    def test_edit_helpers_preserve_sanitized_retry_result_parsing(self):
+        token = "123456:ABC_def-123"
+        cases = (
+            (429, True, 12),
+            (503, True, 0),
+            (400, False, 0),
+        )
+
+        for status_code, retryable, retry_after in cases:
+            with self.subTest(status_code=status_code):
+                response = Mock(
+                    status_code=status_code,
+                    text=f"failed /bot{token}/editMessageText",
+                )
+                response.json.return_value = {
+                    "parameters": {"retry_after": retry_after}
+                }
+                with patch(
+                    "mikroclear.telegram.notify.requests.post",
+                    return_value=response,
+                ):
+                    result = edit_telegram_message(
+                        token,
+                        "chat",
+                        42,
+                        "status",
+                        {"inline_keyboard": []},
+                    )
+
+                self.assertFalse(result.ok)
+                self.assertEqual(result.status_code, status_code)
+                self.assertEqual(result.retryable, retryable)
+                self.assertEqual(result.retry_after, retry_after)
+                self.assertNotIn(token, result.response_text)
+
+    def test_edit_reply_markup_sanitizes_network_errors(self):
+        token = "token-secret"
+        with patch(
+            "mikroclear.telegram.notify.requests.post",
+            side_effect=RuntimeError(f"failed {token}"),
+        ):
+            result = edit_telegram_reply_markup(
+                token,
+                "chat",
+                42,
+                {"inline_keyboard": []},
+            )
+
+        self.assertFalse(result.ok)
+        self.assertTrue(result.retryable)
+        self.assertNotIn(token, result.response_text)

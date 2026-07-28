@@ -20,6 +20,39 @@ class TelegramSendResult:
     retryable: bool = False
 
 
+def _post_telegram_method(
+    token: str,
+    method: str,
+    payload: dict[str, Any],
+    timeout: int,
+) -> TelegramSendResult:
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/{method}",
+            data=payload,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return TelegramSendResult(
+            ok=False,
+            response_text=sanitize_exception_text(exc, token),
+            retryable=True,
+        )
+    retry_after = 0
+    if response.status_code == 429:
+        try:
+            retry_after = int(response.json().get("parameters", {}).get("retry_after", 0))
+        except Exception:
+            retry_after = 0
+    return TelegramSendResult(
+        ok=response.status_code == 200,
+        status_code=response.status_code,
+        response_text=mask_known_secret(response.text, token),
+        retry_after=retry_after,
+        retryable=response.status_code == 429 or response.status_code >= 500,
+    )
+
+
 def send_telegram_message(
     token: str,
     chat_id: str,
@@ -36,31 +69,53 @@ def send_telegram_message(
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup if isinstance(reply_markup, str) else json.dumps(reply_markup)
 
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=payload,
-            timeout=timeout,
-        )
-    except Exception as exc:
-        return TelegramSendResult(
-            ok=False,
-            response_text=sanitize_exception_text(exc, token),
-            retryable=True,
-        )
-    retry_after = 0
-    if response.status_code == 429:
-        try:
-            retry_after = int(response.json().get("parameters", {}).get("retry_after", 0))
-        except Exception:
-            retry_after = 0
+    return _post_telegram_method(
+        token,
+        "sendMessage",
+        payload,
+        timeout,
+    )
 
-    return TelegramSendResult(
-        ok=response.status_code == 200,
-        status_code=response.status_code,
-        response_text=mask_known_secret(response.text, token),
-        retry_after=retry_after,
-        retryable=response.status_code == 429 or response.status_code >= 500,
+
+def edit_telegram_message(
+    token: str,
+    chat_id: str,
+    message_id: int,
+    text: str,
+    reply_markup: Any,
+    timeout: int = 10,
+) -> TelegramSendResult:
+    return _post_telegram_method(
+        token,
+        "editMessageText",
+        {
+            "chat_id": chat_id,
+            "message_id": int(message_id),
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": json.dumps(reply_markup),
+        },
+        timeout,
+    )
+
+
+def edit_telegram_reply_markup(
+    token: str,
+    chat_id: str,
+    message_id: int,
+    reply_markup: Any,
+    timeout: int = 10,
+) -> TelegramSendResult:
+    return _post_telegram_method(
+        token,
+        "editMessageReplyMarkup",
+        {
+            "chat_id": chat_id,
+            "message_id": int(message_id),
+            "reply_markup": json.dumps(reply_markup),
+        },
+        timeout,
     )
 
 
