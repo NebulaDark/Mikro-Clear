@@ -240,6 +240,69 @@ class TelegramWhitelistActionTests(TestCase):
                 "add_request",
             )
 
+    def test_add_request_is_promoted_in_place_and_reused_for_same_admin(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "actions.json")
+            actions = WhitelistActionStore(
+                path,
+                token_factory=lambda: "request1",
+            )
+            token = actions.create(
+                kind="add_request",
+                address="10.0.0.8",
+                list_name="Suricata",
+                sid="2402000",
+                chat_id="chat-1",
+                user_id="",
+                now=100,
+                ttl_seconds=300,
+            )
+            source_markup = {
+                "inline_keyboard": [
+                    [{"text": "Existing", "callback_data": "existing"}]
+                ]
+            }
+
+            first = actions.promote_add_request(
+                token,
+                now=101,
+                chat_id="chat-1",
+                user_id="admin-1",
+                source_chat_id="chat-1",
+                source_message_id=77,
+                source_reply_markup=source_markup,
+            )
+            second = actions.promote_add_request(
+                token,
+                now=102,
+                chat_id="chat-1",
+                user_id="admin-1",
+                source_chat_id="ignored",
+                source_message_id=999,
+                source_reply_markup={"inline_keyboard": []},
+            )
+
+            self.assertEqual(first, second)
+            self.assertEqual(first["kind"], "add_confirm")
+            self.assertEqual(first["user_id"], "admin-1")
+            self.assertEqual(first["created_at"], 100)
+            self.assertEqual(first["expires_at"], 400)
+            self.assertEqual(first["source_chat_id"], "chat-1")
+            self.assertEqual(first["source_message_id"], 77)
+            self.assertEqual(first["source_reply_markup"], source_markup)
+            self.assertEqual(set(json.loads(path.read_text())), {token})
+            self.assertIsNone(
+                actions.promote_add_request(
+                    token,
+                    now=103,
+                    chat_id="chat-1",
+                    user_id="admin-2",
+                    source_chat_id="chat-1",
+                    source_message_id=77,
+                    source_reply_markup=source_markup,
+                )
+            )
+
     def test_expired_token_is_removed_without_consuming_other_tokens(self):
         tokens = iter(("expired1", "current1"))
         with TemporaryDirectory() as tmp:
@@ -610,6 +673,9 @@ class ForgedActions:
         self.consume_calls += 1
         return dict(self.payload)
 
+    def peek(self, *_args, **_kwargs):
+        return dict(self.payload)
+
 
 def sample_event():
     return {"alert": {"signature_id": 2402000}}
@@ -780,6 +846,9 @@ class TelegramWhitelistHandlerTests(TestCase):
                 router=router,
                 dry_run=False,
             )
+            handler.answer_callback.side_effect = (
+                lambda *_args: events.append("callback:answer")
+            )
             token = create_action(handler)
 
             handled = dispatch_whitelist_callback(
@@ -789,8 +858,9 @@ class TelegramWhitelistHandlerTests(TestCase):
 
             self.assertTrue(handled)
             self.assertEqual(
-                events[:2],
+                events[:3],
                 [
+                    "callback:answer",
                     "store:add:192.168.98.200",
                     "router:remove:192.168.98.200",
                 ],
@@ -807,8 +877,57 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "success")
             self.assertEqual(
                 last_answer(handler),
-                ("Исключение добавлено, адрес разблокирован", False),
+                ("", False),
             )
+
+    def test_ack_failure_leaves_every_valid_action_and_business_state_untouched(self):
+        cases = (
+            ("add_request", "add-request"),
+            ("remove_confirm", "remove-request"),
+            ("add_confirm", "add-confirm"),
+            ("remove_confirm", "remove-confirm"),
+            ("retry_unblock", "retry-unblock"),
+            ("add_confirm", "cancel"),
+        )
+        for kind, action_name in cases:
+            with self.subTest(action_name=action_name), TemporaryDirectory() as tmp:
+                initial_addresses = (
+                    ("192.168.98.200",)
+                    if action_name in {"remove-request", "retry-unblock"}
+                    else ()
+                )
+                store = RecordingStore(addresses=initial_addresses)
+                router = RecordingRouter()
+                handler = make_handler(tmp, store=store, router=router)
+                handler.answer_callback.side_effect = ConnectionError(
+                    "telegram unavailable"
+                )
+                token = create_action(handler, kind=kind)
+                callback_value = callback(
+                    f"whitelist:v1:{action_name}:{token}"
+                )
+
+                with self.assertRaises(ConnectionError):
+                    dispatch_whitelist_callback(
+                        handler,
+                        callback_value,
+                    )
+
+                self.assertEqual(store.snapshot(), initial_addresses)
+                self.assertEqual(store.add_calls, 0)
+                self.assertEqual(store.remove_calls, 0)
+                self.assertEqual(router.run_calls, 0)
+                handler.send_message.assert_not_called()
+                handler.edit_message.assert_not_called()
+                handler.edit_markup.assert_not_called()
+                self.assertIsNotNone(
+                    handler.actions.peek(
+                        token,
+                        now=102,
+                        chat_id="chat-1",
+                        user_id="user-1",
+                    )
+                )
 
     def test_persistence_failure_never_calls_routeros(self):
         with TemporaryDirectory() as tmp:
@@ -823,7 +942,11 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "failure")
             self.assertEqual(
                 last_answer(handler),
-                ("Не удалось сохранить исключение", True),
+                ("", False),
+            )
+            self.assertIn(
+                "Не удалось сохранить исключение",
+                handler.send_message.call_args.kwargs["text"],
             )
 
     def test_routeros_failure_keeps_exception_and_offers_removal_only_retry(self):
@@ -843,7 +966,7 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "partial")
             self.assertEqual(
                 last_answer(handler),
-                ("Исключение сохранено, разблокировка не выполнена", True),
+                ("", False),
             )
 
     def test_dry_run_changes_neither_store_nor_routeros(self):
@@ -858,10 +981,11 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "dry-run")
             self.assertEqual(
                 last_answer(handler),
-                (
-                    "Dry-run: исключение не добавлено, адрес не разблокирован",
-                    False,
-                ),
+                ("", False),
+            )
+            self.assertIn(
+                "Dry-run: исключение не добавлено",
+                handler.send_message.call_args.kwargs["text"],
             )
 
     def test_remove_only_changes_managed_store(self):
@@ -882,7 +1006,7 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "success")
             self.assertEqual(
                 last_answer(handler),
-                ("Исключение удалено", False),
+                ("", False),
             )
 
     def test_alert_extension_requires_private_ip_admin_and_both_features(self):
@@ -1067,7 +1191,11 @@ class TelegramWhitelistHandlerTests(TestCase):
                 )
             )
             self.assertEqual(read_audit(handler)["outcome"], "cancelled")
-            self.assertEqual(last_answer(handler), ("Отменено", False))
+            self.assertEqual(last_answer(handler), ("", False))
+            self.assertIn(
+                "Отменено",
+                handler.send_message.call_args.kwargs["text"],
+            )
 
     def test_add_existing_address_is_idempotent(self):
         with TemporaryDirectory() as tmp:
@@ -1084,7 +1212,7 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "success")
             self.assertEqual(
                 last_answer(handler),
-                ("Адрес уже в исключениях; блокировка не найдена", False),
+                ("", False),
             )
 
     def test_remove_missing_address_is_idempotent(self):
@@ -1104,7 +1232,7 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "noop")
             self.assertEqual(
                 last_answer(handler),
-                ("Исключение уже отсутствует", False),
+                ("", False),
             )
 
     def test_retry_unblock_never_rewrites_or_removes_store(self):
@@ -1123,7 +1251,7 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "success")
             self.assertEqual(
                 last_answer(handler),
-                ("Адрес разблокирован", False),
+                ("", False),
             )
 
     def test_post_mutation_edit_failure_sends_result_without_second_mutation(self):
@@ -1149,8 +1277,259 @@ class TelegramWhitelistHandlerTests(TestCase):
             self.assertEqual(read_audit(handler)["outcome"], "success")
             self.assertEqual(
                 last_answer(handler),
-                ("Исключение добавлено, адрес разблокирован", False),
+                ("", False),
             )
+
+    def test_post_mutation_delivery_exceptions_are_swallowed_without_replay(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter(removed=1)
+            handler = make_handler(tmp, store=store, router=router)
+            handler.edit_markup.side_effect = ConnectionError(
+                "edit unavailable"
+            )
+            handler.send_message.side_effect = ConnectionError(
+                "send unavailable"
+            )
+            token = create_action(handler)
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(store.add_calls, 1)
+            self.assertEqual(router.run_calls, 1)
+            handler.answer_callback.assert_called_once_with(
+                "cb-1",
+                "",
+                False,
+            )
+            self.assertIsNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertTrue(
+                any(
+                    "POST-MUTATION MARKUP FAILED" in call.args[0]
+                    for call in handler.log.call_args_list
+                )
+            )
+            self.assertTrue(
+                any(
+                    "RESULT SEND FAILED" in call.args[0]
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_post_mutation_nonretryable_result_failure_is_logged(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter(removed=1)
+            handler = make_handler(tmp, store=store, router=router)
+            handler.edit_markup.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            handler.send_message.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            token = create_action(handler)
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(store.add_calls, 1)
+            self.assertEqual(router.run_calls, 1)
+            self.assertTrue(
+                any(
+                    call.args[0] == "TELEGRAM WHITELIST RESULT SEND FAILED"
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_confirmation_delivery_retry_reuses_promoted_request_token(self):
+        with TemporaryDirectory() as tmp:
+            handler = make_handler(tmp)
+            markup = handler.extend_alert_keyboard(
+                build_unblock_keyboard(
+                    "192.168.98.200",
+                    "unblock-token",
+                ),
+                event=sample_event(),
+                wanted_ip="192.168.98.200",
+                action_type="BLOCKED",
+                now=100,
+            )
+            request_data = markup["inline_keyboard"][-1][0]["callback_data"]
+            request_token = request_data.rsplit(":", 1)[1]
+            handler.send_message.side_effect = (
+                ConnectionError("temporary delivery failure"),
+                types.SimpleNamespace(ok=True, retryable=False),
+            )
+            request_callback = callback(
+                request_data,
+                reply_markup=markup,
+            )
+
+            with self.assertRaises(ConnectionError):
+                dispatch_whitelist_callback(
+                    handler,
+                    request_callback,
+                )
+            promoted = handler.actions.peek(
+                request_token,
+                now=102,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(promoted["kind"], "add_confirm")
+
+            dispatch_whitelist_callback(
+                handler,
+                request_callback,
+                now=102,
+            )
+
+            self.assertEqual(handler.send_message.call_count, 2)
+            callback_data = [
+                call.kwargs["reply_markup"]["inline_keyboard"][0][0][
+                    "callback_data"
+                ]
+                for call in handler.send_message.call_args_list
+            ]
+            self.assertEqual(
+                callback_data,
+                [
+                    f"whitelist:v1:add-confirm:{request_token}",
+                    f"whitelist:v1:add-confirm:{request_token}",
+                ],
+            )
+            self.assertEqual(
+                set(
+                    json.loads(
+                        Path(handler.actions.path).read_text(encoding="utf-8")
+                    )
+                ),
+                {request_token},
+            )
+
+    def test_partial_retry_preserves_source_and_second_partial_issues_retry(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = FailingRouter()
+            handler = make_handler(tmp, store=store, router=router)
+            source_markup = build_unblock_keyboard(
+                "192.168.98.200",
+                "unblock-token",
+            )
+            token = create_action(
+                handler,
+                source_reply_markup=source_markup,
+            )
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+            first_markup = handler.edit_markup.call_args.kwargs[
+                "reply_markup"
+            ]
+            first_retry_data = first_markup["inline_keyboard"][-1][0][
+                "callback_data"
+            ]
+            _prefix, first_retry_token = first_retry_data.rsplit(":", 1)
+            first_payload = handler.actions.peek(
+                first_retry_token,
+                now=102,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(first_payload["kind"], "retry_unblock")
+            self.assertEqual(first_payload["source_chat_id"], "chat-1")
+            self.assertEqual(first_payload["source_message_id"], 77)
+            self.assertEqual(
+                first_payload["source_reply_markup"],
+                source_markup,
+            )
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(first_retry_data),
+                now=102,
+            )
+
+            second_markup = handler.edit_markup.call_args.kwargs[
+                "reply_markup"
+            ]
+            second_retry_data = second_markup["inline_keyboard"][-1][0][
+                "callback_data"
+            ]
+            self.assertNotEqual(second_retry_data, first_retry_data)
+            _prefix, second_retry_token = second_retry_data.rsplit(":", 1)
+            second_payload = handler.actions.peek(
+                second_retry_token,
+                now=103,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(second_payload["kind"], "retry_unblock")
+            self.assertEqual(
+                second_payload["source_reply_markup"],
+                source_markup,
+            )
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertEqual(store.add_calls, 1)
+            self.assertEqual(store.remove_calls, 0)
+            self.assertEqual(router.run_calls, 2)
+            self.assertEqual(read_audit(handler)["outcome"], "partial")
+
+    def test_remove_dry_run_has_no_mutation_and_delivers_factual_result(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store, dry_run=True)
+            token = create_action(handler, kind="remove_confirm")
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(store.remove_calls, 0)
+            handler.router.assert_not_called()
+            self.assertEqual(read_audit(handler)["outcome"], "dry-run")
+            self.assertIn(
+                "Dry-run: исключение не удалено",
+                handler.send_message.call_args.kwargs["text"],
+            )
+            self.assertEqual(last_answer(handler), ("", False))
+
+    def test_retry_dry_run_has_no_mutation_and_delivers_factual_result(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store, dry_run=True)
+            token = create_action(handler, kind="retry_unblock")
+
+            dispatch_whitelist_callback(handler, retry_callback(token))
+
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(store.remove_calls, 0)
+            handler.router.assert_not_called()
+            self.assertEqual(read_audit(handler)["outcome"], "dry-run")
+            self.assertIn(
+                "Dry-run: адрес не разблокирован",
+                handler.send_message.call_args.kwargs["text"],
+            )
+            self.assertEqual(last_answer(handler), ("", False))
 
     def test_add_request_binds_confirm_to_clicker_and_preserves_alert_source(self):
         with TemporaryDirectory() as tmp:

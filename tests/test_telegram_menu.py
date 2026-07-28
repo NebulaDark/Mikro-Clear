@@ -448,6 +448,23 @@ class ExceptionsMenuViewTests(unittest.TestCase):
         self.assertIn("🔒 10.8.0.0/16", view.text)
         self.assertIn("🛡 192.168.98.200", view.text)
 
+    def test_exceptions_view_html_escapes_entries_but_not_button_labels(self):
+        view = build_exceptions_view(
+            system_entries=("system<&>",),
+            managed_entries=("managed<&>",),
+            page=0,
+            remove_token_factory=lambda _value: "remove1234",
+        )
+
+        self.assertIn("🔒 system&lt;&amp;&gt;", view.text)
+        self.assertIn("🛡 managed&lt;&amp;&gt;", view.text)
+        self.assertNotIn("system<&>", view.text)
+        self.assertNotIn("managed<&>", view.text)
+        self.assertEqual(
+            view.reply_markup["inline_keyboard"][0][0]["text"],
+            "🗑 managed<&>",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

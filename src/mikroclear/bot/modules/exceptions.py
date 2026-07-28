@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 from math import ceil
 from typing import Callable, Iterable
 
@@ -43,7 +44,7 @@ def build_exceptions_view(
             (
                 "",
                 "Системные — только просмотр:",
-                *(f"🔒 {value}" for value in visible_system),
+                *(f"🔒 {escape(value)}" for value in visible_system),
             )
         )
     if visible_managed:
@@ -51,7 +52,7 @@ def build_exceptions_view(
             (
                 "",
                 "Добавлены через Telegram:",
-                *(f"🛡 {value}" for value in visible_managed),
+                *(f"🛡 {escape(value)}" for value in visible_managed),
             )
         )
     if not visible:

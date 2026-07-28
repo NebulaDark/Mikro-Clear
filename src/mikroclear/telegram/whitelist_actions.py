@@ -171,6 +171,74 @@ class WhitelistActionStore:
                 self._write_state(state)
                 return dict(payload)
 
+    def promote_add_request(
+        self,
+        token: str,
+        *,
+        now: int,
+        chat_id: str,
+        user_id: str,
+        source_chat_id: str,
+        source_message_id: int | None,
+        source_reply_markup: Any,
+    ) -> dict[str, Any] | None:
+        """Bind an add request to one admin without replacing its token."""
+
+        if (
+            not isinstance(token, str)
+            or TOKEN_RE.fullmatch(token) is None
+            or not isinstance(chat_id, str)
+            or not chat_id
+            or not isinstance(user_id, str)
+            or not user_id
+            or not isinstance(source_chat_id, str)
+            or (
+                source_message_id is not None
+                and type(source_message_id) is not int
+            )
+        ):
+            return None
+        with self._lock:
+            with self._transaction_lock():
+                state = self._read_state()
+                changed = self._remove_expired(state, int(now))
+                payload = state.get(token)
+                if payload is None:
+                    if changed:
+                        self._write_state(state)
+                    return None
+                if payload["kind"] == "add_confirm":
+                    if (
+                        payload["chat_id"] == chat_id
+                        and payload["user_id"] == user_id
+                    ):
+                        if changed:
+                            self._write_state(state)
+                        return dict(payload)
+                    if changed:
+                        self._write_state(state)
+                    return None
+                if (
+                    payload["kind"] != "add_request"
+                    or payload["chat_id"] != chat_id
+                ):
+                    if changed:
+                        self._write_state(state)
+                    return None
+                promoted = dict(payload)
+                promoted.update(
+                    {
+                        "kind": "add_confirm",
+                        "user_id": user_id,
+                        "source_chat_id": source_chat_id,
+                        "source_message_id": source_message_id,
+                        "source_reply_markup": source_reply_markup,
+                    }
+                )
+                state[token] = promoted
+                self._write_state(state)
+                return dict(promoted)
+
     def cancel(
         self,
         token: str,

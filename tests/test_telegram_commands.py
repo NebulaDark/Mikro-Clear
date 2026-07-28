@@ -440,6 +440,185 @@ class TelegramCommandTests(unittest.TestCase):
         self.assertEqual(menu.handle_callback.call_count, 2)
         edit.assert_called_once()
 
+    def test_whitelist_renders_after_pending_callback_answer_retry_succeeds(self):
+        class WhitelistCallbackResponse:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 103,
+                            "callback_query": {
+                                "id": "cb-whitelist",
+                                "data": (
+                                    "whitelist:v1:add-request:"
+                                    "request001"
+                                ),
+                                "from": {"id": "user-1"},
+                                "message": {
+                                    "message_id": 7,
+                                    "chat": {"id": "chat-1"},
+                                },
+                            },
+                        }
+                    ],
+                }
+
+        class WhitelistHandler:
+            def __init__(self):
+                self.calls = 0
+
+            def handle_callback(self, **kwargs):
+                self.calls += 1
+                kwargs["answer_callback"]("cb-whitelist", "", False)
+                kwargs["send_message"](
+                    token=kwargs["telegram_token"],
+                    chat_id="chat-1",
+                    text="Подтверждение",
+                    timeout=kwargs["timeout"],
+                )
+                return True
+
+        answer = Mock(
+            side_effect=(
+                types.SimpleNamespace(
+                    ok=False,
+                    retryable=True,
+                    response_text="network unavailable",
+                ),
+                types.SimpleNamespace(ok=True, retryable=False),
+            )
+        )
+        send = Mock(
+            return_value=types.SimpleNamespace(ok=True, retryable=False)
+        )
+        whitelist = WhitelistHandler()
+        now = Mock(return_value=100.0)
+        poller = TelegramUpdatePoller(
+            Settings(
+                enable_telegram=True,
+                telegram_token="token",
+                telegram_chatid="chat-1",
+            ),
+            bot_settings=BotSettings(
+                admin_chat_ids=("chat-1",),
+                modules=("whitelist_control",),
+            ),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=answer,
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=now,
+            http_get=Mock(return_value=WhitelistCallbackResponse()),
+            whitelist_handler=whitelist,
+            send_message=send,
+        )
+
+        poller.process_updates()
+        self.assertEqual(poller.update_offset, 0)
+        send.assert_not_called()
+
+        now.return_value = 131.0
+        poller.process_updates()
+
+        self.assertEqual(poller.update_offset, 104)
+        self.assertEqual(answer.call_count, 2)
+        self.assertEqual(whitelist.calls, 2)
+        send.assert_called_once()
+
+    def test_whitelist_delivery_retry_does_not_answer_callback_twice(self):
+        class WhitelistCallbackResponse:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 104,
+                            "callback_query": {
+                                "id": "cb-delivery",
+                                "data": (
+                                    "whitelist:v1:add-request:"
+                                    "request001"
+                                ),
+                                "from": {"id": "user-1"},
+                                "message": {
+                                    "message_id": 7,
+                                    "chat": {"id": "chat-1"},
+                                },
+                            },
+                        }
+                    ],
+                }
+
+        class WhitelistHandler:
+            def __init__(self):
+                self.calls = 0
+
+            def handle_callback(self, **kwargs):
+                self.calls += 1
+                kwargs["answer_callback"]("cb-delivery", "", False)
+                kwargs["send_message"](
+                    token=kwargs["telegram_token"],
+                    chat_id="chat-1",
+                    text="Подтверждение",
+                    timeout=kwargs["timeout"],
+                )
+                return True
+
+        answer = Mock(
+            return_value=types.SimpleNamespace(ok=True, retryable=False)
+        )
+        send = Mock(
+            side_effect=(
+                types.SimpleNamespace(
+                    ok=False,
+                    retryable=True,
+                    response_text="network unavailable",
+                ),
+                types.SimpleNamespace(ok=True, retryable=False),
+            )
+        )
+        whitelist = WhitelistHandler()
+        now = Mock(return_value=100.0)
+        poller = TelegramUpdatePoller(
+            Settings(
+                enable_telegram=True,
+                telegram_token="token",
+                telegram_chatid="chat-1",
+            ),
+            bot_settings=BotSettings(
+                admin_chat_ids=("chat-1",),
+                modules=("whitelist_control",),
+            ),
+            status_snapshot_factory=self.status_snapshot,
+            handle_unblock_action=Mock(),
+            answer_callback=answer,
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=now,
+            http_get=Mock(return_value=WhitelistCallbackResponse()),
+            whitelist_handler=whitelist,
+            send_message=send,
+        )
+
+        poller.process_updates()
+        self.assertEqual(poller.update_offset, 0)
+
+        now.return_value = 131.0
+        poller.process_updates()
+
+        self.assertEqual(poller.update_offset, 105)
+        self.assertEqual(answer.call_count, 1)
+        self.assertEqual(whitelist.calls, 2)
+        self.assertEqual(send.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

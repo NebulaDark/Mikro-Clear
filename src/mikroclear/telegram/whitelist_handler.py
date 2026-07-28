@@ -200,56 +200,21 @@ class TelegramWhitelistHandler:
             answer_callback(callback_id, "Разблокировка недоступна", True)
             return True
 
-        if action_name == "add-request":
-            return self._handle_add_request(
-                token,
-                callback_id=callback_id,
-                chat_id=chat_id,
-                user_id=user_id,
-                message_id=message_id,
-                message_markup=message_markup,
-                answer_callback=answer_callback,
-                send_message=send_message,
-                telegram_token=telegram_token,
-                timeout=timeout,
-                now=now,
-            )
-        if action_name == "remove-request":
-            return self._handle_remove_request(
-                token,
-                callback_id=callback_id,
-                chat_id=chat_id,
-                user_id=user_id,
-                message_id=message_id,
-                answer_callback=answer_callback,
-                send_message=send_message,
-                edit_message=edit_message,
-                telegram_token=telegram_token,
-                timeout=timeout,
-                now=now,
-            )
-        if action_name == "cancel":
-            return self._handle_cancel(
-                token,
-                callback_id=callback_id,
-                chat_id=chat_id,
-                user_id=user_id,
-                answer_callback=answer_callback,
-                now=now,
-            )
-
-        payload = self._consume(
+        expected_kinds = {
+            "add-request": {"add_request", "add_confirm"},
+            "remove-request": {"remove_confirm"},
+            "add-confirm": {"add_confirm"},
+            "remove-confirm": {"remove_confirm"},
+            "retry-unblock": {"retry_unblock"},
+            "cancel": {"add_confirm", "remove_confirm"},
+        }[action_name]
+        payload = self._peek(
             token,
             now=now,
             chat_id=chat_id,
             user_id=user_id,
         )
-        expected_kind = {
-            "add-confirm": "add_confirm",
-            "remove-confirm": "remove_confirm",
-            "retry-unblock": "retry_unblock",
-        }.get(action_name)
-        if payload is None or payload.get("kind") != expected_kind:
+        if payload is None or payload.get("kind") not in expected_kinds:
             self._stale(
                 callback_id,
                 chat_id,
@@ -274,13 +239,68 @@ class TelegramWhitelistHandler:
             )
             return True
 
+        answer_callback(callback_id, "", False)
+
+        if action_name == "add-request":
+            return self._handle_add_request(
+                token,
+                payload=payload,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+                message_markup=message_markup,
+                send_message=send_message,
+                telegram_token=telegram_token,
+                timeout=timeout,
+                now=now,
+            )
+        if action_name == "remove-request":
+            return self._handle_remove_request(
+                token,
+                payload=payload,
+                chat_id=chat_id,
+                message_id=message_id,
+                send_message=send_message,
+                edit_message=edit_message,
+                telegram_token=telegram_token,
+                timeout=timeout,
+                now=now,
+            )
+        if action_name == "cancel":
+            return self._handle_cancel(
+                token,
+                chat_id=chat_id,
+                user_id=user_id,
+                send_message=send_message,
+                telegram_token=telegram_token,
+                timeout=timeout,
+                now=now,
+            )
+
+        payload = self._consume(
+            token,
+            now=now,
+            chat_id=chat_id,
+            user_id=user_id,
+        )
+        if payload is None or payload.get("kind") not in expected_kinds:
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Запрос истёк или уже использован",
+                timeout=timeout,
+                log_prefix="TELEGRAM WHITELIST CONSUME RACE DELIVERY FAILED",
+            )
+            return True
+
         if action_name == "add-confirm":
             result = self._execute_add(
                 payload,
                 chat_id=chat_id,
                 user_id=user_id,
             )
-            text, alert = self._add_answer(result)
+            text, _alert = self._add_answer(result)
             if result.outcome in {"success", "partial"}:
                 retry_token = (
                     self._create_retry(
@@ -304,7 +324,17 @@ class TelegramWhitelistHandler:
                     telegram_token=telegram_token,
                     timeout=timeout,
                 )
-            answer_callback(callback_id, text, alert)
+            else:
+                self._deliver_factual_message(
+                    send_message,
+                    telegram_token=telegram_token,
+                    chat_id=chat_id,
+                    text=text,
+                    timeout=timeout,
+                    log_prefix=(
+                        "TELEGRAM WHITELIST ADD RESULT SEND FAILED"
+                    ),
+                )
             return True
 
         if action_name == "retry-unblock":
@@ -313,7 +343,7 @@ class TelegramWhitelistHandler:
                 chat_id=chat_id,
                 user_id=user_id,
             )
-            text, alert = self._retry_answer(result)
+            text, _alert = self._retry_answer(result)
             retry_token = (
                 self._create_retry(
                     payload,
@@ -337,16 +367,24 @@ class TelegramWhitelistHandler:
                     telegram_token=telegram_token,
                     timeout=timeout,
                 )
-            answer_callback(callback_id, text, alert)
+            else:
+                self._deliver_factual_message(
+                    send_message,
+                    telegram_token=telegram_token,
+                    chat_id=chat_id,
+                    text=text,
+                    timeout=timeout,
+                    log_prefix=(
+                        "TELEGRAM WHITELIST RETRY RESULT SEND FAILED"
+                    ),
+                )
             return True
 
         self._execute_remove(
             payload,
-            callback_id=callback_id,
             chat_id=chat_id,
             user_id=user_id,
             message_id=message_id,
-            answer_callback=answer_callback,
             send_message=send_message,
             edit_message=edit_message,
             telegram_token=telegram_token,
@@ -359,50 +397,23 @@ class TelegramWhitelistHandler:
         self,
         token: str,
         *,
-        callback_id: str,
+        payload: dict[str, Any],
         chat_id: str,
         user_id: str,
         message_id: Any,
         message_markup: Any,
-        answer_callback: Callable[[str, str, bool], Any],
         send_message: Callable[..., Any],
         telegram_token: str,
         timeout: int,
         now: int,
     ) -> bool:
-        payload = self._consume(
-            token,
-            now=now,
-            chat_id=chat_id,
-            user_id=user_id,
-        )
-        if (
-            payload is None
-            or payload.get("kind") != "add_request"
-            or not is_managed_private_ipv4(payload.get("address"))
-        ):
-            self._stale(
-                callback_id,
-                chat_id,
-                user_id,
-                answer_callback,
-                "add-request",
-            )
-            return True
         address = str(payload["address"])
-        if self.store.contains(address):
-            answer_callback(callback_id, "Адрес уже в исключениях", False)
-            return True
         try:
-            confirm_token = self.actions.create(
-                kind="add_confirm",
-                address=address,
-                list_name=str(payload["list_name"]),
-                sid=str(payload.get("sid", "N/A")),
+            promoted = self.actions.promote_add_request(
+                token,
+                now=int(now),
                 chat_id=chat_id,
                 user_id=user_id,
-                now=int(now),
-                ttl_seconds=self.action_ttl_seconds,
                 source_chat_id=chat_id,
                 source_message_id=(
                     int(message_id)
@@ -420,11 +431,38 @@ class TelegramWhitelistHandler:
                 address,
                 type(exc).__name__,
             )
-            answer_callback(
-                callback_id,
-                "Не удалось создать подтверждение",
-                True,
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Не удалось создать подтверждение",
+                timeout=timeout,
+                log_prefix=(
+                    "TELEGRAM WHITELIST CONFIRM CREATE DELIVERY FAILED"
+                ),
             )
+            return True
+        if promoted is None:
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Запрос истёк или уже использован",
+                timeout=timeout,
+                log_prefix=(
+                    "TELEGRAM WHITELIST PROMOTION RACE DELIVERY FAILED"
+                ),
+            )
+            return True
+        if self.store.contains(address):
+            response = send_message(
+                token=telegram_token,
+                chat_id=chat_id,
+                text="Адрес уже в исключениях",
+                timeout=timeout,
+            )
+            if getattr(response, "ok", True) is False:
+                self.log("TELEGRAM WHITELIST EXISTING RESULT SEND FAILED")
             return True
         response = send_message(
             token=telegram_token,
@@ -435,61 +473,36 @@ class TelegramWhitelistHandler:
                 f"и удалить из RouterOS "
                 f"<code>{escape_html_safe(payload['list_name'])}</code>?"
             ),
-            reply_markup=build_whitelist_confirm_keyboard(confirm_token),
+            reply_markup=build_whitelist_confirm_keyboard(token),
             timeout=timeout,
         )
         if getattr(response, "ok", True) is False:
             self.log("TELEGRAM WHITELIST CONFIRM SEND FAILED")
-            answer_callback(
-                callback_id,
-                "Не удалось отправить подтверждение",
-                True,
-            )
-        else:
-            answer_callback(
-                callback_id,
-                "Подтвердите добавление в чате",
-                False,
-            )
         return True
 
     def _handle_remove_request(
         self,
         token: str,
         *,
-        callback_id: str,
+        payload: dict[str, Any],
         chat_id: str,
-        user_id: str,
         message_id: Any,
-        answer_callback: Callable[[str, str, bool], Any],
         send_message: Callable[..., Any],
         edit_message: Callable[..., Any],
         telegram_token: str,
         timeout: int,
         now: int,
     ) -> bool:
-        payload = self._peek(
-            token,
-            now=now,
-            chat_id=chat_id,
-            user_id=user_id,
-        )
-        if (
-            payload is None
-            or payload.get("kind") != "remove_confirm"
-            or not is_managed_private_ipv4(payload.get("address"))
-        ):
-            self._stale(
-                callback_id,
-                chat_id,
-                user_id,
-                answer_callback,
-                "remove-request",
-            )
-            return True
         address = str(payload["address"])
         if not self.store.contains(address):
-            answer_callback(callback_id, "Исключение уже отсутствует", False)
+            response = send_message(
+                token=telegram_token,
+                chat_id=chat_id,
+                text="Исключение уже отсутствует",
+                timeout=timeout,
+            )
+            if getattr(response, "ok", True) is False:
+                self.log("TELEGRAM WHITELIST MISSING RESULT SEND FAILED")
             return True
         view = MenuView(
             (
@@ -526,21 +539,17 @@ class TelegramWhitelistHandler:
             telegram_token=telegram_token,
             timeout=timeout,
         )
-        answer_callback(
-            callback_id,
-            "Подтвердите удаление в чате",
-            False,
-        )
         return True
 
     def _handle_cancel(
         self,
         token: str,
         *,
-        callback_id: str,
         chat_id: str,
         user_id: str,
-        answer_callback: Callable[[str, str, bool], Any],
+        send_message: Callable[..., Any],
+        telegram_token: str,
+        timeout: int,
         now: int,
     ) -> bool:
         payload = self._consume(
@@ -550,12 +559,13 @@ class TelegramWhitelistHandler:
             user_id=user_id,
         )
         if payload is None:
-            self._stale(
-                callback_id,
-                chat_id,
-                user_id,
-                answer_callback,
-                "cancel",
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Запрос истёк или уже использован",
+                timeout=timeout,
+                log_prefix="TELEGRAM WHITELIST CANCEL RACE DELIVERY FAILED",
             )
             return True
         address = str(payload.get("address", ""))
@@ -566,7 +576,14 @@ class TelegramWhitelistHandler:
             user_id,
             address,
         )
-        answer_callback(callback_id, "Отменено", False)
+        self._deliver_factual_message(
+            send_message,
+            telegram_token=telegram_token,
+            chat_id=chat_id,
+            text="Отменено",
+            timeout=timeout,
+            log_prefix="TELEGRAM WHITELIST CANCEL RESULT SEND FAILED",
+        )
         return True
 
     def _execute_add(
@@ -704,11 +721,9 @@ class TelegramWhitelistHandler:
         self,
         payload: dict[str, Any],
         *,
-        callback_id: str,
         chat_id: str,
         user_id: str,
         message_id: Any,
-        answer_callback: Callable[[str, str, bool], Any],
         send_message: Callable[..., Any],
         edit_message: Callable[..., Any],
         telegram_token: str,
@@ -746,10 +761,15 @@ class TelegramWhitelistHandler:
                     address,
                     type(exc).__name__,
                 )
-                answer_callback(
-                    callback_id,
-                    "Не удалось удалить исключение",
-                    True,
+                self._deliver_factual_message(
+                    send_message,
+                    telegram_token=telegram_token,
+                    chat_id=chat_id,
+                    text="Не удалось удалить исключение",
+                    timeout=timeout,
+                    log_prefix=(
+                        "TELEGRAM WHITELIST REMOVE RESULT SEND FAILED"
+                    ),
                 )
                 return
             self._record(
@@ -761,6 +781,16 @@ class TelegramWhitelistHandler:
             )
             text = "Исключение удалено"
 
+        if self.bot_settings.dry_run or text == "Исключение уже отсутствует":
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text=text,
+                timeout=timeout,
+                log_prefix="TELEGRAM WHITELIST REMOVE RESULT SEND FAILED",
+            )
+            return
         try:
             view = self.menu_view(
                 page=0,
@@ -782,7 +812,6 @@ class TelegramWhitelistHandler:
                 "TELEGRAM WHITELIST POST-REMOVE VIEW FAILED: "
                 f"{type(exc).__name__}"
             )
-        answer_callback(callback_id, text, False)
 
     def _remove_from_routeros(self, list_name: str, address: str) -> bool:
         client = self.get_router_client()
@@ -883,18 +912,42 @@ class TelegramWhitelistHandler:
             return
         self.log("TELEGRAM WHITELIST POST-MUTATION MARKUP FAILED")
         try:
-            send_message(
+            response = send_message(
                 token=telegram_token,
                 chat_id=current_chat_id,
                 text=result_text,
                 reply_markup=reply_markup,
                 timeout=timeout,
             )
+            if getattr(response, "ok", True) is False:
+                self.log("TELEGRAM WHITELIST RESULT SEND FAILED")
         except Exception as exc:
             self.log(
                 "TELEGRAM WHITELIST RESULT SEND FAILED: "
                 f"{type(exc).__name__}"
             )
+
+    def _deliver_factual_message(
+        self,
+        send_message: Callable[..., Any],
+        *,
+        telegram_token: str,
+        chat_id: str,
+        text: str,
+        timeout: int,
+        log_prefix: str,
+    ) -> None:
+        try:
+            response = send_message(
+                token=telegram_token,
+                chat_id=chat_id,
+                text=text,
+                timeout=timeout,
+            )
+            if getattr(response, "ok", True) is False:
+                self.log(log_prefix)
+        except Exception as exc:
+            self.log(f"{log_prefix}: {type(exc).__name__}")
 
     @staticmethod
     def _result_markup(
