@@ -13,7 +13,11 @@ from mikroclear.telegram.commands import (
     process_message_command,
     raise_for_retryable_delivery,
 )
-from mikroclear.telegram.notify import send_telegram_message
+from mikroclear.telegram.notify import (
+    edit_telegram_message,
+    edit_telegram_reply_markup,
+    send_telegram_message,
+)
 
 try:
     import ujson  # type: ignore
@@ -65,9 +69,13 @@ class TelegramUpdatePoller:
         send_system_notification: Callable[[str, str], Any],
         log: Callable[[str], None],
         now: Callable[[], float],
+        menu_handler: Any = None,
         mangle_handler: Any = None,
+        whitelist_handler: Any = None,
         http_get: Callable[..., Any] = requests.get,
         send_message: Callable[..., Any] = send_telegram_message,
+        edit_message: Callable[..., Any] = edit_telegram_message,
+        edit_reply_markup: Callable[..., Any] = edit_telegram_reply_markup,
         backoff: TelegramPollingBackoff | None = None,
     ) -> None:
         self.settings = settings
@@ -78,9 +86,13 @@ class TelegramUpdatePoller:
         self.send_system_notification = send_system_notification
         self.log = log
         self.now = now
+        self.menu_handler = menu_handler
         self.mangle_handler = mangle_handler
+        self.whitelist_handler = whitelist_handler
         self.http_get = http_get
         self.send_message = send_message
+        self.edit_message = edit_message
+        self.edit_reply_markup = edit_reply_markup
         self.backoff = backoff or TelegramPollingBackoff()
         self.update_offset = 0
         self._pending_callback_answers: dict[str, tuple[str, bool]] = {}
@@ -182,6 +194,16 @@ class TelegramUpdatePoller:
         self._pending_callback_answers.pop(callback_id, None)
         return response
 
+    def _edit_message(self, **kwargs: Any) -> Any:
+        response = self.edit_message(**kwargs)
+        raise_for_retryable_delivery(response)
+        return response
+
+    def _edit_reply_markup(self, **kwargs: Any) -> Any:
+        response = self.edit_reply_markup(**kwargs)
+        raise_for_retryable_delivery(response)
+        return response
+
     def _record_failure(self, error_text: str) -> None:
         should_log, delay = self.backoff.record_failure(self.now(), error_text)
         if should_log:
@@ -201,6 +223,17 @@ class TelegramUpdatePoller:
         if command_name:
             self.log(f"Telegram command update: command={command_name} chat={chat_id} user={user_id}")
         auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
+        if self.menu_handler is not None and self.menu_handler.handle_message(
+            text=text,
+            chat_id=chat_id,
+            user_id=user_id,
+            auth=auth,
+            send_message=self._send_message,
+            token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            update_id=str(update.get("update_id", "")),
+        ):
+            return True
         if self.mangle_handler is not None and self.mangle_handler.handle_message(
             text=text,
             chat_id=chat_id,
@@ -243,12 +276,30 @@ class TelegramUpdatePoller:
         )
 
         pending_answer = self._pending_callback_answers.get(callback_id)
+        pending_answered = False
         if pending_answer is not None:
             text, alert = pending_answer
             self._answer_callback(callback_id, text, alert)
-            return True
+            pending_answered = True
 
         auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
+        if self.menu_handler is not None and self.menu_handler.handle_callback(
+            callback=callback,
+            auth=auth,
+            answer_callback=(
+                (lambda _callback_id, _text, _alert: None)
+                if pending_answered
+                else self._answer_callback
+            ),
+            send_message=self._send_message,
+            edit_message=self._edit_message,
+            telegram_token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            now=int(self.now()),
+        ):
+            return True
+        if pending_answered:
+            return True
         if self.mangle_handler is not None and self.mangle_handler.handle_callback(
             callback=callback,
             auth=auth,
@@ -258,6 +309,18 @@ class TelegramUpdatePoller:
             timeout=self.settings.telegram_timeout,
             now=int(self.now()),
             update_id=str(update.get("update_id", "")),
+        ):
+            return True
+        if self.whitelist_handler is not None and self.whitelist_handler.handle_callback(
+            callback=callback,
+            auth=auth,
+            answer_callback=self._answer_callback,
+            send_message=self._send_message,
+            edit_message=self._edit_message,
+            edit_reply_markup=self._edit_reply_markup,
+            telegram_token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            now=int(self.now()),
         ):
             return True
 
