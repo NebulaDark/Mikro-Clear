@@ -17,6 +17,9 @@ class StatusSnapshot:
     telegram_unblock_enabled: bool
     state_dir: str
     bot_settings: BotSettings
+    telegram_whitelist_control_enabled: bool = False
+    dynamic_whitelist_file: str = ""
+    managed_whitelist_count: int = 0
 
 
 def format_duration(seconds: int) -> str:
@@ -50,6 +53,10 @@ def format_status(snapshot: StatusSnapshot) -> str:
         f"address-list: {snapshot.block_list_name}",
         f"monitor-only: {on_off(snapshot.monitor_only)}",
         f"telegram unblock: {on_off(snapshot.telegram_unblock_enabled)}",
+        "telegram whitelist control: "
+        f"{on_off(snapshot.telegram_whitelist_control_enabled)}",
+        f"managed whitelist: {snapshot.managed_whitelist_count}",
+        f"whitelist store: {snapshot.dynamic_whitelist_file}",
         f"bot dry-run: {on_off(snapshot.bot_settings.dry_run)}",
         f"modules: {', '.join(snapshot.bot_settings.modules)}",
         f"state-dir: {snapshot.state_dir}",

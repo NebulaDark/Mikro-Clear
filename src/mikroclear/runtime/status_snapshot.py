@@ -13,6 +13,7 @@ def build_status_snapshot(
     service_start_time: float,
     now: Callable[[], float],
     bot_settings_factory: Callable[[], BotSettings] = BotSettings.from_env,
+    managed_whitelist_count: int = 0,
 ) -> StatusSnapshot:
     connected_at = float(getattr(router_client, "connected_at", 0.0) or 0.0)
     connected = bool(getattr(router_client, "api", None))
@@ -27,6 +28,11 @@ def build_status_snapshot(
         telegram_unblock_enabled=settings.telegram_unblock_enable,
         state_dir=settings.state_dir,
         bot_settings=bot_settings_factory(),
+        telegram_whitelist_control_enabled=(
+            settings.telegram_whitelist_control_enable
+        ),
+        dynamic_whitelist_file=settings.dynamic_whitelist_file,
+        managed_whitelist_count=int(managed_whitelist_count),
     )
 
 

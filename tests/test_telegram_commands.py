@@ -217,6 +217,62 @@ class TelegramCommandTests(unittest.TestCase):
         menu.handle_message.assert_called_once()
         mangle.handle_message.assert_not_called()
 
+    def test_poller_routes_callbacks_menu_then_mangle_then_whitelist(self):
+        consumed_order = []
+        menu = Mock()
+        menu.handle_callback.side_effect = (
+            lambda **_kwargs: consumed_order.append("menu") or False
+        )
+        mangle = Mock()
+        mangle.handle_callback.side_effect = (
+            lambda **_kwargs: consumed_order.append("mangle") or False
+        )
+        whitelist = Mock()
+        whitelist.handle_callback.side_effect = (
+            lambda **_kwargs: consumed_order.append("whitelist") or True
+        )
+        poller = TelegramUpdatePoller(
+            Settings(
+                enable_telegram=True,
+                telegram_token="token",
+                telegram_chatid="admin",
+            ),
+            bot_settings=BotSettings(admin_chat_ids=("admin",)),
+            status_snapshot_factory=Mock(),
+            handle_unblock_action=Mock(),
+            answer_callback=Mock(),
+            send_system_notification=Mock(),
+            log=Mock(),
+            now=Mock(return_value=100.0),
+            menu_handler=menu,
+            mangle_handler=mangle,
+            whitelist_handler=whitelist,
+        )
+
+        with patch(
+            "mikroclear.telegram.polling.process_callback_update"
+        ) as process_callback_update:
+            poller.process_update(
+                {
+                    "update_id": 2,
+                    "callback_query": {
+                        "id": "cb-2",
+                        "data": "whitelist:v1:add-request:token",
+                        "message": {
+                            "message_id": 77,
+                            "chat": {"id": "admin"},
+                        },
+                        "from": {"id": "user-1"},
+                    },
+                }
+            )
+
+        self.assertEqual(
+            consumed_order,
+            ["menu", "mangle", "whitelist"],
+        )
+        process_callback_update.assert_not_called()
+
     def test_process_updates_routes_mangle_callback_before_unblock_callback(self):
         class FakeCallbackResponse:
             status_code = 200

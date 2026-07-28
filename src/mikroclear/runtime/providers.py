@@ -8,6 +8,7 @@ from time import sleep, time
 from typing import Any
 
 from mikroclear.assets.resolver import AssetResolver, AssetResolverConfig
+from mikroclear.bot.audit import BotAuditLog
 from mikroclear.bot.settings import BotSettings
 from mikroclear.runtime import MikroClearService
 from mikroclear.runtime.status_snapshot import build_status_snapshot
@@ -25,11 +26,18 @@ from mikroclear.suricata.ignore_rules import IgnoreRules
 from mikroclear.suricata.pipeline import AlertPipeline, AlertProcessorConfig
 from mikroclear.suricata.whitelist_policy import WhitelistPolicy
 from mikroclear.telegram.formatting import escape_html_safe
-from mikroclear.telegram.notify import TelegramNotifier
 from mikroclear.telegram.mangle_handler import TelegramMangleHandler
+from mikroclear.telegram.menu_handler import TelegramMenuHandler
+from mikroclear.telegram.notify import (
+    TelegramNotifier,
+    edit_telegram_message,
+    edit_telegram_reply_markup,
+)
 from mikroclear.telegram.polling import TelegramUpdatePoller
 from mikroclear.telegram.polling_worker import TelegramPollingWorker
 from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
+from mikroclear.telegram.whitelist_actions import WhitelistActionStore
+from mikroclear.telegram.whitelist_handler import TelegramWhitelistHandler
 
 
 def log(message: str) -> None:
@@ -45,6 +53,7 @@ class RuntimeProviders:
     service: MikroClearService | None = None
 
     def __post_init__(self) -> None:
+        self.bot_settings = BotSettings.from_env()
         self.dynamic_whitelist = DynamicWhitelistStore(
             Path(self.settings.dynamic_whitelist_file)
         )
@@ -52,7 +61,20 @@ class RuntimeProviders:
             self.settings.whitelist_ips,
             self.dynamic_whitelist,
         )
-        self.bot_settings = BotSettings.from_env()
+        self.audit = BotAuditLog(Path(self.bot_settings.audit_log))
+        self.whitelist_actions = WhitelistActionStore(
+            Path(self.settings.telegram_whitelist_state_file)
+        )
+        self.whitelist_handler = TelegramWhitelistHandler(
+            self.settings,
+            bot_settings=self.bot_settings,
+            store=self.dynamic_whitelist,
+            policy=self.whitelist_policy,
+            actions=self.whitelist_actions,
+            audit=self.audit,
+            get_router_client=self.get_router_client,
+            log=log,
+        )
         self.ignore_rules = IgnoreRules(log=log, debug_log=self.debug_log)
         self.tailer = EveJsonTailer(
             add_on_start=self.settings.add_on_start,
@@ -80,6 +102,9 @@ class RuntimeProviders:
             debug_log=self.debug_log,
             sanitize_exception_text=sanitize_exception_text,
             now=time,
+            whitelist_keyboard_factory=(
+                self.whitelist_handler.extend_alert_keyboard
+            ),
         )
         self.unblock_handler = TelegramUnblockHandler(
             self.settings,
@@ -88,7 +113,17 @@ class RuntimeProviders:
         )
         self.mangle_handler = TelegramMangleHandler(
             self.settings,
+            bot_settings=self.bot_settings,
+            audit=self.audit,
             get_router_client=self.get_router_client,
+            log=log,
+        )
+        self.menu_handler = TelegramMenuHandler(
+            self.settings,
+            bot_settings=self.bot_settings,
+            status_snapshot_factory=self.build_status_snapshot,
+            mangle_handler=self.mangle_handler,
+            whitelist_handler=self.whitelist_handler,
             log=log,
         )
         self.pipeline = AlertPipeline(
@@ -112,7 +147,11 @@ class RuntimeProviders:
             send_system_notification=self.notifier.send_system_notification,
             log=log,
             now=time,
+            menu_handler=self.menu_handler,
             mangle_handler=self.mangle_handler,
+            whitelist_handler=self.whitelist_handler,
+            edit_message=edit_telegram_message,
+            edit_reply_markup=edit_telegram_reply_markup,
         )
         self.polling_worker = TelegramPollingWorker(
             self.poller,
@@ -135,6 +174,8 @@ class RuntimeProviders:
             self.settings.uptime_bookmark,
             self.settings.ignore_list_location,
             self.settings.telegram_lock_file,
+            self.settings.dynamic_whitelist_file,
+            self.settings.telegram_whitelist_state_file,
         ):
             directory = os.path.dirname(path)
             if directory:
@@ -265,6 +306,9 @@ class RuntimeProviders:
             service_start_time=self.service_start_time,
             now=time,
             bot_settings_factory=lambda: self.bot_settings,
+            managed_whitelist_count=len(
+                self.dynamic_whitelist.snapshot()
+            ),
         )
 
 

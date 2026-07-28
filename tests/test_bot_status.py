@@ -47,3 +47,33 @@ class BotStatusTests(TestCase):
         self.assertNotIn("ABC_def-123", text)
         self.assertIn("/bot***MASKED***/", text)
         self.assertIn("token=abc123", text)
+
+    def test_status_reports_control_store_and_count_without_listing_ips(self):
+        text = format_status(
+            StatusSnapshot(
+                uptime_seconds=60,
+                routeros_connected=True,
+                routeros_connected_seconds=30,
+                eve_path="/var/log/suricata/eve.json",
+                block_list_name="Suricata",
+                monitor_only=False,
+                telegram_unblock_enabled=True,
+                state_dir="/var/lib/mikroclear",
+                bot_settings=BotSettings(
+                    modules=("status", "whitelist_control")
+                ),
+                telegram_whitelist_control_enabled=True,
+                dynamic_whitelist_file=(
+                    "/var/lib/mikroclear/dynamic-whitelist.json"
+                ),
+                managed_whitelist_count=2,
+            )
+        )
+
+        self.assertIn("telegram whitelist control: on", text)
+        self.assertIn("managed whitelist: 2", text)
+        self.assertIn(
+            "whitelist store: /var/lib/mikroclear/dynamic-whitelist.json",
+            text,
+        )
+        self.assertNotIn("192.168.", text)
