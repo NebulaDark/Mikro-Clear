@@ -4,6 +4,8 @@ from unittest import TestCase
 
 
 ROOT = Path(__file__).resolve().parents[1]
+INSTALL_GUIDE = ROOT / "docs/ru/install-from-github.md"
+INSTALL_REPRODUCTION = ROOT / "docs/ru/install-test-reproduction.md"
 
 
 class StandaloneInstallContractTests(TestCase):
@@ -35,3 +37,12 @@ class StandaloneInstallContractTests(TestCase):
                 text = path.read_text(encoding="utf-8")
                 self.assertIn("/etc/mikroclear/certs/mikrotik-ca.crt", text)
                 self.assertNotIn("/etc/mikrocata/certs", text)
+
+    def test_operator_installation_remains_git_and_repository_script_only(self):
+        for path in (INSTALL_GUIDE, INSTALL_REPRODUCTION):
+            with self.subTest(path=str(path)):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("git rev-parse HEAD", text)
+                self.assertIn("scripts/install-selks.sh", text)
+                self.assertNotIn("mcp-selks", text.lower())
+                self.assertNotIn("MCP", text)

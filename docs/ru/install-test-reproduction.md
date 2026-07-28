@@ -5,6 +5,10 @@
 Telegram-боту или изменять рабочий SELKS. Проверка живых интеграций выполняется
 оператором только на выделенном стенде.
 
+Debian 12 и Debian 13 ниже — проверенные примеры, а не запрет на более новую ОС.
+Более новый Linux допустим при выполнении требований из
+`install-from-github.md`.
+
 ## Матрица
 
 | ОС | Режим | Сценарий | Ожидаемый результат |
@@ -72,6 +76,89 @@ PYTHONPYCACHEPREFIX=/tmp/mikroclear-pycache \
 Для автоматических тестов RouterOS и Telegram заменяются локальными doubles.
 Не подставляйте production env-файл и реальные секреты. Sourceable guard
 позволяет тестам вызывать функции установщика без выполнения `main`.
+
+Проверить отдельно fail-closed контракт повреждённого managed JSON:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
+  .venv/bin/python -m unittest \
+  tests.test_dynamic_whitelist.DynamicWhitelistStoreTests.test_invalid_existing_document_fails_closed \
+  tests.test_dynamic_whitelist.DynamicWhitelistStoreTests.test_invalid_utf8_fails_closed_without_exposing_content
+```
+
+Ожидается `OK`: повреждённый `dynamic-whitelist.json` не сбрасывается и не
+принимается. При реальном startup это останавливает сервис до обработки EVE.
+
+## STOP: отдельно одобряемая live-проверка
+
+На этом локальная проверка заканчивается. Не обновляйте SELKS, не
+перезапускайте сервис и не выполняйте записи в RouterOS или Telegram без
+отдельного явного разрешения. До запроса разрешения подготовьте точный commit
+SHA, snapshot/rollback point, тестовые RouterOS и Telegram, отдельную сеть и
+ожидаемые команды. Следующий раздел выполняется только после такого одобрения.
+
+### Точный сценарий после одобрения
+
+Используйте выделенный изолированный test host `192.168.250.250`. До создания
+alert проверьте по DHCP, ARP и инвентарю стенда, что этот адрес не занят, не
+попадает под `MIKROCLEAR_WHITELIST_IPS` и не относится к production. Не
+подставляйте production IP, пароли, Telegram token или production Chat ID.
+
+1. На стендовом SELKS откройте заранее проверенный Git checkout, убедитесь, что
+   рабочее дерево чистое, запишите фактический commit и только затем выполните
+   установку/обновление repository script:
+
+   ```bash
+   git status --short
+   tested_commit="$(git rev-parse HEAD)"
+   printf 'tested_commit=%s\n' "${tested_commit}"
+   sudo ./scripts/install-selks.sh
+   ```
+
+2. В одобренном стендовом env должны быть включены Telegram, bot, Unblock,
+   `whitelist_control` и
+   `MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=true`, а для этой live-проверки
+   установлен `MIKROCLEAR_BOT_DRY_RUN=false`. В admin chat выполните `/status`:
+   ожидаются `bot dry-run: off`, `telegram whitelist control: on`, правильные
+   `state-dir`, `whitelist store` и исходное количество; адреса выводиться не
+   должны.
+3. В изолированной тестовой сети ещё раз подтвердите, что
+   `192.168.250.250` не занят. С помощью тестового Suricata rule/fixture
+   с подходящими `severity` и `in_iface` создайте контролируемый `BLOCKED` alert,
+   где target равен `192.168.250.250`. Сохраните один и тот же sanitized JSON
+   event как fixture для повторной подачи.
+4. В alert нажмите `🛡 Добавить в исключения 192.168.250.250`, затем подтвердите
+   `✅ Добавить и разблокировать`.
+5. Проверьте владельца, режим и точный адрес, не публикуя весь state:
+
+   ```bash
+   sudo stat -c '%U:%G %a %n' \
+     /var/lib/mikroclear/dynamic-whitelist.json
+   sudo -u mikroclear /opt/mikroclear-venv/bin/python -c \
+     'import json; p="/var/lib/mikroclear/dynamic-whitelist.json"; d=json.load(open(p, encoding="utf-8")); assert d == {"version": 1, "addresses": ["192.168.250.250"]}; print("managed fixture: OK")'
+   ```
+
+   Ожидаются `mikroclear:mikroclear`, режим `600` и `managed fixture: OK`.
+6. На тестовом RouterOS проверьте, что address-list `Suricata` больше не
+   содержит `192.168.250.250`.
+7. Оператор должен повторно подать тот же controlled EVE event. Ожидаются
+   отсутствие новой блокировки RouterOS и нового `BLOCKED` alert.
+8. Откройте `🛡 Mikro-Clear` → `🛡 Исключения`, выберите managed-адрес и
+   подтвердите удаление исключения кнопкой `✅ Удалить исключение`. Системные
+   записи не должны предлагать удаление.
+9. Сразу после удаления исключения подтвердите, что Mikro-Clear не добавил
+   адрес в RouterOS автоматически.
+10. Ещё раз повторно подайте controlled event. Ожидаются обычная блокировка
+    `192.168.250.250` в `Suricata` и новый `BLOCKED` alert.
+11. Повторите `/status`, `/mangle` и обычный `🔓 Unblock 192.168.250.250`.
+    `/status` должен показать исходное количество managed entries и не
+    раскрывать список. При искусственно воспроизведённом частичном результате
+    alert должен показать `🔄 Повторить разблокировку`; retry не должен повторно
+    записывать исключение.
+
+Сохраните evidence с commit SHA, временем, sanitized event SID, `stat`,
+состоянием тестового RouterOS и ожидаемыми Telegram labels. После проверки
+восстановите snapshot стенда либо выполните ранее одобренный rollback.
 
 ## Fixture eve.json
 

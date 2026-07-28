@@ -131,6 +131,43 @@ sudo ./scripts/install-selks.sh --start
 `--start` проверяет обязательные параметры, доступ к `eve.json`, запускает
 сервис и выполняет ту же acceptance-проверку.
 
+## Безопасное включение Telegram-меню и исключений
+
+Установщик сохраняет текущий env при обновлении и не включает write-функции
+автоматически. Начните с безопасных значений:
+
+```env
+MIKROCLEAR_TELEGRAM_ENABLE=true
+MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true
+MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=false
+MIKROCLEAR_BOT_ENABLE=true
+MIKROCLEAR_BOT_DRY_RUN=true
+MIKROCLEAR_BOT_ADMIN_CHAT_IDS=
+MIKROCLEAR_BOT_MODULES=status,mangle_control,whitelist_control
+```
+
+Заполните admin chat ID, не публикуя token или содержимое env. После отдельно
+одобренного изменения конфигурации и restart включите
+`MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=true`, но оставьте dry-run.
+Администратор запускает `/start` или `/menu`, получает постоянную кнопку
+`🛡 Mikro-Clear` и открывает `🛡 Исключения`. Системные записи там доступны
+только для чтения; управляемые точные RFC1918 IPv4 можно удалять с
+подтверждением.
+
+Alert для подходящего адреса показывает `🛡 Добавить в исключения <IP>`, затем
+`✅ Добавить и разблокировать`. При частичном результате, когда JSON уже
+сохранён, а RouterOS не изменён, появляется
+`🔄 Повторить разблокировку`. Реальные добавление, удаление и разблокировка
+начнутся только при `MIKROCLEAR_BOT_DRY_RUN=false`; это переключение и live
+проверки требуют отдельного разрешения оператора.
+
+Файлы `dynamic-whitelist.json` и `telegram-whitelist-actions.json` по умолчанию
+находятся в `MIKROCLEAR_STATE_DIR` (`/var/lib/mikroclear`). Первый файл имеет
+режим `0600`. Повреждённый managed JSON останавливает startup до обработки
+events; при неуспешном обновлении acceptance запускает штатный rollback.
+`/status` показывает флаг, путь и количество управляемых исключений, но никогда
+не раскрывает список адресов.
+
 ## Пользователь сервиса и файловая раскладка
 
 Runtime работает не от root, а от системного пользователя и группы

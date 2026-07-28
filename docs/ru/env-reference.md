@@ -131,6 +131,12 @@ limits.
 `MIKROCLEAR_TELEGRAM_UNBLOCK_TTL_SECONDS`
 : Время жизни token для inline unblock action.
 
+`MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE`
+: Включает управляемые постоянные исключения и раздел `🛡 Исключения` для
+администраторов. Безопасное значение по умолчанию: `false`. Кнопка
+`🛡 Добавить в исключения <IP>` в alert доступна только вместе с
+`MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true`.
+
 `MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS`
 : Устаревший интервал polling, сохраненный для совместимости. Сетевой worker
   использует long polling и не зависит от этого значения.
@@ -160,11 +166,27 @@ limits.
 : CSV-список chat IDs с read-only доступом.
 
 `MIKROCLEAR_BOT_MODULES`
-: CSV-список включенных bot modules. Сейчас реализованный production-safe модуль:
-`status`.
+: CSV-список включённых bot modules. Для общего статуса, Mangle и управляемых
+исключений укажите `status,mangle_control,whitelist_control`. Наличие модуля в
+списке не отменяет его отдельный enable-флаг и проверку прав.
 
 `MIKROCLEAR_BOT_AUDIT_LOG`
 : Путь к audit log для Telegram control-plane действий.
+
+Управляемые исключения работают только когда одновременно выполнены условия:
+
+- Telegram и bot control plane включены:
+  `MIKROCLEAR_TELEGRAM_ENABLE=true` и `MIKROCLEAR_BOT_ENABLE=true`;
+- текущий chat указан в `MIKROCLEAR_BOT_ADMIN_CHAT_IDS`;
+- `whitelist_control` присутствует в `MIKROCLEAR_BOT_MODULES`;
+- `MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=true`;
+- для действия из alert включён
+  `MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true`.
+
+Безопасный исходный режим — `MIKROCLEAR_BOT_DRY_RUN=true`: bot показывает
+планируемое действие и пишет audit, но не меняет JSON и RouterOS. Реальное
+добавление, удаление или разблокировка требует отдельно одобренного переключения
+на `MIKROCLEAR_BOT_DRY_RUN=false`.
 
 ## Telegram Mangle Control
 
@@ -194,8 +216,9 @@ limits.
 : Локальная подсеть, добавляемая в whitelist/default local matching.
 
 `MIKROCLEAR_WHITELIST_IPS`
-: CSV-список IP/CIDR/prefix, которые нельзя блокировать. Используется при выборе
-target IP.
+: CSV-список точных IP-адресов и CIDR-сетей, которые нельзя блокировать.
+Сопоставление выполняется как равенство IP либо принадлежность CIDR; произвольные
+строковые префиксы не принимаются.
 
 `MIKROCLEAR_ENABLE_IPV6`
 : Включает сохранение/обработку IPv6 address-list state.
@@ -229,6 +252,26 @@ target IP.
 
 `MIKROCLEAR_STATE_DIR`
 : Основной каталог state. Целевой путь на SELKS: `/var/lib/mikroclear`.
+
+`MIKROCLEAR_DYNAMIC_WHITELIST_FILE`
+: JSON-файл управляемых исключений. По умолчанию
+`MIKROCLEAR_STATE_DIR/dynamic-whitelist.json`. Telegram может добавлять сюда
+только точные RFC1918 IPv4-адреса, без CIDR. Файл создаётся с режимом `0600`.
+
+`MIKROCLEAR_TELEGRAM_WHITELIST_STATE_FILE`
+: Файл короткоживущих одноразовых Telegram actions для исключений. По умолчанию
+`MIKROCLEAR_STATE_DIR/telegram-whitelist-actions.json`.
+
+Записи из `MIKROCLEAR_WHITELIST_IPS` и встроенной конфигурации считаются
+системными: меню показывает их только для чтения. Удалять через Telegram можно
+только управляемые записи из `dynamic-whitelist.json`. Если этот JSON повреждён,
+имеет неизвестную схему, дубликаты или недопустимый адрес, Mikro-Clear завершает
+startup до чтения событий; автоматического сброса списка нет.
+
+Команда `/status` показывает enable-флаг whitelist control, путь к
+`dynamic-whitelist.json` и количество управляемых записей. Список самих адресов
+в `/status` никогда не выводится; он доступен только администратору через
+`🛡 Mikro-Clear` → `🛡 Исключения`.
 
 `MIKROCLEAR_SAVE_LISTS_LOCATION`
 : JSON-файл сохранения RouterOS IPv4 address-list state.

@@ -50,3 +50,26 @@ class InstallDocumentationTests(TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, text)
+
+    def test_docs_cover_menu_and_managed_exception_reproduction(self):
+        env_text = (ROOT / "docs/ru/env-reference.md").read_text(encoding="utf-8")
+        repro = REPRO.read_text(encoding="utf-8")
+        example = (ROOT / "config/mikroclear.env.example").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=false",
+            "dynamic-whitelist.json",
+            "whitelist_control",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, example + env_text)
+        for required in (
+            "🛡 Mikro-Clear",
+            "🛡 Добавить в исключения",
+            "🔄 Повторить разблокировку",
+            "удаление исключения",
+            "повторно подать",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, repro)
