@@ -173,7 +173,8 @@ limits.
 `MIKROCLEAR_BOT_AUDIT_LOG`
 : Путь к audit log для Telegram control-plane действий.
 
-Управляемые исключения работают только когда одновременно выполнены условия:
+Telegram-операции управления исключениями доступны только когда одновременно
+выполнены условия:
 
 - Telegram и bot control plane включены:
   `MIKROCLEAR_TELEGRAM_ENABLE=true` и `MIKROCLEAR_BOT_ENABLE=true`;
@@ -183,10 +184,19 @@ limits.
 - для действия из alert включён
   `MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true`.
 
+Эти gates ограничивают только Telegram-операции управления исключениями. Они не
+выключают runtime whitelist: существующий корректный `dynamic-whitelist.json`
+загружается независимо от Telegram-управления и участвует в подавлении alert и
+восстановлении RouterOS даже при выключенных Telegram, bot, module,
+feature-флаге или Unblock.
+
 Безопасный исходный режим — `MIKROCLEAR_BOT_DRY_RUN=true`: bot показывает
-планируемое действие и пишет audit, но не меняет JSON и RouterOS. Реальное
-добавление, удаление или разблокировка требует отдельно одобренного переключения
-на `MIKROCLEAR_BOT_DRY_RUN=false`.
+планируемое действие, но не изменяет RouterOS и `dynamic-whitelist.json`.
+Одноразовое состояние `telegram-whitelist-actions.json` сохраняет обычный
+жизненный цикл создания, продвижения, потребления и истечения token; append-only
+audit log также записывается штатно. Реальное изменение RouterOS или managed
+business store требует отдельно одобренного переключения на
+`MIKROCLEAR_BOT_DRY_RUN=false`.
 
 ## Telegram Mangle Control
 

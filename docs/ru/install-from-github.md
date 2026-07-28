@@ -161,6 +161,17 @@ Alert для подходящего адреса показывает `🛡 До
 начнутся только при `MIKROCLEAR_BOT_DRY_RUN=false`; это переключение и live
 проверки требуют отдельного разрешения оператора.
 
+Перечисленные Telegram/admin/module/feature/Unblock gates ограничивают только
+Telegram-операции управления исключениями. Они не отключают runtime policy:
+существующий корректный `dynamic-whitelist.json` загружается независимо от
+Telegram-управления и участвует в подавлении alert и восстановлении RouterOS.
+
+Dry-run не изменяет RouterOS и `dynamic-whitelist.json`, то есть managed
+business store. При этом одноразовое состояние
+`telegram-whitelist-actions.json` сохраняет обычный жизненный цикл, а
+append-only audit log продолжает фиксировать действия. Поэтому сравнивать все
+state-файлы до и после dry-run побайтно нельзя.
+
 Файлы `dynamic-whitelist.json` и `telegram-whitelist-actions.json` по умолчанию
 находятся в `MIKROCLEAR_STATE_DIR` (`/var/lib/mikroclear`). Первый файл имеет
 режим `0600`. Повреждённый managed JSON останавливает startup до обработки

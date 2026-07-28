@@ -73,3 +73,38 @@ class InstallDocumentationTests(TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, repro)
+
+    def test_docs_distinguish_runtime_whitelist_from_telegram_control(self):
+        env_text = (ROOT / "docs/ru/env-reference.md").read_text(encoding="utf-8")
+        guide = GUIDE.read_text(encoding="utf-8")
+        combined = env_text + guide
+        for required in (
+            "ограничивают только Telegram-операции управления исключениями",
+            "загружается независимо от Telegram-управления",
+            "подавлении alert и восстановлении RouterOS",
+            "не изменяет RouterOS и `dynamic-whitelist.json`",
+            "`telegram-whitelist-actions.json` сохраняет обычный жизненный цикл",
+            "append-only audit log",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+
+    def test_live_reproduction_pins_empty_baseline_privacy_and_mangle_fixture(self):
+        text = REPRO.read_text(encoding="utf-8")
+        for required in (
+            "## STOP: отдельно одобряемая live-проверка",
+            "192.168.250.250",
+            "`managed whitelist: 0`",
+            '{"version": 1, "addresses": []}',
+            "не должен содержать `192.168.250.250`",
+            "MIKROCLEAR_MANGLE_CONTROL_ENABLE=true",
+            "MIKROCLEAR_BOT_MODULES=status,mangle_control,whitelist_control",
+            "MC:STAND-MANGLE",
+            "chain=`prerouting`",
+            "action=`mark-routing`",
+            "`✅ STAND-MANGLE`",
+            "`Статус` → `🔀 Mangle`",
+            "`Packets:` и `Bytes:`",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)

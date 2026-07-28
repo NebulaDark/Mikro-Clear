@@ -115,21 +115,50 @@ alert проверьте по DHCP, ARP и инвентарю стенда, чт
    sudo ./scripts/install-selks.sh
    ```
 
-2. В одобренном стендовом env должны быть включены Telegram, bot, Unblock,
-   `whitelist_control` и
-   `MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=true`, а для этой live-проверки
-   установлен `MIKROCLEAR_BOT_DRY_RUN=false`. В admin chat выполните `/status`:
-   ожидаются `bot dry-run: off`, `telegram whitelist control: on`, правильные
-   `state-dir`, `whitelist store` и исходное количество; адреса выводиться не
-   должны.
-3. В изолированной тестовой сети ещё раз подтвердите, что
+2. В одобренном стендовом env задайте все gates явно:
+
+   ```env
+   MIKROCLEAR_TELEGRAM_ENABLE=true
+   MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true
+   MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=true
+   MIKROCLEAR_MANGLE_CONTROL_ENABLE=true
+   MIKROCLEAR_BOT_ENABLE=true
+   MIKROCLEAR_BOT_DRY_RUN=false
+   MIKROCLEAR_BOT_MODULES=status,mangle_control,whitelist_control
+   ```
+
+   В `MIKROCLEAR_BOT_ADMIN_CHAT_IDS` должен быть только заранее одобренный
+   тестовый admin chat. На тестовом RouterOS заранее подготовьте хотя бы одно
+   безопасное managed fixture rule без IP-адресов: имя `STAND-MANGLE`,
+   comment=`MC:STAND-MANGLE`, chain=`prerouting`, action=`mark-routing`.
+   Comment prefix, chain и action должны входить в одобренную Mangle
+   конфигурацию стенда.
+3. До первого alert докажите пустой managed baseline. В admin chat выполните
+   `/status`: ожидаются `bot dry-run: off`,
+   `telegram whitelist control: on`, правильные `state-dir` и
+   `whitelist store`, а также точная строка `managed whitelist: 0`. Вывод
+   `/status` не должен содержать `192.168.250.250` или любой другой адрес из
+   managed store.
+
+   Затем безопасно проверьте файл только на чтение:
+
+   ```bash
+   sudo -u mikroclear /opt/mikroclear-venv/bin/python -c \
+     'import json; from pathlib import Path; p=Path("/var/lib/mikroclear/dynamic-whitelist.json"); d=None if not p.exists() else json.loads(p.read_text(encoding="utf-8")); assert d is None or d == {"version": 1, "addresses": []}; print("managed baseline: 0")'
+   ```
+
+   Допустимы только отсутствие файла или документ
+   `{"version": 1, "addresses": []}`. Если `/status` или команда показывают
+   другое состояние, остановите сценарий и восстановите подготовленный
+   snapshot. Не удаляйте и не сбрасывайте state этой инструкцией.
+4. В изолированной тестовой сети ещё раз подтвердите, что
    `192.168.250.250` не занят. С помощью тестового Suricata rule/fixture
    с подходящими `severity` и `in_iface` создайте контролируемый `BLOCKED` alert,
    где target равен `192.168.250.250`. Сохраните один и тот же sanitized JSON
    event как fixture для повторной подачи.
-4. В alert нажмите `🛡 Добавить в исключения 192.168.250.250`, затем подтвердите
+5. В alert нажмите `🛡 Добавить в исключения 192.168.250.250`, затем подтвердите
    `✅ Добавить и разблокировать`.
-5. Проверьте владельца, режим и точный адрес, не публикуя весь state:
+6. Проверьте владельца, режим и точный адрес, не публикуя весь state:
 
    ```bash
    sudo stat -c '%U:%G %a %n' \
@@ -139,22 +168,28 @@ alert проверьте по DHCP, ARP и инвентарю стенда, чт
    ```
 
    Ожидаются `mikroclear:mikroclear`, режим `600` и `managed fixture: OK`.
-6. На тестовом RouterOS проверьте, что address-list `Suricata` больше не
+7. На тестовом RouterOS проверьте, что address-list `Suricata` больше не
    содержит `192.168.250.250`.
-7. Оператор должен повторно подать тот же controlled EVE event. Ожидаются
+8. Оператор должен повторно подать тот же controlled EVE event. Ожидаются
    отсутствие новой блокировки RouterOS и нового `BLOCKED` alert.
-8. Откройте `🛡 Mikro-Clear` → `🛡 Исключения`, выберите managed-адрес и
+9. Откройте `🛡 Mikro-Clear` → `🛡 Исключения`, выберите managed-адрес и
    подтвердите удаление исключения кнопкой `✅ Удалить исключение`. Системные
    записи не должны предлагать удаление.
-9. Сразу после удаления исключения подтвердите, что Mikro-Clear не добавил
+10. Сразу после удаления исключения подтвердите, что Mikro-Clear не добавил
    адрес в RouterOS автоматически.
-10. Ещё раз повторно подайте controlled event. Ожидаются обычная блокировка
+11. Ещё раз повторно подайте controlled event. Ожидаются обычная блокировка
     `192.168.250.250` в `Suricata` и новый `BLOCKED` alert.
-11. Повторите `/status`, `/mangle` и обычный `🔓 Unblock 192.168.250.250`.
-    `/status` должен показать исходное количество managed entries и не
-    раскрывать список. При искусственно воспроизведённом частичном результате
-    alert должен показать `🔄 Повторить разблокировку`; retry не должен повторно
-    записывать исключение.
+12. Повторите `/status`: он снова должен показать `managed whitelist: 0` и не
+    раскрывать список managed addresses.
+13. Проверьте Mangle двумя независимыми поверхностями. В корневом меню компактная
+    кнопка fixture должна отражать фактическое состояние:
+    `✅ STAND-MANGLE` для enabled или `❌ STAND-MANGLE` для disabled.
+    В `Статус` → `🔀 Mangle` ожидается подробное состояние того же fixture с
+    chain, action, `Packets:` и `Bytes:`. Выполните обычный подтверждённый
+    toggle и верните правило в исходное состояние.
+14. Выполните обычный `🔓 Unblock 192.168.250.250`. При искусственно
+    воспроизведённом частичном результате alert должен показать
+    `🔄 Повторить разблокировку`; retry не должен повторно записывать исключение.
 
 Сохраните evidence с commit SHA, временем, sanitized event SID, `stat`,
 состоянием тестового RouterOS и ожидаемыми Telegram labels. После проверки

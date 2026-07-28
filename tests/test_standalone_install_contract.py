@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import tomllib
 from unittest import TestCase
 
@@ -42,7 +43,15 @@ class StandaloneInstallContractTests(TestCase):
         for path in (INSTALL_GUIDE, INSTALL_REPRODUCTION):
             with self.subTest(path=str(path)):
                 text = path.read_text(encoding="utf-8")
+                self.assertIn("git clone", text)
                 self.assertIn("git rev-parse HEAD", text)
                 self.assertIn("scripts/install-selks.sh", text)
+                self.assertNotIn("/usr/local/bin/mikroclear.py", text)
+                self.assertNotIn("services/mcp-server", text)
                 self.assertNotIn("mcp-selks", text.lower())
                 self.assertNotIn("MCP", text)
+                self.assertNotIn("api.telegram.org", text)
+                self.assertNotRegex(
+                    text,
+                    re.compile(r"\b[0-9]{8,10}:[A-Za-z0-9_-]{30,}\b"),
+                )
