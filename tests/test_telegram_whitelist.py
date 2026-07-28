@@ -1009,6 +1009,110 @@ class TelegramWhitelistHandlerTests(TestCase):
                 ("", False),
             )
 
+    def test_successful_remove_edit_exception_sends_factual_fallback(self):
+        with TemporaryDirectory() as tmp:
+            events = []
+            store = RecordingStore(
+                events,
+                addresses=("192.168.98.200",),
+            )
+            handler = make_handler(tmp, store=store)
+            handler.answer_callback.side_effect = (
+                lambda *_args: events.append("callback:answer")
+            )
+            handler.edit_message.side_effect = ConnectionError(
+                "edit unavailable"
+            )
+            token = create_action(handler, kind="remove_confirm")
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(
+                events[:2],
+                [
+                    "callback:answer",
+                    "store:remove:192.168.98.200",
+                ],
+            )
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.remove_calls, 1)
+            handler.router.assert_not_called()
+            handler.answer_callback.assert_called_once_with(
+                "cb-1",
+                "",
+                False,
+            )
+            handler.send_message.assert_called_once()
+            self.assertEqual(
+                handler.send_message.call_args.kwargs["text"],
+                "Исключение удалено",
+            )
+            self.assertTrue(
+                any(
+                    "POST-REMOVE VIEW FAILED" in call.args[0]
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_successful_remove_returned_delivery_failures_are_swallowed_and_logged(self):
+        with TemporaryDirectory() as tmp:
+            events = []
+            store = RecordingStore(
+                events,
+                addresses=("192.168.98.200",),
+            )
+            handler = make_handler(tmp, store=store)
+            handler.answer_callback.side_effect = (
+                lambda *_args: events.append("callback:answer")
+            )
+            handler.edit_message.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            handler.send_message.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            token = create_action(handler, kind="remove_confirm")
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(
+                events[:2],
+                [
+                    "callback:answer",
+                    "store:remove:192.168.98.200",
+                ],
+            )
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.remove_calls, 1)
+            handler.router.assert_not_called()
+            handler.answer_callback.assert_called_once_with(
+                "cb-1",
+                "",
+                False,
+            )
+            self.assertEqual(handler.send_message.call_count, 2)
+            self.assertEqual(
+                handler.send_message.call_args_list[-1].kwargs["text"],
+                "Исключение удалено",
+            )
+            self.assertTrue(
+                any(
+                    call.args[0]
+                    == "TELEGRAM WHITELIST REMOVE RESULT SEND FAILED"
+                    for call in handler.log.call_args_list
+                )
+            )
+
     def test_alert_extension_requires_private_ip_admin_and_both_features(self):
         cases = (
             ("192.168.98.200", True, True, ("chat-1",), "BLOCKED", True),

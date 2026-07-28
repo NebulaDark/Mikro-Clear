@@ -791,6 +791,7 @@ class TelegramWhitelistHandler:
                 log_prefix="TELEGRAM WHITELIST REMOVE RESULT SEND FAILED",
             )
             return
+        delivery_failed = False
         try:
             view = self.menu_view(
                 page=0,
@@ -798,7 +799,7 @@ class TelegramWhitelistHandler:
                 user_id=user_id,
                 now=now,
             )
-            self._edit_or_send(
+            response = self._edit_or_send(
                 view,
                 chat_id=chat_id,
                 message_id=message_id,
@@ -807,10 +808,25 @@ class TelegramWhitelistHandler:
                 telegram_token=telegram_token,
                 timeout=timeout,
             )
+            if getattr(response, "ok", True) is False:
+                delivery_failed = True
+                self.log(
+                    "TELEGRAM WHITELIST POST-REMOVE VIEW FAILED"
+                )
         except Exception as exc:
+            delivery_failed = True
             self.log(
                 "TELEGRAM WHITELIST POST-REMOVE VIEW FAILED: "
                 f"{type(exc).__name__}"
+            )
+        if delivery_failed:
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Исключение удалено",
+                timeout=timeout,
+                log_prefix="TELEGRAM WHITELIST REMOVE RESULT SEND FAILED",
             )
 
     def _remove_from_routeros(self, list_name: str, address: str) -> bool:
