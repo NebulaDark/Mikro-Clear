@@ -10,6 +10,7 @@ from time import time
 from typing import Any, Callable
 
 from mikroclear.bot.audit import BotAuditLog
+from mikroclear.bot.gates import bot_module_enabled
 from mikroclear.bot.mangle_control import (
     build_mangle_confirm_keyboard,
     build_mangle_control_keyboard,
@@ -175,6 +176,11 @@ class TelegramMangleHandler:
         user_id: str,
         update_id: str = "",
     ) -> MenuView:
+        if not self._control_enabled():
+            return MenuView(
+                "Mangle control is disabled",
+                {"inline_keyboard": []},
+            )
         rules = self._read_rules()
         self.log(
             f"Telegram /mangle managed rules: {len(rules)} for chat {chat_id}"
@@ -267,8 +273,11 @@ class TelegramMangleHandler:
         user_id: str,
         target: str = "",
         detail: str = "",
-    ) -> None:
-        if self.audit is not None:
+    ) -> bool:
+        if self.audit is None:
+            self.log("TELEGRAM MANGLE AUDIT FAILED: audit unavailable")
+            return False
+        try:
             self.audit.record(
                 "mangle.change",
                 outcome,
@@ -277,6 +286,20 @@ class TelegramMangleHandler:
                 target,
                 detail,
             )
+        except Exception as exc:
+            self.log(
+                "TELEGRAM MANGLE AUDIT FAILED: "
+                f"{type(exc).__name__}"
+            )
+            return False
+        return True
+
+    def _control_enabled(self) -> bool:
+        return bot_module_enabled(
+            self.bot_settings,
+            "mangle_control",
+            feature_enabled=bool(self.settings.mangle_control_enable),
+        )
 
     def _payload_matches_requester(self, payload: dict[str, Any], chat_id: str, user_id: str) -> bool:
         return (
@@ -288,6 +311,8 @@ class TelegramMangleHandler:
         self,
         payload: dict[str, Any],
         *,
+        action_token: str,
+        now: int,
         callback_id: str,
         message_id: Any,
         chat_id: str,
@@ -320,7 +345,45 @@ class TelegramMangleHandler:
             )
             return
 
-        self._record_audit("attempted", chat_id, user_id, rule_id, action)
+        if not self._record_audit(
+            "attempted",
+            chat_id,
+            user_id,
+            rule_id,
+            action,
+        ):
+            answer_callback(
+                callback_id,
+                "Could not record mangle audit",
+                True,
+            )
+            return
+        if not self._control_enabled():
+            answer_callback(
+                callback_id,
+                "Mangle control is disabled",
+                True,
+            )
+            return
+        consumed = self._consume_token(action_token, now=now)
+        if consumed is None or not self._payload_matches_requester(
+            consumed, chat_id, user_id
+        ):
+            self._record_audit("stale", chat_id, user_id, rule_id, action)
+            answer_callback(
+                callback_id,
+                "Mangle request expired or already used",
+                True,
+            )
+            return
+        payload = consumed
+        if not self._control_enabled():
+            answer_callback(
+                callback_id,
+                "Mangle control is disabled",
+                True,
+            )
+            return
         if self.bot_settings.dry_run:
             self._record_audit("dry-run", chat_id, user_id, rule_id, action)
             answer_text = "Dry-run: no change applied"
@@ -397,7 +460,7 @@ class TelegramMangleHandler:
         if not auth.can_read(chat_id):
             self.log(f"Rejected Telegram /mangle from unauthorized chat {chat_id}")
             return True
-        if not self.settings.mangle_control_enable:
+        if not self._control_enabled():
             send_message(token=token, chat_id=chat_id, text="Mangle control is disabled", timeout=timeout)
             return True
         try:
@@ -445,7 +508,7 @@ class TelegramMangleHandler:
             answer_callback(callback_id, "Unauthorized", True)
             self.log(f"Rejected Telegram mangle callback from unauthorized chat {chat_id}")
             return True
-        if not self.settings.mangle_control_enable:
+        if not self._control_enabled():
             answer_callback(callback_id, "Mangle control is disabled", True)
             return True
 
@@ -502,17 +565,10 @@ class TelegramMangleHandler:
                 answer_callback(callback_id, "Unauthorized", True)
                 return True
             if not self.settings.mangle_require_confirmation:
-                payload = self._consume_token(action_token, now=now)
-                if not payload:
-                    self._record_audit("stale", chat_id, user_id)
-                    answer_callback(
-                        callback_id,
-                        "Mangle request expired or already used",
-                        True,
-                    )
-                    return True
                 self._apply_change(
                     payload,
+                    action_token=action_token,
+                    now=now,
                     callback_id=callback_id,
                     message_id=message_id,
                     chat_id=chat_id,
@@ -610,13 +666,10 @@ class TelegramMangleHandler:
                 )
                 answer_callback(callback_id, "Unauthorized", True)
                 return True
-            payload = self._consume_token(action_token, now=now)
-            if not payload:
-                self._record_audit("stale", chat_id, user_id)
-                answer_callback(callback_id, "Mangle request expired or already used", True)
-                return True
             self._apply_change(
                 payload,
+                action_token=action_token,
+                now=now,
                 callback_id=callback_id,
                 message_id=message_id,
                 chat_id=chat_id,

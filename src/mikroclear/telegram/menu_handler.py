@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol
 
 from mikroclear.bot.auth import BotAuth
+from mikroclear.bot.gates import bot_module_enabled
 from mikroclear.bot.menu import (
     LAUNCHER_LABEL,
     MenuItem,
@@ -87,6 +88,8 @@ class TelegramMenuHandler:
             self.log(
                 f"Rejected Telegram menu request from unauthorized chat {chat_id}"
             )
+            return True
+        if not self.bot_settings.enable:
             return True
 
         if command in {"/start", "/menu"}:
@@ -192,22 +195,32 @@ class TelegramMenuHandler:
     def _mangle_available(self) -> bool:
         return bool(
             self.mangle_handler is not None
-            and "mangle_control" in self.bot_settings.modules
-            and self.settings.mangle_control_enable
+            and bot_module_enabled(
+                self.bot_settings,
+                "mangle_control",
+                feature_enabled=bool(self.settings.mangle_control_enable),
+            )
         )
 
     def _whitelist_available(self) -> bool:
         return bool(
             self.whitelist_handler is not None
-            and "whitelist_control" in self.bot_settings.modules
-            and self.settings.telegram_whitelist_control_enable
+            and bot_module_enabled(
+                self.bot_settings,
+                "whitelist_control",
+                feature_enabled=bool(
+                    self.settings.telegram_whitelist_control_enable
+                ),
+            )
         )
 
     def _route_available(self, route: str) -> bool:
+        if not self.bot_settings.enable:
+            return False
         if route == "root":
             return True
         if route in {"status", "status:general"}:
-            return "status" in self.bot_settings.modules
+            return bot_module_enabled(self.bot_settings, "status")
         if route in {"status:mangle", "mangle"}:
             return self._mangle_available()
         if route.startswith("exceptions"):

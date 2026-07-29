@@ -632,18 +632,30 @@ class RecordingAddressList:
         return self
 
     def where(self, *_filters):
-        return ([{".id": "*1"}] if self.owner.removed else [])
+        return (
+            [
+                {
+                    ".id": "*1",
+                    "list": "Suricata",
+                    "address": self.owner.expected_address,
+                }
+            ]
+            if self.owner.row_present
+            else []
+        )
 
     def remove(self, _row_id):
         self.owner.events.append(
             f"router:remove:{self.owner.expected_address}"
         )
+        self.owner.row_present = False
 
 
 class RecordingRouter:
     def __init__(self, events=None, *, removed=1):
         self.events = events if events is not None else []
         self.removed = removed
+        self.row_present = bool(removed)
         self.expected_address = "192.168.98.200"
         self.run_calls = 0
         self.address_list = RecordingAddressList(self)
@@ -675,6 +687,24 @@ class ForgedActions:
 
     def peek(self, *_args, **_kwargs):
         return dict(self.payload)
+
+
+class FailingAudit:
+    def __init__(self, exception=PermissionError("secret audit path")):
+        self.exception = exception
+
+    def record(self, *_args, **_kwargs):
+        raise self.exception
+
+
+class PostAttemptFailingAudit:
+    def __init__(self):
+        self.calls = 0
+
+    def record(self, *_args, **_kwargs):
+        self.calls += 1
+        if self.calls > 1:
+            raise OSError("secret disk full detail")
 
 
 def sample_event():
@@ -738,6 +768,8 @@ def make_handler(
     control_enabled=True,
     unblock_enabled=True,
     admin_chat_ids=("chat-1",),
+    bot_enable=True,
+    bot_modules=("whitelist_control",),
 ):
     resolved_store = store or RecordingStore()
     resolved_router = router or RecordingRouter()
@@ -765,9 +797,10 @@ def make_handler(
         block_list_name="Suricata",
     )
     bot_settings = BotSettings(
+        enable=bot_enable,
         dry_run=dry_run,
         admin_chat_ids=admin_chat_ids,
-        modules=("whitelist_control",),
+        modules=bot_modules,
         audit_log=str(Path(tmp, "audit.jsonl")),
     )
     router_factory = Mock(return_value=resolved_router)
@@ -835,6 +868,245 @@ def dispatch_whitelist_callback(handler, callback_value, *, now=101, auth=None):
 
 
 class TelegramWhitelistHandlerTests(TestCase):
+    def test_disabled_bot_or_missing_module_rejects_old_callback_without_peek_or_consume(self):
+        for bot_settings in (
+            BotSettings(
+                enable=False,
+                admin_chat_ids=("chat-1",),
+                modules=("whitelist_control",),
+            ),
+            BotSettings(
+                enable=True,
+                admin_chat_ids=("chat-1",),
+                modules=("status",),
+            ),
+        ):
+            with self.subTest(bot_settings=bot_settings), TemporaryDirectory() as tmp:
+                actions = Mock()
+                handler = make_handler(tmp, actions=actions)
+                handler.bot_settings = bot_settings
+
+                handled = dispatch_whitelist_callback(
+                    handler,
+                    execute_callback("forged001"),
+                )
+
+                self.assertTrue(handled)
+                actions.peek.assert_not_called()
+                actions.consume.assert_not_called()
+                handler.router.assert_not_called()
+                self.assertEqual(handler.store.snapshot(), ())
+                self.assertEqual(
+                    last_answer(handler),
+                    ("Функция недоступна", True),
+                )
+
+    def test_stale_or_forged_list_name_is_rejected_without_consume_or_routeros(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            actions = ForgedActions(
+                {
+                    "kind": "add_confirm",
+                    "address": "192.168.98.200",
+                    "list_name": "OtherList",
+                    "sid": "1",
+                    "chat_id": "chat-1",
+                    "user_id": "user-1",
+                    "source_chat_id": "chat-1",
+                    "source_message_id": 77,
+                    "source_reply_markup": {"inline_keyboard": []},
+                }
+            )
+            handler = make_handler(tmp, store=store, actions=actions)
+
+            dispatch_whitelist_callback(
+                handler,
+                execute_callback("forged001"),
+            )
+
+            self.assertEqual(actions.consume_calls, 0)
+            self.assertEqual(store.add_calls, 0)
+            handler.router.assert_not_called()
+            self.assertEqual(
+                last_answer(handler),
+                ("Запрос относится к другому address-list", True),
+            )
+
+    def test_routeros_remove_that_leaves_exact_row_is_partial_and_offers_retry(self):
+        class LingeringAddressList:
+            def select(self, *_keys):
+                return self
+
+            def where(self, *_filters):
+                return [{".id": "*1", "list": "Suricata", "address": "192.168.98.200"}]
+
+            def remove(self, _row_id):
+                return None
+
+        class LingeringRouter(RecordingRouter):
+            def __init__(self):
+                super().__init__()
+                self.address_list = LingeringAddressList()
+
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            handler = make_handler(tmp, store=store, router=LingeringRouter())
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            self.assertTrue(store.contains("192.168.98.200"))
+            self.assertEqual(read_audit(handler)["outcome"], "partial")
+            self.assertIn(
+                "🔄 Повторить разблокировку",
+                json.dumps(
+                    handler.edit_markup.call_args.kwargs["reply_markup"],
+                    ensure_ascii=False,
+                ),
+            )
+
+    def test_add_attempt_audit_failure_aborts_before_token_consume_and_business_mutation(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter()
+            handler = make_handler(tmp, store=store, router=router)
+            token = create_action(handler)
+            handler.audit = FailingAudit()
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(router.run_calls, 0)
+            self.assertIsNotNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertIn(
+                "Не удалось записать аудит",
+                handler.send_message.call_args.kwargs["text"],
+            )
+            self.assertTrue(
+                any("PermissionError" in call.args[0] for call in handler.log.call_args_list)
+            )
+            self.assertFalse(
+                any("secret audit path" in call.args[0] for call in handler.log.call_args_list)
+            )
+
+    def test_remove_attempt_audit_failure_aborts_before_token_consume_and_store_mutation(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store)
+            token = create_action(handler, kind="remove_confirm")
+            handler.audit = FailingAudit(OSError("disk full secret"))
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertEqual(store.remove_calls, 0)
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertIsNotNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertIn(
+                "Не удалось записать аудит",
+                handler.send_message.call_args.kwargs["text"],
+            )
+
+    def test_post_mutation_audit_failure_is_best_effort_and_keeps_factual_add_result(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter()
+            handler = make_handler(tmp, store=store, router=router)
+            handler.audit = PostAttemptFailingAudit()
+            token = create_action(handler)
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertTrue(handled)
+            self.assertTrue(store.contains("192.168.98.200"))
+            self.assertEqual(router.run_calls, 1)
+            self.assertIn(
+                "✅ В исключениях 192.168.98.200",
+                json.dumps(
+                    handler.edit_markup.call_args.kwargs["reply_markup"],
+                    ensure_ascii=False,
+                ),
+            )
+            self.assertTrue(
+                any("OSError" in call.args[0] for call in handler.log.call_args_list)
+            )
+            self.assertFalse(
+                any(
+                    "secret disk full detail" in call.args[0]
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_post_mutation_audit_failure_is_best_effort_for_remove(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store)
+            handler.audit = PostAttemptFailingAudit()
+            token = create_action(handler, kind="remove_confirm")
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.remove_calls, 1)
+            handler.edit_message.assert_called_once()
+            self.assertTrue(
+                any("OSError" in call.args[0] for call in handler.log.call_args_list)
+            )
+
+    def test_gate_is_rechecked_after_attempt_audit_before_token_consume(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            handler = make_handler(tmp, store=store)
+
+            class DisablingAudit:
+                def record(self, *_args, **_kwargs):
+                    object.__setattr__(
+                        handler.settings,
+                        "telegram_whitelist_control_enable",
+                        False,
+                    )
+
+            handler.audit = DisablingAudit()
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertEqual(store.add_calls, 0)
+            handler.router.assert_not_called()
+            self.assertIsNotNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
     def test_add_persists_before_routeros_remove_and_updates_only_markup(self):
         with TemporaryDirectory() as tmp:
             events = []
@@ -1146,6 +1418,36 @@ class TelegramWhitelistHandlerTests(TestCase):
                     in json.dumps(markup, ensure_ascii=False),
                     expected,
                 )
+
+    def test_alert_extension_requires_effective_bot_and_module_gate(self):
+        for bot_enable, modules in (
+            (False, ("whitelist_control",)),
+            (True, ("status",)),
+        ):
+            with self.subTest(
+                bot_enable=bot_enable,
+                modules=modules,
+            ), TemporaryDirectory() as tmp:
+                handler = make_handler(
+                    tmp,
+                    bot_enable=bot_enable,
+                    bot_modules=modules,
+                )
+                original = build_unblock_keyboard(
+                    "192.168.98.200",
+                    "unblock-token",
+                )
+
+                markup = handler.extend_alert_keyboard(
+                    original,
+                    event=sample_event(),
+                    wanted_ip="192.168.98.200",
+                    action_type="BLOCKED",
+                    now=100,
+                )
+
+                self.assertEqual(markup, original)
+                self.assertFalse(Path(handler.actions.path).exists())
 
     def test_execute_rechecks_admin_and_feature_flags_before_consume(self):
         for case in ("admin", "control", "unblock"):

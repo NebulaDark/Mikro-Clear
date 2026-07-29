@@ -79,6 +79,7 @@ def make_handler(*, mangle=None, whitelist=None, settings=None, bot_settings=Non
         telegram_whitelist_control_enable=True,
     )
     resolved_bot_settings = bot_settings or BotSettings(
+        enable=True,
         admin_chat_ids=("admin",),
         allowed_chat_ids=("reader",),
         modules=("status", "mangle_control", "whitelist_control"),
@@ -136,6 +137,32 @@ def handle_callback(handler, data, *, chat_id="reader", answer=None, now=100):
 
 
 class TelegramMenuTests(unittest.TestCase):
+    def test_disabled_bot_hides_launcher_and_rejects_old_menu_callback(self):
+        mangle = FakeMangleMenu()
+        whitelist = FakeWhitelistMenu()
+        handler, send, edit = make_handler(
+            mangle=mangle,
+            whitelist=whitelist,
+            bot_settings=BotSettings(
+                enable=False,
+                admin_chat_ids=("admin",),
+                allowed_chat_ids=("reader",),
+                modules=("status", "mangle_control", "whitelist_control"),
+            ),
+        )
+
+        self.assertTrue(handle_message(handler, text="🛡 Mikro-Clear"))
+        handled, answer = handle_callback(
+            handler,
+            "menu:v1:mangle",
+            chat_id="admin",
+        )
+
+        self.assertTrue(handled)
+        answer.assert_called_once_with("cb-1", "Функция недоступна", True)
+        send.assert_not_called()
+        edit.assert_not_called()
+
     def test_start_sends_launcher_and_launcher_opens_inline_root(self):
         handler, send, _edit = make_handler()
 
@@ -340,6 +367,7 @@ class TelegramMenuTests(unittest.TestCase):
         handler, _send, edit = make_handler(
             mangle=FakeMangleMenu(),
             bot_settings=BotSettings(
+                enable=True,
                 admin_chat_ids=("admin",),
                 modules=("mangle_control",),
             ),

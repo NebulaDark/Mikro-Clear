@@ -6,10 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from mikroclear.bot.audit import BotAuditLog
+from mikroclear.bot.gates import bot_module_enabled
 from mikroclear.bot.menu import MenuView
 from mikroclear.bot.modules.exceptions import build_exceptions_view
 from mikroclear.bot.settings import BotSettings
-from mikroclear.routeros.address_list import remove_from_address_list
+from mikroclear.routeros.address_list import (
+    remove_from_address_list,
+    select_address_rows,
+)
 from mikroclear.state.dynamic_whitelist import is_managed_private_ipv4
 from mikroclear.telegram.formatting import escape_html_safe
 from mikroclear.telegram.whitelist_actions import (
@@ -27,6 +31,10 @@ class WhitelistMutationResult:
     managed: bool
     removed: bool
     changed: bool = False
+
+
+class _RouterOsAddressStillPresent(RuntimeError):
+    pass
 
 
 class TelegramWhitelistHandler:
@@ -238,6 +246,23 @@ class TelegramWhitelistHandler:
                 True,
             )
             return True
+        if str(payload.get("list_name", "")) != str(
+            self.settings.block_list_name
+        ):
+            self._record(
+                f"whitelist.{action_name}",
+                "invalid",
+                chat_id,
+                user_id,
+                address,
+                "address-list mismatch",
+            )
+            answer_callback(
+                callback_id,
+                "Запрос относится к другому address-list",
+                True,
+            )
+            return True
 
         answer_callback(callback_id, "", False)
 
@@ -277,6 +302,37 @@ class TelegramWhitelistHandler:
                 now=now,
             )
 
+        audit_action = {
+            "add-confirm": "whitelist.add",
+            "retry-unblock": "whitelist.retry_unblock",
+            "remove-confirm": "whitelist.remove",
+        }[action_name]
+        if not self._record_mandatory_attempt(
+            audit_action,
+            chat_id,
+            user_id,
+            address,
+        ):
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Не удалось записать аудит; действие не выполнено",
+                timeout=timeout,
+                log_prefix="TELEGRAM WHITELIST AUDIT FAILURE DELIVERY FAILED",
+            )
+            return True
+        if not self._execution_allowed(action_name, payload):
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Функция недоступна; действие не выполнено",
+                timeout=timeout,
+                log_prefix="TELEGRAM WHITELIST GATE FAILURE DELIVERY FAILED",
+            )
+            return True
+
         payload = self._consume(
             token,
             now=now,
@@ -291,6 +347,16 @@ class TelegramWhitelistHandler:
                 text="Запрос истёк или уже использован",
                 timeout=timeout,
                 log_prefix="TELEGRAM WHITELIST CONSUME RACE DELIVERY FAILED",
+            )
+            return True
+        if not self._execution_allowed(action_name, payload):
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Функция недоступна; действие не выполнено",
+                timeout=timeout,
+                log_prefix="TELEGRAM WHITELIST GATE FAILURE DELIVERY FAILED",
             )
             return True
 
@@ -408,6 +474,16 @@ class TelegramWhitelistHandler:
         now: int,
     ) -> bool:
         address = str(payload["address"])
+        if not self._execution_allowed("add-request", payload):
+            self._deliver_factual_message(
+                send_message,
+                telegram_token=telegram_token,
+                chat_id=chat_id,
+                text="Функция недоступна",
+                timeout=timeout,
+                log_prefix="TELEGRAM WHITELIST ADD REQUEST GATE DELIVERY FAILED",
+            )
+            return True
         try:
             promoted = self.actions.promote_add_request(
                 token,
@@ -834,14 +910,21 @@ class TelegramWhitelistHandler:
 
         def remove_batch() -> bool:
             address_list, _address_list_v6, _resources = client.paths()
-            return (
-                remove_from_address_list(
-                    address_list,
-                    list_name,
-                    address,
-                )
-                > 0
+            removed = remove_from_address_list(
+                address_list,
+                list_name,
+                address,
             )
+            remaining = select_address_rows(
+                address_list,
+                list_name,
+                address,
+            )
+            if remaining:
+                raise _RouterOsAddressStillPresent(
+                    "address-list row remains after removal"
+                )
+            return removed > 0
 
         return bool(
             client.run_with_reconnect(
@@ -1044,14 +1127,59 @@ class TelegramWhitelistHandler:
         return "Блокировка уже отсутствует", False
 
     def _control_enabled(self) -> bool:
-        return bool(
-            getattr(
-                self.settings,
-                "telegram_whitelist_control_enable",
-                False,
-            )
-            and "whitelist_control" in self.bot_settings.modules
+        return bot_module_enabled(
+            self.bot_settings,
+            "whitelist_control",
+            feature_enabled=bool(
+                getattr(
+                    self.settings,
+                    "telegram_whitelist_control_enable",
+                    False,
+                )
+            ),
         )
+
+    def _execution_allowed(
+        self,
+        action_name: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        if not self._control_enabled():
+            return False
+        if action_name in {
+            "add-request",
+            "add-confirm",
+            "retry-unblock",
+        } and not bool(
+            getattr(self.settings, "telegram_unblock_enable", False)
+        ):
+            return False
+        return str(payload.get("list_name", "")) == str(
+            self.settings.block_list_name
+        )
+
+    def _record_mandatory_attempt(
+        self,
+        action: str,
+        chat_id: str,
+        user_id: str,
+        target: str,
+    ) -> bool:
+        try:
+            self.audit.record(
+                action,
+                "attempted",
+                chat_id,
+                user_id,
+                target,
+            )
+        except Exception as exc:
+            self.log(
+                "TELEGRAM WHITELIST AUDIT FAILED: "
+                f"{type(exc).__name__}"
+            )
+            return False
+        return True
 
     def _peek(
         self,
@@ -1127,14 +1255,20 @@ class TelegramWhitelistHandler:
         target: str,
         detail: str = "",
     ) -> None:
-        self.audit.record(
-            action,
-            outcome,
-            chat_id,
-            user_id,
-            target,
-            detail,
-        )
+        try:
+            self.audit.record(
+                action,
+                outcome,
+                chat_id,
+                user_id,
+                target,
+                detail,
+            )
+        except Exception as exc:
+            self.log(
+                "TELEGRAM WHITELIST AUDIT FAILED: "
+                f"{type(exc).__name__}"
+            )
 
     @staticmethod
     def _callback_context(

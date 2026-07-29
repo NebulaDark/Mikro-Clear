@@ -110,7 +110,9 @@ def rows(disabled="false"):
 
 def live_bot_settings(tmp: str, *, dry_run: bool = False) -> BotSettings:
     return BotSettings(
+        enable=True,
         dry_run=dry_run,
+        modules=("mangle_control",),
         audit_log=str(Path(tmp, "bot-audit.log")),
     )
 
@@ -209,7 +211,201 @@ class MangleControlFormattingTests(TestCase):
 
 class TelegramMangleHandlerTests(TestCase):
     def auth(self):
-        return BotAuth(BotSettings(admin_chat_ids=("chat-1",), allowed_chat_ids=("read-only",)), legacy_chat_id="")
+        return BotAuth(BotSettings(enable=True, admin_chat_ids=("chat-1",), allowed_chat_ids=("read-only",)), legacy_chat_id="")
+
+    def test_disabled_bot_or_missing_module_rejects_command_and_old_callback_without_consuming(self):
+        for bot_settings in (
+            BotSettings(
+                enable=False,
+                admin_chat_ids=("chat-1",),
+                modules=("mangle_control",),
+            ),
+            BotSettings(
+                enable=True,
+                admin_chat_ids=("chat-1",),
+                modules=("status",),
+            ),
+        ):
+            with self.subTest(bot_settings=bot_settings), tempfile.TemporaryDirectory() as tmp:
+                client = FakeClient(rows())
+                handler = TelegramMangleHandler(
+                    settings(tmp),
+                    bot_settings=bot_settings,
+                    get_router_client=lambda: client,
+                    log=Mock(),
+                )
+                token = handler.create_action_token(
+                    "*1", "disable", "chat-1", "user-1", now=100
+                )
+                send = Mock()
+                answer = Mock()
+
+                self.assertTrue(
+                    handler.handle_message(
+                        text="/mangle",
+                        chat_id="chat-1",
+                        user_id="user-1",
+                        auth=self.auth(),
+                        send_message=send,
+                        token="token",
+                        timeout=7,
+                    )
+                )
+                self.assertTrue(
+                    handler.handle_callback(
+                        callback=mangle_callback(f"mangle:confirm:{token}"),
+                        auth=self.auth(),
+                        answer_callback=answer,
+                        send_message=send,
+                        telegram_token="token",
+                        timeout=7,
+                        now=101,
+                    )
+                )
+
+                self.assertEqual(client.api.mangle.updated, [])
+                self.assertIsNotNone(handler._peek_token(token, now=102))
+                answer.assert_called_once_with(
+                    "cb-1", "Mangle control is disabled", True
+                )
+
+    def test_mandatory_attempt_audit_failure_preserves_token_and_aborts_update(self):
+        class FailingAudit:
+            def record(self, *_args, **_kwargs):
+                raise PermissionError("secret audit path")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(rows())
+            log = Mock()
+            handler = TelegramMangleHandler(
+                settings(tmp),
+                bot_settings=live_bot_settings(tmp),
+                audit=FailingAudit(),
+                get_router_client=lambda: client,
+                log=log,
+            )
+            token = handler.create_action_token(
+                "*1", "disable", "chat-1", "user-1", now=100
+            )
+            answer = Mock()
+
+            handler.handle_callback(
+                callback=mangle_callback(f"mangle:confirm:{token}"),
+                auth=self.auth(),
+                answer_callback=answer,
+                send_message=Mock(),
+                telegram_token="token",
+                timeout=7,
+                now=101,
+            )
+
+            self.assertEqual(client.api.mangle.updated, [])
+            self.assertIsNotNone(handler._peek_token(token, now=102))
+            answer.assert_called_once_with(
+                "cb-1", "Could not record mangle audit", True
+            )
+            self.assertTrue(
+                any("PermissionError" in call.args[0] for call in log.call_args_list)
+            )
+            self.assertFalse(
+                any("secret audit path" in call.args[0] for call in log.call_args_list)
+            )
+
+    def test_post_mutation_audit_failure_is_best_effort_and_still_rereads_state(self):
+        class PostAttemptFailingAudit:
+            def __init__(self):
+                self.calls = 0
+
+            def record(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    raise OSError("secret disk full detail")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(rows())
+            log = Mock()
+            edit = Mock(return_value=FakeSendResult())
+            handler = TelegramMangleHandler(
+                settings(tmp),
+                bot_settings=live_bot_settings(tmp),
+                audit=PostAttemptFailingAudit(),
+                get_router_client=lambda: client,
+                log=log,
+            )
+            token = handler.create_action_token(
+                "*1", "disable", "chat-1", "user-1", now=100
+            )
+            answer = Mock()
+
+            handled = handler.handle_callback(
+                callback=mangle_callback(f"mangle:confirm:{token}"),
+                auth=self.auth(),
+                answer_callback=answer,
+                send_message=Mock(),
+                edit_message=edit,
+                telegram_token="token",
+                timeout=7,
+                now=101,
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(
+                client.api.mangle.updated,
+                [("*1", {"disabled": "yes"})],
+            )
+            self.assertEqual(last_rule_button(edit)["text"], "❌ AI-Tunnel")
+            answer.assert_called_once_with(
+                "cb-1", "Mangle rule updated", False
+            )
+            self.assertTrue(
+                any("OSError" in call.args[0] for call in log.call_args_list)
+            )
+            self.assertFalse(
+                any(
+                    "secret disk full detail" in call.args[0]
+                    for call in log.call_args_list
+                )
+            )
+
+    def test_gate_is_rechecked_after_attempt_audit_before_token_consume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(rows())
+            handler = TelegramMangleHandler(
+                settings(tmp),
+                bot_settings=live_bot_settings(tmp),
+                get_router_client=lambda: client,
+                log=Mock(),
+            )
+
+            class DisablingAudit:
+                def record(self, *_args, **_kwargs):
+                    object.__setattr__(
+                        handler.settings,
+                        "mangle_control_enable",
+                        False,
+                    )
+
+            handler.audit = DisablingAudit()
+            token = handler.create_action_token(
+                "*1", "disable", "chat-1", "user-1", now=100
+            )
+            answer = Mock()
+
+            handler.handle_callback(
+                callback=mangle_callback(f"mangle:confirm:{token}"),
+                auth=self.auth(),
+                answer_callback=answer,
+                send_message=Mock(),
+                telegram_token="token",
+                timeout=7,
+                now=101,
+            )
+
+            self.assertEqual(client.api.mangle.updated, [])
+            self.assertIsNotNone(handler._peek_token(token, now=102))
+            answer.assert_called_once_with(
+                "cb-1", "Mangle control is disabled", True
+            )
 
     def test_mangle_unauthorized_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,7 +451,12 @@ class TelegramMangleHandlerTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             send = Mock()
             log = Mock()
-            handler = TelegramMangleHandler(settings(tmp), get_router_client=lambda: FakeClient(rows()), log=log)
+            handler = TelegramMangleHandler(
+                settings(tmp),
+                bot_settings=live_bot_settings(tmp),
+                get_router_client=lambda: FakeClient(rows()),
+                log=log,
+            )
 
             handled = handler.handle_message(
                 text="/mangle",
@@ -307,7 +508,12 @@ class TelegramMangleHandlerTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log = Mock()
             send = Mock(return_value=FakeSendResult(ok=False, response_text="HTTP 403: forbidden"))
-            handler = TelegramMangleHandler(settings(tmp), get_router_client=lambda: FakeClient(rows()), log=log)
+            handler = TelegramMangleHandler(
+                settings(tmp),
+                bot_settings=live_bot_settings(tmp),
+                get_router_client=lambda: FakeClient(rows()),
+                log=log,
+            )
 
             handled = handler.handle_message(
                 text="/mangle",
@@ -328,6 +534,7 @@ class TelegramMangleHandlerTests(TestCase):
             send = Mock()
             handler = TelegramMangleHandler(
                 settings(tmp),
+                bot_settings=live_bot_settings(tmp),
                 get_router_client=lambda: FakeClient(rows()),
                 log=Mock(),
                 token_factory=lambda: next(generated),
@@ -746,7 +953,12 @@ class TelegramMangleHandlerTests(TestCase):
     def test_refresh_returns_current_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             send = Mock()
-            handler = TelegramMangleHandler(settings(tmp), get_router_client=lambda: FakeClient(rows("true")), log=Mock())
+            handler = TelegramMangleHandler(
+                settings(tmp),
+                bot_settings=live_bot_settings(tmp),
+                get_router_client=lambda: FakeClient(rows("true")),
+                log=Mock(),
+            )
 
             handled = handler.handle_callback(
                 callback={"id": "cb-1", "data": "mangle:refresh", "message": {"chat": {"id": "chat-1"}}, "from": {"id": "user-1"}},
