@@ -1,13 +1,16 @@
 from pathlib import Path
+import importlib.util
 import os
 import shlex
 import subprocess
 import tempfile
 from unittest import TestCase
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/install-selks.sh"
+PERMISSIONS_HELPER = ROOT / "scripts/normalize_runtime_permissions.py"
 
 
 def run_bash(body: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -22,6 +25,18 @@ def run_bash(body: str, *, env: dict[str, str] | None = None) -> subprocess.Comp
         capture_output=True,
         check=False,
     )
+
+
+def load_permissions_helper():
+    spec = importlib.util.spec_from_file_location(
+        "normalize_runtime_permissions",
+        PERMISSIONS_HELPER,
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("cannot load runtime permissions helper")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class SelksStandaloneInstallerTests(TestCase):
@@ -167,6 +182,12 @@ class SelksStandaloneInstallerTests(TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("apt-get is unavailable", result.stderr)
 
+    def test_find_dependency_maps_to_findutils(self):
+        result = run_bash("package_for_command find")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "findutils\n")
+
     def test_disk_space_check_fails_below_required_kib(self):
         result = run_bash(
             'available_kib(){ printf "100\\n"; }; '
@@ -207,6 +228,235 @@ class SelksStandaloneInstallerTests(TestCase):
                 "MIKROCLEAR_ROUTER_PASSWORD=",
                 env_file.read_text(encoding="utf-8"),
             )
+
+    def test_existing_runtime_permissions_are_normalized_for_service_user(self):
+        self.assertTrue(PERMISSIONS_HELPER.is_file())
+        helper = load_permissions_helper()
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = Path(root) / "etc/mikroclear"
+            cert_dir = config_dir / "certs"
+            state_dir = Path(root) / "var/lib/mikroclear"
+            nested_dir = state_dir / "nested"
+            cert_dir.mkdir(parents=True)
+            nested_dir.mkdir(parents=True)
+            env_file = config_dir / "mikroclear.env"
+            ca_file = cert_dir / "mikrotik-ca.crt"
+            state_file = state_dir / "dynamic-whitelist.json"
+            nested_file = nested_dir / "telegram-actions.json"
+            for path in (env_file, ca_file, state_file, nested_file):
+                path.write_text("fixture\n", encoding="utf-8")
+                path.chmod(0o644)
+            state_dir.chmod(0o755)
+            nested_dir.chmod(0o755)
+
+            helper.normalize_permissions(
+                env_file=env_file,
+                ca_file=ca_file,
+                state_dir=state_dir,
+                config_uid=os.getuid(),
+                service_uid=os.getuid(),
+                service_gid=os.getgid(),
+            )
+
+            self.assertEqual(env_file.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(ca_file.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(state_dir.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(nested_dir.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(state_file.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(nested_file.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(env_file.stat().st_uid, os.getuid())
+            self.assertEqual(state_file.stat().st_uid, os.getuid())
+
+    def test_existing_runtime_permission_migration_rejects_state_symlinks(self):
+        self.assertTrue(PERMISSIONS_HELPER.is_file())
+        helper = load_permissions_helper()
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = Path(root) / "etc/mikroclear"
+            state_dir = Path(root) / "var/lib/mikroclear"
+            config_dir.mkdir(parents=True)
+            state_dir.mkdir(parents=True)
+            env_file = config_dir / "mikroclear.env"
+            env_file.write_text("fixture\n", encoding="utf-8")
+            (state_dir / "unexpected-link").symlink_to("/tmp")
+
+            with self.assertRaisesRegex(OSError, "unexpected state entry"):
+                helper.normalize_permissions(
+                    env_file=env_file,
+                    ca_file=config_dir / "missing.crt",
+                    state_dir=state_dir,
+                    config_uid=os.getuid(),
+                    service_uid=os.getuid(),
+                    service_gid=os.getgid(),
+                )
+
+    def test_runtime_permission_helper_propagates_mutation_failure(self):
+        self.assertTrue(PERMISSIONS_HELPER.is_file())
+        helper = load_permissions_helper()
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = Path(root) / "etc/mikroclear"
+            state_dir = Path(root) / "var/lib/mikroclear"
+            config_dir.mkdir(parents=True)
+            state_dir.mkdir(parents=True)
+            env_file = config_dir / "mikroclear.env"
+            env_file.write_text("fixture\n", encoding="utf-8")
+
+            with patch.object(
+                helper.os,
+                "fchmod",
+                side_effect=PermissionError("denied"),
+            ):
+                with self.assertRaises(PermissionError):
+                    helper.normalize_permissions(
+                        env_file=env_file,
+                        ca_file=config_dir / "missing.crt",
+                        state_dir=state_dir,
+                        config_uid=os.getuid(),
+                        service_uid=os.getuid(),
+                        service_gid=os.getgid(),
+                    )
+
+    def test_runtime_permission_helper_rejects_swap_to_symlink(self):
+        self.assertTrue(PERMISSIONS_HELPER.is_file())
+        helper = load_permissions_helper()
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = Path(root) / "etc/mikroclear"
+            state_dir = Path(root) / "var/lib/mikroclear"
+            config_dir.mkdir(parents=True)
+            state_dir.mkdir(parents=True)
+            env_file = config_dir / "mikroclear.env"
+            env_file.write_text("fixture\n", encoding="utf-8")
+            state_file = state_dir / "state.json"
+            original_state = state_dir / "state.original"
+            state_file.write_text("{}\n", encoding="utf-8")
+            external = Path(root) / "external"
+            external.write_text("external\n", encoding="utf-8")
+            external.chmod(0o644)
+            original_open = helper.os.open
+            swapped = False
+
+            def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal swapped
+                if (
+                    path == "state.json"
+                    and dir_fd is not None
+                    and not swapped
+                ):
+                    swapped = True
+                    state_file.replace(original_state)
+                    state_file.symlink_to(external)
+                if dir_fd is None:
+                    return original_open(path, flags, mode)
+                return original_open(path, flags, mode, dir_fd=dir_fd)
+
+            with patch.object(helper.os, "open", side_effect=racing_open):
+                with self.assertRaises(OSError):
+                    helper.normalize_permissions(
+                        env_file=env_file,
+                        ca_file=config_dir / "missing.crt",
+                        state_dir=state_dir,
+                        config_uid=os.getuid(),
+                        service_uid=os.getuid(),
+                        service_gid=os.getgid(),
+                    )
+
+            self.assertTrue(swapped)
+            self.assertEqual(external.stat().st_mode & 0o777, 0o644)
+
+    def test_runtime_permission_helper_rejects_swap_to_fifo_without_blocking(self):
+        self.assertTrue(PERMISSIONS_HELPER.is_file())
+        helper = load_permissions_helper()
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = Path(root) / "etc/mikroclear"
+            state_dir = Path(root) / "var/lib/mikroclear"
+            config_dir.mkdir(parents=True)
+            state_dir.mkdir(parents=True)
+            env_file = config_dir / "mikroclear.env"
+            env_file.write_text("fixture\n", encoding="utf-8")
+            state_file = state_dir / "state.json"
+            original_state = state_dir / "state.original"
+            state_file.write_text("{}\n", encoding="utf-8")
+            original_open = helper.os.open
+            swapped = False
+
+            def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal swapped
+                if (
+                    path == "state.json"
+                    and dir_fd is not None
+                    and not swapped
+                ):
+                    self.assertTrue(flags & os.O_NONBLOCK)
+                    swapped = True
+                    state_file.replace(original_state)
+                    os.mkfifo(state_file)
+                if dir_fd is None:
+                    return original_open(path, flags, mode)
+                return original_open(path, flags, mode, dir_fd=dir_fd)
+
+            with patch.object(helper.os, "open", side_effect=racing_open):
+                with self.assertRaises(OSError):
+                    helper.normalize_permissions(
+                        env_file=env_file,
+                        ca_file=config_dir / "missing.crt",
+                        state_dir=state_dir,
+                        config_uid=os.getuid(),
+                        service_uid=os.getuid(),
+                        service_gid=os.getgid(),
+                    )
+
+            self.assertTrue(swapped)
+
+    def test_runtime_permission_helper_rejects_cross_device_state_entry(self):
+        self.assertTrue(PERMISSIONS_HELPER.is_file())
+        helper = load_permissions_helper()
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = Path(root) / "etc/mikroclear"
+            state_dir = Path(root) / "var/lib/mikroclear"
+            config_dir.mkdir(parents=True)
+            state_dir.mkdir(parents=True)
+            env_file = config_dir / "mikroclear.env"
+            env_file.write_text("fixture\n", encoding="utf-8")
+            state_file = state_dir / "state.json"
+            state_file.write_text("{}\n", encoding="utf-8")
+            state_file.chmod(0o644)
+            original_stat = helper.os.stat
+
+            def cross_device_stat(
+                path,
+                *,
+                dir_fd=None,
+                follow_symlinks=True,
+            ):
+                current = original_stat(
+                    path,
+                    dir_fd=dir_fd,
+                    follow_symlinks=follow_symlinks,
+                )
+                if path == "state.json" and dir_fd is not None:
+                    values = list(current)
+                    values[2] = current.st_dev + 1
+                    return os.stat_result(values)
+                return current
+
+            with patch.object(
+                helper.os,
+                "stat",
+                side_effect=cross_device_stat,
+            ):
+                with self.assertRaisesRegex(
+                    OSError,
+                    "cross-device state entry",
+                ):
+                    helper.normalize_permissions(
+                        env_file=env_file,
+                        ca_file=config_dir / "missing.crt",
+                        state_dir=state_dir,
+                        config_uid=os.getuid(),
+                        service_uid=os.getuid(),
+                        service_gid=os.getgid(),
+                    )
+
+            self.assertEqual(state_file.stat().st_mode & 0o777, 0o644)
 
     def test_existing_template_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as root:
@@ -591,6 +841,7 @@ class SelksStandaloneInstallerTests(TestCase):
             'create_backup(){ events+=" backup"; }; '
             'prepare_candidate_venv(){ events+=" prepare"; }; '
             'stop_service(){ events+=" stop"; }; '
+            'normalize_existing_runtime_permissions(){ events+=" permissions"; }; '
             'switch_candidate_venv(){ events+=" switch"; }; '
             'install_unit_candidate(){ events+=" unit"; }; '
             'reload_service_manager(){ events+=" reload"; }; '
@@ -602,7 +853,27 @@ class SelksStandaloneInstallerTests(TestCase):
 
         self.assertEqual(
             result.stdout,
-            "1| backup prepare stop switch unit reload accept rollback\n",
+            "1| backup prepare stop permissions switch unit reload accept rollback\n",
+        )
+
+    def test_permission_migration_failure_restores_old_service_before_switch(self):
+        result = run_bash(
+            'events=""; '
+            'create_backup(){ events+=" backup"; }; '
+            'prepare_candidate_venv(){ events+=" prepare"; }; '
+            'stop_service(){ events+=" stop"; }; '
+            'normalize_existing_runtime_permissions(){ '
+            'events+=" permissions"; return 1; }; '
+            'restore_backup_files(){ events+=" restore"; }; '
+            'start_service(){ events+=" start"; }; '
+            'switch_candidate_venv(){ events+=" switch"; }; '
+            "HAD_PREVIOUS_INSTALL=true; WHEEL_PATH=fixture.whl; "
+            'install_or_update || rc=$?; printf "%s|%s\\n" "${rc:-0}" "$events"'
+        )
+
+        self.assertEqual(
+            result.stdout,
+            "1| backup prepare stop permissions restore start\n",
         )
 
     def test_clean_failure_stops_without_rollback(self):
@@ -611,6 +882,7 @@ class SelksStandaloneInstallerTests(TestCase):
             'create_backup(){ events+=" backup"; }; '
             'prepare_candidate_venv(){ events+=" prepare"; }; '
             'stop_service(){ events+=" stop"; }; '
+            'normalize_existing_runtime_permissions(){ events+=" permissions"; }; '
             'switch_candidate_venv(){ events+=" switch"; }; '
             'install_unit_candidate(){ events+=" unit"; }; '
             'reload_service_manager(){ events+=" reload"; }; '
@@ -622,7 +894,7 @@ class SelksStandaloneInstallerTests(TestCase):
 
         self.assertEqual(
             result.stdout,
-            "1| prepare switch unit reload accept stop\n",
+            "1| prepare permissions switch unit reload accept stop\n",
         )
 
     def test_rollback_restores_previous_files_and_venv(self):

@@ -206,6 +206,7 @@ package_for_command() {
     case "$1" in
         python3) printf '%s\n' "python3 python3-venv python3-pip" ;;
         git) printf '%s\n' "git" ;;
+        find) printf '%s\n' "findutils" ;;
         openssl) printf '%s\n' "openssl" ;;
         systemctl | systemd-analyze | journalctl) printf '%s\n' "systemd" ;;
         flock | runuser | namei) printf '%s\n' "util-linux" ;;
@@ -369,6 +370,16 @@ install_layout() {
     install_owned_dir root "${SERVICE_GROUP}" 0750 "${CERT_DIR}"
     install_owned_dir "${SERVICE_USER}" "${SERVICE_GROUP}" 0700 "${STATE_DIR}"
     install_owned_dir root root 0700 "${BACKUP_ROOT}"
+}
+
+normalize_existing_runtime_permissions() {
+    python3 "${REPO_ROOT}/scripts/normalize_runtime_permissions.py" \
+        --env-file "${ENV_FILE}" \
+        --ca-file "${CA_FILE}" \
+        --state-dir "${STATE_DIR}" \
+        --config-user root \
+        --service-user "${SERVICE_USER}" \
+        --service-group "${SERVICE_GROUP}"
 }
 
 write_template_config() {
@@ -1112,6 +1123,13 @@ install_or_update() {
     fi
     if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
         stop_service
+    fi
+    if ! normalize_existing_runtime_permissions; then
+        if [[ "${HAD_PREVIOUS_INSTALL}" == "true" ]]; then
+            restore_backup_files || return 1
+            start_service || return 1
+        fi
+        return 1
     fi
     if ! switch_candidate_venv; then
         return 1
