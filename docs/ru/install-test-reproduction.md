@@ -51,7 +51,7 @@ cat /etc/os-release
 Получите точную версию кода:
 
 ```bash
-git clone https://github.com/paveltarasov50-coder/Mikro-Clear.git
+git clone https://github.com/NebulaDark/Mikro-Clear.git
 cd Mikro-Clear
 git switch --detach <tag-or-commit>
 git rev-parse HEAD
