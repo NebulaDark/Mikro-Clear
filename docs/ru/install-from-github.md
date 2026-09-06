@@ -61,7 +61,7 @@ ExecStart=... /opt/mikroclear-venv/bin/python -m mikroclear ...
 Для чистой установки:
 
 ```bash
-git clone https://github.com/paveltarasov50-coder/Mikro-Clear.git
+git clone https://github.com/NebulaDark/Mikro-Clear.git
 cd Mikro-Clear
 ```
 
