@@ -36,7 +36,7 @@ Debian или другой Linux с systemd также может работат
 Выполните эти команды непосредственно на SELKS:
 
 ```bash
-git clone https://github.com/paveltarasov50-coder/Mikro-Clear.git
+git clone https://github.com/NebulaDark/Mikro-Clear.git
 cd Mikro-Clear
 git switch --detach <tag-or-commit>
 git status --short
