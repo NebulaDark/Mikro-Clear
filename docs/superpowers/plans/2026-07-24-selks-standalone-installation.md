@@ -1309,7 +1309,7 @@ Expected: FAIL because the current guide assumes SSH/existing venv and reproduct
 `docs/ru/install-from-github.md` must contain exact commands for:
 
 ```bash
-git clone https://github.com/paveltarasov50-coder/Mikro-Clear.git
+git clone https://github.com/NebulaDark/Mikro-Clear.git
 cd Mikro-Clear
 git switch --detach <tag-or-commit>
 sudo ./scripts/install-selks.sh
