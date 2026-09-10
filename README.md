@@ -34,6 +34,7 @@ Russian deployment and operator documentation:
 
 ```text
 docs/ru/install-from-github.md
+docs/ru/install-test-reproduction.md
 docs/ru/env-reference.md
 docs/ru/architecture.md
 docs/ru/deploy-2026-07-06.md

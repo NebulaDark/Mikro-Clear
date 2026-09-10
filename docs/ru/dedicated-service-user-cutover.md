@@ -1,111 +1,65 @@
-# Dedicated service user cutover
+# Отдельный пользователь службы Mikro-Clear
 
-Дата: 2026-07-06.
+Обновлено: 2026-09-10 при завершении PR №4.
 
-Цель: подготовить перевод `mikroclear.service` с `root` на отдельного
-system user `mikroclear` без смешивания этого шага с legacy fallback cleanup.
-
-## Текущий статус
-
-Tracked unit пока остается:
-
-```ini
-User=root
-Group=root
-```
-
-Причина: current Codex/MCP доступ не имеет passwordless sudo для проверки и
-переноса ownership внутри `/var/lib/mikroclear`, а также для полного audit
-read-access к SELKS paths.
-
-## Preconditions
-
-Перед изменением unit должны быть выполнены все условия:
-
-1. State reconciliation завершен под root/operator.
-2. `/var/lib/mikroclear` содержит нужные runtime files.
-3. `/var/lib/mikroclear` принадлежит `mikroclear:mikroclear`.
-4. Service user читает Suricata `eve.json`.
-5. Service user читает RouterOS CA/cert paths из env.
-6. Legacy env fallback уже удален из tracked unit и production deploy прошел
-   stable observation window.
-
-## Operator commands
-
-Выполнять на SELKS под sudo-capable operator:
-
-```bash
-sudo useradd --system --home /var/lib/mikroclear --shell /usr/sbin/nologin mikroclear 2>/dev/null || true
-
-sudo install -d -o mikroclear -g mikroclear -m 700 /var/lib/mikroclear
-sudo chown -R mikroclear:mikroclear /var/lib/mikroclear
-
-sudo -u mikroclear test -r /opt/SELKS/docker/containers-data/suricata/logs/eve.json
-```
-
-Если `eve.json` недоступен:
-
-```bash
-sudo setfacl -m u:mikroclear:rx /opt/SELKS/docker/containers-data/suricata/logs
-sudo setfacl -m u:mikroclear:r /opt/SELKS/docker/containers-data/suricata/logs/eve.json
-```
-
-Проверить RouterOS TLS files, подставив значения из
-`/etc/mikroclear/mikroclear.env`:
-
-```bash
-sudo -u mikroclear test -r /etc/mikrocata/certs/mikrotik-ca.crt
-```
-
-Если certificate path будет перенесен в `/etc/mikroclear`, проверить новый path
-точно так же.
-
-## Unit change
-
-Только после preconditions:
+В текущем репозитории оба systemd unit уже используют:
 
 ```ini
 User=mikroclear
 Group=mikroclear
+WorkingDirectory=/
+EnvironmentFile=/etc/mikroclear/mikroclear.env
 ```
 
-Deploy unit отдельным approved operation:
+Это состояние исходников, а не подтверждение текущей конфигурации SELKS.
+При завершении PR сервер не проверялся и не изменялся.
+
+## Поддерживаемый переход
+
+Для старой установки используйте [инструкцию установки](install-from-github.md).
+`scripts/install-selks.sh` создаёт пользователя, проверяет доступ к `eve.json`,
+нормализует права runtime-файлов и выполняет обновление с резервной копией и
+проверкой запуска. Ручная замена только `User`/`Group` не заменяет эти шаги.
+
+Если старый env требует миграции, сначала изучите
+`scripts/migrate-selks-config-f6ac4d2.py`: он отдельно переносит параметры и CA,
+создаёт резервную копию и оставляет операции бота в dry-run. Применять его
+повторно без сверки текущих настроек нельзя: он задаёт целевые значения Bot.
+
+Ожидаемые права соответствуют установщику:
+
+| Объект | Владелец | Режим |
+|---|---|---|
+| `/var/lib/mikroclear` | `mikroclear:mikroclear` | `0700` |
+| `/etc/mikroclear/mikroclear.env` | `root:mikroclear` | `0640` |
+| `/etc/mikroclear/certs/mikrotik-ca.crt` | `root:mikroclear` | `0640` |
+
+Не выполняйте рекурсивный `chown` над state-каталогом вместо проверок
+установщика. Доступ к Suricata должен сохраняться после ротации логов.
+
+## Проверка на SELKS
+
+Команды чтения для оператора с соответствующими правами:
 
 ```bash
-sudo systemd-analyze verify /etc/systemd/system/mikroclear.service
-sudo systemctl daemon-reload
-sudo systemctl restart mikroclear.service
-sudo systemctl status mikroclear.service --no-pager --lines=30
+systemctl show mikroclear.service --property=ActiveState,SubState,NRestarts,User,Group,TasksCurrent,ExecStart --no-pager
+sudo stat -c '%U:%G %a %n' /var/lib/mikroclear /etc/mikroclear/mikroclear.env /etc/mikroclear/certs/mikrotik-ca.crt
+sudo -u mikroclear test -r /opt/SELKS/docker/containers-data/suricata/logs/eve.json
+sudo -u mikroclear test -r /etc/mikroclear/certs/mikrotik-ca.crt
+sudo -u mikroclear test -w /var/lib/mikroclear
 ```
 
-## Verification
+Путь `eve.json` и необходимость CA сверяйте с действующей конфигурацией.
+Не публикуйте содержимое env или необработанный журнал с секретами.
 
-```bash
-systemctl show mikroclear.service --property=ActiveState,SubState,NRestarts,ExecMainStartTimestamp,User,Group --no-pager
-sudo journalctl -u mikroclear.service -n 200 --no-pager \
-  | sed -E 's#/bot[0-9]+:[A-Za-z0-9_-]+/#/bot***MASKED***/#g' \
-  | grep -Ei 'permission denied|traceback|failed|routeros|eve.json' || true
-```
+При включённом Telegram polling дополнительно нужны сообщение
+`Telegram polling worker started`, не менее двух задач процесса и окно
+наблюдения без перезапусков. Одного `active/running` недостаточно.
 
-Acceptance criteria:
+## Откат
 
-- `ActiveState=active`;
-- `SubState=running`;
-- `NRestarts=0`;
-- no `Permission denied`;
-- RouterOS connects;
-- `eve.json` monitoring starts;
-- state files are writable by `mikroclear`.
-
-## Rollback
-
-If service fails after the user change:
-
-```bash
-sudo sed -i 's/^User=mikroclear$/User=root/; s/^Group=mikroclear$/Group=root/' /etc/systemd/system/mikroclear.service
-sudo systemctl daemon-reload
-sudo systemctl restart mikroclear.service
-sudo systemctl status mikroclear.service --no-pager --lines=30
-```
-
-Do not delete the `mikroclear` user until logs confirm the rollback reason.
+Используйте резервную копию и процедуру rollback из инструкции установки.
+Не переводите сервис на root как универсальный способ исправить права:
+сначала определите недоступный файл и восстановите согласованную версию
+runtime, unit и конфигурации. Deploy, restart и rollback на SELKS требуют
+отдельного согласования с оператором.

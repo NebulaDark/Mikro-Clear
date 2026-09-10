@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import importlib.util
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +18,65 @@ def load_server():
 
 
 class McpServerSshTests(TestCase):
+    def test_compare_production_polling_reports_match(self):
+        server = load_server()
+        local_bytes = server.LOCAL_POLLING.read_bytes()
+        remote_path = (
+            "/opt/mikroclear-venv/lib/python3.11/site-packages/"
+            "mikroclear/telegram/polling.py"
+        )
+        remote = "\n".join(
+            [
+                remote_path,
+                hashlib.sha256(local_bytes).hexdigest(),
+                base64.b64encode(local_bytes).decode("ascii"),
+            ]
+        )
+
+        with patch.object(server, "run_ssh", return_value=remote):
+            result = server.compare_production_polling()
+
+        self.assertTrue(result["matches"])
+        self.assertEqual(result["local_sha256"], result["remote_sha256"])
+        self.assertEqual(result["remote_path"], remote_path)
+        self.assertEqual(result["diff"], "")
+
+    def test_compare_production_polling_reports_diff(self):
+        server = load_server()
+        remote_path = "/opt/mikroclear-venv/site-packages/mikroclear/telegram/polling.py"
+        remote_bytes = b"REMOTE = True\n"
+        remote = "\n".join(
+            [
+                remote_path,
+                hashlib.sha256(remote_bytes).hexdigest(),
+                base64.b64encode(remote_bytes).decode("ascii"),
+            ]
+        )
+
+        with patch.object(server, "run_ssh", return_value=remote):
+            result = server.compare_production_polling()
+
+        self.assertFalse(result["matches"])
+        self.assertIn(f"--- {remote_path}", result["diff"])
+        self.assertIn(str(server.LOCAL_POLLING), result["diff"])
+
+    def test_compare_production_polling_rejects_false_remote_hash(self):
+        server = load_server()
+        local_bytes = server.LOCAL_POLLING.read_bytes()
+        remote = "\n".join(
+            [
+                "/opt/mikroclear-venv/site-packages/mikroclear/telegram/polling.py",
+                "0" * 64,
+                base64.b64encode(local_bytes).decode("ascii"),
+            ]
+        )
+
+        with patch.object(server, "run_ssh", return_value=remote):
+            result = server.compare_production_polling()
+
+        self.assertFalse(result["matches"])
+        self.assertIn("Remote SHA-256 mismatch", result["error"])
+
     def test_run_ssh_uses_configured_ssh_command(self):
         server = load_server()
 
@@ -46,6 +107,24 @@ class McpServerSshTests(TestCase):
 
         with patch.object(server, "run_ssh") as run_ssh:
             output = server.restart_mikroclear()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_start_requires_explicit_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.start_mikroclear()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_stop_requires_explicit_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.stop_mikroclear()
 
         self.assertIn("confirm=True", output)
         run_ssh.assert_not_called()
@@ -224,6 +303,85 @@ class McpServerSshTests(TestCase):
             "sudo -n /usr/bin/systemd-analyze verify /etc/systemd/system/mikroclear.service",
         )
 
+    def test_read_mikroclear_env_reads_primary_env_only(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "masked-primary"
+            output = server.read_mikroclear_env()
+
+        self.assertEqual(output, "masked-primary")
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "sudo -n /usr/local/sbin/mikroclear-mask-env /etc/mikroclear/mikroclear.env",
+        )
+
+    def test_read_mikrocata_env_reads_legacy_env_explicitly(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "masked-legacy"
+            output = server.read_mikrocata_env()
+
+        self.assertEqual(output, "masked-legacy")
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "sudo -n /usr/local/sbin/mikroclear-mask-env /etc/mikrocata/mikrocataTZSP0.env",
+        )
+
+    def test_show_mikroclear_startup_reports_runtime_shape(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            server.show_mikroclear_startup()
+
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "systemctl show mikroclear.service --property=MainPID,ExecStart,EnvironmentFiles,FragmentPath,DropInPaths,ActiveState,SubState --no-pager",
+        )
+
+    def test_read_mikroclear_runtime_env_uses_helper(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "runtime-env"
+            output = server.read_mikroclear_runtime_env()
+
+        self.assertEqual(output, "runtime-env")
+        self.assertEqual(run_ssh.call_args.args[0], "sudo -n /usr/local/sbin/mikroclear-service-env")
+
+    def test_probe_mikroclear_telegram_updates_uses_helper(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "telegram-probe"
+            output = server.probe_mikroclear_telegram_updates()
+
+        self.assertEqual(output, "telegram-probe")
+        self.assertEqual(run_ssh.call_args.args[0], "sudo -n /usr/local/sbin/mikroclear-telegram-getupdates-probe")
+
+    def test_reset_telegram_updates_requires_confirmation(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            output = server.reset_mikroclear_telegram_updates()
+
+        self.assertIn("confirm=True", output)
+        run_ssh.assert_not_called()
+
+    def test_reset_telegram_updates_uses_exact_helper_argument(self):
+        server = load_server()
+
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "telegram-reset"
+            output = server.reset_mikroclear_telegram_updates(confirm=True)
+
+        self.assertEqual(output, "telegram-reset")
+        self.assertEqual(
+            run_ssh.call_args.args[0],
+            "sudo -n /usr/local/sbin/mikroclear-telegram-getupdates-probe --reset-allowed-updates",
+        )
+
     def test_daemon_reload_requires_confirmation(self):
         server = load_server()
 
@@ -279,6 +437,7 @@ class McpServerSshTests(TestCase):
             syntax.return_value = "OK"
             self.assertEqual(server.check_mikrocata_syntax(), "OK")
 
-        with patch.object(server, "read_mikroclear_env") as read_env:
-            read_env.return_value = "masked"
-            self.assertEqual(server.read_mikrocata_env(), "masked")
+        with patch.object(server, "run_ssh") as run_ssh:
+            run_ssh.return_value = "masked-legacy"
+            self.assertEqual(server.read_mikrocata_env(), "masked-legacy")
+            self.assertIn("/etc/mikrocata/mikrocataTZSP0.env", run_ssh.call_args.args[0])

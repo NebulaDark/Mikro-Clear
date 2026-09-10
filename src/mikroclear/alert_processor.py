@@ -28,9 +28,16 @@ class AlertProcessorConfig:
     whitelist_ips: tuple[str, ...]
     block_list_name: str
     timeout: str
+    whitelist_provider: Callable[[], tuple[str, ...]] | None = None
     monitor_only: bool = False
     enable_ipv6: bool = False
     comment_time_format: str = "%-d %b %Y %H:%M:%S.%f"
+
+
+def effective_whitelist(config: AlertProcessorConfig) -> tuple[str, ...]:
+    if config.whitelist_provider is None:
+        return config.whitelist_ips
+    return tuple(config.whitelist_provider())
 
 
 def format_event_timestamp(value: Any, comment_time_format: str) -> str:
@@ -77,6 +84,8 @@ def process_single_alert(
     log: Callable[[str], None],
     debug_log: Callable[[str], None],
 ) -> None:
+    whitelist_ips = effective_whitelist(config)
+    system_whitelist_ips = config.whitelist_ips
     alert = event["alert"]
     sid = str(alert.get("signature_id", "N/A"))
     filter_decision = should_process_event(
@@ -98,8 +107,8 @@ def process_single_alert(
     is_v6 = ":" in src
     curr_list = address_list_v6 if config.enable_ipv6 and is_v6 and address_list_v6 is not None else address_list
 
-    if is_ip_in_whitelist(src, config.whitelist_ips):
-        if is_ip_in_whitelist(dst, config.whitelist_ips):
+    if is_ip_in_whitelist(src, system_whitelist_ips):
+        if is_ip_in_whitelist(dst, system_whitelist_ips):
             debug_log(f"Skipping SID={sid}: src and dst are whitelisted")
             return
         wanted_ip = dst
@@ -110,7 +119,7 @@ def process_single_alert(
         wanted_port = event.get("dest_port")
         peer_ip = dst
 
-    if is_ip_in_whitelist(wanted_ip, config.whitelist_ips):
+    if is_ip_in_whitelist(wanted_ip, whitelist_ips):
         log(f"Skipping target IP {wanted_ip}: whitelisted")
         return
 
@@ -176,11 +185,14 @@ def process_alert_batch(
     if not valid_events:
         return last_save_time
 
+    whitelist_ips = effective_whitelist(config)
     unique: dict[str, dict[str, Any]] = {}
     for event in valid_events:
         src = str(event["src_ip"])
         dst = str(event["dest_ip"])
         target_ip = dst if is_ip_in_whitelist(src, config.whitelist_ips) else src
+        if is_ip_in_whitelist(target_ip, whitelist_ips):
+            continue
         unique[target_ip] = event
 
     debug_log(f"Processing {len(unique)} unique target IPs from {len(valid_events)} valid alerts")
@@ -209,6 +221,7 @@ def process_alert_batch(
 
 __all__ = [
     "AlertProcessorConfig",
+    "effective_whitelist",
     "format_event_timestamp",
     "process_alert_batch",
     "process_single_alert",

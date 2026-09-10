@@ -5,8 +5,9 @@ from typing import Any, Callable
 import requests
 
 from mikroclear.routeros.address_list import remove_from_address_list
-from mikroclear.security import sanitize_exception_text
+from mikroclear.security import mask_known_secret, sanitize_exception_text
 from mikroclear.suricata.alert_logic import is_ip_in_whitelist, is_valid_ip
+from mikroclear.telegram.notify import TelegramSendResult
 from mikroclear.telegram.unblock import UnblockCallbackResult
 
 
@@ -39,7 +40,7 @@ class TelegramUnblockHandler:
         def remove_batch() -> bool:
             address_list, address_list_v6, _resources = client.paths()
             target_list = address_list_v6 if ":" in wanted_ip and address_list_v6 is not None else address_list
-            return remove_from_address_list(target_list, wanted_ip, list_name) > 0
+            return remove_from_address_list(target_list, list_name, wanted_ip) > 0
 
         try:
             removed = client.run_with_reconnect("telegram unblock", remove_batch)
@@ -53,17 +54,39 @@ class TelegramUnblockHandler:
         self.log(f"TELEGRAM UNBLOCK NOOP: {wanted_ip} not found in {list_name}")
         return UnblockCallbackResult(f"{wanted_ip} was not found in {list_name}", False)
 
-    def answer_telegram_callback(self, callback_id: str, text: str, alert: bool = False) -> None:
+    def answer_telegram_callback(
+        self,
+        callback_id: str,
+        text: str,
+        alert: bool = False,
+    ) -> TelegramSendResult:
         if not self.settings.telegram_token or not callback_id:
-            return
+            return TelegramSendResult(ok=True)
         try:
-            self.http_post(
+            response = self.http_post(
                 f"https://api.telegram.org/bot{self.settings.telegram_token}/answerCallbackQuery",
                 data={"callback_query_id": callback_id, "text": text, "show_alert": "true" if alert else "false"},
                 timeout=self.settings.telegram_timeout,
             )
         except Exception as exc:
-            self.log(f"Error answering Telegram callback: {sanitize_exception_text(exc, self.settings.telegram_token)}")
+            response_text = sanitize_exception_text(exc, self.settings.telegram_token)
+            self.log(f"Error answering Telegram callback: {response_text}")
+            return TelegramSendResult(
+                ok=False,
+                response_text=response_text,
+                retryable=True,
+            )
+
+        response_text = mask_known_secret(response.text, self.settings.telegram_token)
+        result = TelegramSendResult(
+            ok=response.status_code == 200,
+            status_code=response.status_code,
+            response_text=response_text,
+            retryable=response.status_code == 429 or response.status_code >= 500,
+        )
+        if not result.ok:
+            self.log(f"Error answering Telegram callback: {response_text}")
+        return result
 
 
 __all__ = ["TelegramUnblockHandler"]

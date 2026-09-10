@@ -92,13 +92,60 @@ def consume_unblock_token(path: Path, token: str, *, now: int) -> Optional[dict[
     return action
 
 
-def parse_unblock_callback(data: Any) -> Optional[str]:
-    if not isinstance(data, str) or not data.startswith("unblock:"):
-        return None
-    token = data.partition(":")[2]
+def peek_unblock_token(path: Path, token: str, *, now: int) -> Optional[dict[str, Any]]:
     if not TOKEN_RE.match(token):
         return None
-    return token
+
+    state = _read_state(path)
+    action = state.get(token)
+    changed = False
+
+    for key, value in list(state.items()):
+        if int(value.get("expires_at", 0)) <= int(now):
+            state.pop(key, None)
+            changed = True
+
+    if changed:
+        _write_state(path, state)
+
+    if not action or int(action.get("expires_at", 0)) <= int(now):
+        return None
+    return dict(action)
+
+
+def cancel_unblock_token(path: Path, token: str, *, now: int) -> bool:
+    if not TOKEN_RE.match(token):
+        return False
+
+    state = _read_state(path)
+    action = state.pop(token, None)
+    changed = action is not None
+
+    for key, value in list(state.items()):
+        if int(value.get("expires_at", 0)) <= int(now):
+            state.pop(key, None)
+            changed = True
+
+    if changed:
+        _write_state(path, state)
+
+    return bool(action and int(action.get("expires_at", 0)) > int(now))
+
+
+def parse_unblock_callback(data: Any) -> Optional[tuple[str, str]]:
+    if not isinstance(data, str):
+        return None
+
+    action_map = {
+        "unblock": "confirm",
+        "unblock_confirm": "confirm",
+        "unblock_execute": "execute",
+        "unblock_cancel": "cancel",
+    }
+    prefix, separator, token = data.partition(":")
+    if separator != ":" or prefix not in action_map or not TOKEN_RE.match(token):
+        return None
+    return action_map[prefix], token
 
 
 def build_unblock_keyboard(wanted_ip: str, token: str) -> dict[str, Any]:
@@ -106,13 +153,24 @@ def build_unblock_keyboard(wanted_ip: str, token: str) -> dict[str, Any]:
         "inline_keyboard": [
             [
                 {
-                    "text": f"Unblock {wanted_ip}",
-                    "callback_data": f"unblock:{token}",
+                    "text": f"🔓 Unblock {wanted_ip}",
+                    "callback_data": f"unblock_confirm:{token}",
                 }
             ],
             [
                 {"text": "AbuseIPDB", "url": f"https://www.abuseipdb.com/check/{wanted_ip}"},
                 {"text": "VirusTotal", "url": f"https://www.virustotal.com/gui/ip-address/{wanted_ip}"},
             ],
+        ]
+    }
+
+
+def build_unblock_confirm_keyboard(token: str) -> dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Confirm unblock", "callback_data": f"unblock_execute:{token}"},
+                {"text": "❌ Cancel", "callback_data": f"unblock_cancel:{token}"},
+            ]
         ]
     }

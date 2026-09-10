@@ -22,15 +22,28 @@ def load_validator():
     return module
 
 
-def write_wheel(path: Path, *, omit: set[str] | None = None, entry_points: str | None = None) -> None:
+def write_wheel(
+    path: Path,
+    *,
+    omit: set[str] | None = None,
+    entry_points: str | None = None,
+    metadata: str | None = None,
+) -> None:
     omit = omit or set()
     entry_points = entry_points if entry_points is not None else "[console_scripts]\nmikroclear = mikroclear.cli:main\n"
+    metadata = metadata if metadata is not None else (
+        "Metadata-Version: 2.1\n"
+        "Name: mikro-clear\n"
+        "Version: 0.1.0\n"
+        "Requires-Dist: requests==2.34.2\n"
+    )
     members = {
         "mikroclear/__main__.py": "from .cli import main\nraise SystemExit(main())\n",
         "mikroclear/cli.py": "from . import app\n\ndef main():\n    return app.main()\n",
         "mikroclear/app.py": "def main():\n    return 0\n",
-        "mikroclear/runtime.py": "class MikroClearService:\n    pass\n",
+        "mikroclear/runtime/__init__.py": "class MikroClearService:\n    pass\n",
         "mikro_clear-0.1.0.dist-info/entry_points.txt": entry_points,
+        "mikro_clear-0.1.0.dist-info/METADATA": metadata,
     }
     with zipfile.ZipFile(path, "w") as wheel:
         for name, content in members.items():
@@ -52,15 +65,18 @@ class WheelArtifactValidationTests(TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.errors, ())
 
-    def test_missing_runtime_module_fails(self):
+    def test_missing_runtime_package_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             wheel = Path(tmp) / "mikro_clear-0.1.0-py3-none-any.whl"
-            write_wheel(wheel, omit={"mikroclear/runtime.py"})
+            write_wheel(wheel, omit={"mikroclear/runtime/__init__.py"})
 
             result = self.validator.validate_wheel(wheel)
 
         self.assertFalse(result.ok)
-        self.assertIn("missing required member: mikroclear/runtime.py", result.errors)
+        self.assertIn(
+            "missing required member: mikroclear/runtime/__init__.py",
+            result.errors,
+        )
 
     def test_missing_console_script_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,6 +87,24 @@ class WheelArtifactValidationTests(TestCase):
 
         self.assertFalse(result.ok)
         self.assertIn("missing console script: mikroclear = mikroclear.cli:main", result.errors)
+
+    def test_mcp_runtime_dependency_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wheel = Path(tmp) / "mikro_clear-0.1.0-py3-none-any.whl"
+            write_wheel(
+                wheel,
+                metadata=(
+                    "Metadata-Version: 2.1\n"
+                    "Name: mikro-clear\n"
+                    "Version: 0.1.0\n"
+                    "Requires-Dist: mcp==1.28.1\n"
+                ),
+            )
+
+            result = self.validator.validate_wheel(wheel)
+
+        self.assertFalse(result.ok)
+        self.assertIn("forbidden runtime dependency: mcp", result.errors)
 
     def test_cli_returns_zero_for_valid_wheel(self):
         with tempfile.TemporaryDirectory() as tmp:

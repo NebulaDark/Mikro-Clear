@@ -21,6 +21,7 @@ SSH_COMMAND = shlex.split(
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_SCRIPT = REPO_ROOT / "src" / "mikroclear" / "legacy.py"
+LOCAL_POLLING = REPO_ROOT / "src" / "mikroclear" / "telegram" / "polling.py"
 LOCAL_UNIT = REPO_ROOT / "systemd" / "mikroclear.service"
 LOCAL_WHEEL = REPO_ROOT / "dist" / "mikro_clear-0.1.0-py3-none-any.whl"
 REMOTE_SCRIPT = "/usr/local/bin/mikroclear.py"
@@ -31,6 +32,8 @@ CANDIDATE_WHEEL = f"{CANDIDATE_DIR}/mikro_clear-0.1.0-py3-none-any.whl"
 REMOTE_UNIT = "/etc/systemd/system/mikroclear.service"
 CANDIDATE_UNIT = f"{CANDIDATE_DIR}/mikroclear-codex.service"
 MASK_ENV_HELPER = "/usr/local/sbin/mikroclear-mask-env"
+RUNTIME_ENV_HELPER = "/usr/local/sbin/mikroclear-service-env"
+TELEGRAM_UPDATES_PROBE = "/usr/local/sbin/mikroclear-telegram-getupdates-probe"
 SURICATA_EVE_JSON = "/opt/SELKS/docker/containers-data/suricata/logs/eve.json"
 
 
@@ -89,6 +92,28 @@ def restart_mikrocata(confirm: bool = False) -> str:
 
 
 @mcp.tool()
+def start_mikroclear(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to start service without confirm=True."
+    return run_ssh(
+        f"sudo -n /usr/bin/systemctl start {SERVICE_NAME} && "
+        f"sudo -n /usr/bin/systemctl status {SERVICE_NAME} --no-pager",
+        40,
+    )
+
+
+@mcp.tool()
+def stop_mikroclear(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to stop service without confirm=True."
+    return run_ssh(
+        f"sudo -n /usr/bin/systemctl stop {SERVICE_NAME} && "
+        f"sudo -n /usr/bin/systemctl status {SERVICE_NAME} --no-pager",
+        40,
+    )
+
+
+@mcp.tool()
 def tail_mikroclear_logs(lines: int = 100) -> str:
     lines = _fixed_size(lines, (100, 300, 500))
     return run_ssh(f"sudo -n journalctl -u {SERVICE_NAME} -n {lines} --no-pager", 30)
@@ -124,19 +149,41 @@ def check_mikrocata_syntax() -> str:
 
 @mcp.tool()
 def read_mikroclear_env() -> str:
+    return run_ssh(f"sudo -n {MASK_ENV_HELPER} /etc/mikroclear/mikroclear.env", 20)
+
+
+@mcp.tool()
+def read_mikrocata_env() -> str:
+    return run_ssh(f"sudo -n {MASK_ENV_HELPER} /etc/mikrocata/mikrocataTZSP0.env", 20)
+
+
+@mcp.tool()
+def show_mikroclear_startup() -> str:
     return run_ssh(
-        r"if [ -f /etc/mikroclear/mikroclear.env ]; then "
-        rf"sudo -n {MASK_ENV_HELPER} /etc/mikroclear/mikroclear.env; "
-        r"else "
-        rf"sudo -n {MASK_ENV_HELPER} /etc/mikrocata/mikrocataTZSP0.env; "
-        r"fi",
+        f"systemctl show {SERVICE_NAME} "
+        "--property=MainPID,ExecStart,EnvironmentFiles,FragmentPath,DropInPaths,ActiveState,SubState --no-pager",
         20,
     )
 
 
 @mcp.tool()
-def read_mikrocata_env() -> str:
-    return read_mikroclear_env()
+def read_mikroclear_runtime_env() -> str:
+    return run_ssh(f"sudo -n {RUNTIME_ENV_HELPER}", 20)
+
+
+@mcp.tool()
+def probe_mikroclear_telegram_updates() -> str:
+    return run_ssh(f"sudo -n {TELEGRAM_UPDATES_PROBE}", 30)
+
+
+@mcp.tool()
+def reset_mikroclear_telegram_updates(confirm: bool = False) -> str:
+    if not confirm:
+        return "Refusing to reset Telegram allowed_updates without confirm=True."
+    return run_ssh(
+        f"sudo -n {TELEGRAM_UPDATES_PROBE} --reset-allowed-updates",
+        30,
+    )
 
 
 @mcp.tool()
@@ -200,6 +247,63 @@ def compare_production_script() -> dict[str, Any]:
         )
     )
     return {"matches": local_text.strip() == remote_text.strip(), "diff": diff}
+
+
+@mcp.tool()
+def compare_production_polling() -> dict[str, Any]:
+    local_bytes = LOCAL_POLLING.read_bytes()
+    command = (
+        "/opt/mikroclear-venv/bin/python -c \"import base64,hashlib; "
+        "from pathlib import Path; import mikroclear.telegram.polling as p; "
+        "path=Path(p.__file__); data=path.read_bytes(); print(path); "
+        "print(hashlib.sha256(data).hexdigest()); "
+        "print(base64.b64encode(data).decode('ascii'))\""
+    )
+    lines = run_ssh(command, 30).splitlines()
+    if len(lines) != 3:
+        return {
+            "matches": False,
+            "error": "Unexpected remote polling response",
+        }
+
+    remote_path, remote_sha256, encoded = lines
+    try:
+        remote_bytes = base64.b64decode(encoded, validate=True)
+        local_text = local_bytes.decode("utf-8")
+        remote_text = remote_bytes.decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as exc:
+        return {
+            "matches": False,
+            "error": f"Invalid remote polling response: {exc}",
+        }
+
+    computed_remote_sha256 = hashlib.sha256(remote_bytes).hexdigest()
+    if remote_sha256.lower() != computed_remote_sha256:
+        return {
+            "matches": False,
+            "error": "Remote SHA-256 mismatch",
+            "remote_path": remote_path,
+            "remote_sha256": remote_sha256,
+            "computed_remote_sha256": computed_remote_sha256,
+        }
+
+    diff = "\n".join(
+        difflib.unified_diff(
+            remote_text.splitlines(),
+            local_text.splitlines(),
+            fromfile=remote_path,
+            tofile=str(LOCAL_POLLING),
+            lineterm="",
+        )
+    )
+    return {
+        "matches": local_bytes == remote_bytes,
+        "local_path": str(LOCAL_POLLING),
+        "local_sha256": hashlib.sha256(local_bytes).hexdigest(),
+        "remote_path": remote_path,
+        "remote_sha256": remote_sha256,
+        "diff": diff,
+    }
 
 
 @mcp.tool()

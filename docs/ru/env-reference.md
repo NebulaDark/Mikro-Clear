@@ -18,6 +18,17 @@ config/mikroclear.env.example
 
 Не хранить реальные пароли и Telegram token в git.
 
+Файл должен принадлежать `root:mikroclear` и иметь режим `0640`:
+
+```bash
+sudo chown root:mikroclear /etc/mikroclear/mikroclear.env
+sudo chmod 0640 /etc/mikroclear/mikroclear.env
+```
+
+Каталог `/etc/mikroclear` должен иметь режим `0750`. CA-сертификат хранится в
+`/etc/mikroclear/certs/mikrotik-ca.crt`, также принадлежит
+`root:mikroclear` и имеет режим `0640`.
+
 ## Формат значений
 
 Boolean:
@@ -58,7 +69,8 @@ value1,value2,value3
 только как временный аварийный режим.
 
 `MIKROCLEAR_CA_FILE`
-: Путь к CA certificate для проверки RouterOS API-SSL.
+: Путь к CA certificate для проверки RouterOS API-SSL. Канонический путь:
+`/etc/mikroclear/certs/mikrotik-ca.crt`.
 
 `MIKROCLEAR_ROUTER_TLS_SERVER_NAME`
 : Имя или IP для проверки certificate SAN/CN при TLS. Должно совпадать с
@@ -119,8 +131,19 @@ limits.
 `MIKROCLEAR_TELEGRAM_UNBLOCK_TTL_SECONDS`
 : Время жизни token для inline unblock action.
 
+`MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE`
+: Включает управляемые постоянные исключения и раздел `🛡 Исключения` для
+администраторов. Безопасное значение по умолчанию: `false`. Кнопка
+`🛡 Добавить в исключения <IP>` в alert доступна только вместе с
+`MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true`.
+
 `MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS`
-: Интервал polling `getUpdates`.
+: Устаревший интервал polling, сохраненный для совместимости. Сетевой worker
+  использует long polling и не зависит от этого значения.
+
+`MIKROCLEAR_TELEGRAM_LONG_POLL_SECONDS`
+: Timeout long-poll запроса `getUpdates`. По умолчанию `25`; HTTP timeout
+  автоматически увеличивается еще на 5 секунд.
 
 `MIKROCLEAR_TELEGRAM_LOCK_FILE`
 : Файл локального rate-limit lock.
@@ -143,11 +166,56 @@ limits.
 : CSV-список chat IDs с read-only доступом.
 
 `MIKROCLEAR_BOT_MODULES`
-: CSV-список включенных bot modules. Сейчас реализованный production-safe модуль:
-`status`.
+: CSV-список включённых bot modules. Для общего статуса, Mangle и управляемых
+исключений укажите `status,mangle_control,whitelist_control`. Наличие модуля в
+списке не отменяет его отдельный enable-флаг и проверку прав.
 
 `MIKROCLEAR_BOT_AUDIT_LOG`
 : Путь к audit log для Telegram control-plane действий.
+
+Telegram-операции управления исключениями доступны только когда одновременно
+выполнены условия:
+
+- Telegram и bot control plane включены:
+  `MIKROCLEAR_TELEGRAM_ENABLE=true` и `MIKROCLEAR_BOT_ENABLE=true`;
+- текущий chat указан в `MIKROCLEAR_BOT_ADMIN_CHAT_IDS`;
+- `whitelist_control` присутствует в `MIKROCLEAR_BOT_MODULES`;
+- `MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE=true`;
+- для действия из alert включён
+  `MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true`.
+
+Эти gates ограничивают только Telegram-операции управления исключениями. Они не
+выключают runtime whitelist: существующий корректный `dynamic-whitelist.json`
+загружается независимо от Telegram-управления и участвует в подавлении alert и
+восстановлении RouterOS даже при выключенных Telegram, bot, module,
+feature-флаге или Unblock.
+
+Безопасный исходный режим — `MIKROCLEAR_BOT_DRY_RUN=true`: bot показывает
+планируемое действие, но не изменяет RouterOS и `dynamic-whitelist.json`.
+Одноразовое состояние `telegram-whitelist-actions.json` сохраняет обычный
+жизненный цикл создания, продвижения, потребления и истечения token; append-only
+audit log также записывается штатно. Реальное изменение RouterOS или managed
+business store требует отдельно одобренного переключения на
+`MIKROCLEAR_BOT_DRY_RUN=false`.
+
+## Telegram Mangle Control
+
+`MIKROCLEAR_MANGLE_CONTROL_ENABLE`
+: Включает команду `/mangle`. По умолчанию `false`.
+
+`MIKROCLEAR_MANGLE_COMMENT_PREFIX`
+: Prefix комментария RouterOS mangle rules, которые Mikro-Clear имеет право
+показывать и переключать. По умолчанию `MC:`.
+
+`MIKROCLEAR_MANGLE_ALLOWED_CHAINS`
+: CSV allowlist chain для управляемых rules. По умолчанию `prerouting`.
+
+`MIKROCLEAR_MANGLE_ALLOWED_ACTIONS`
+: CSV allowlist action для управляемых rules. По умолчанию `mark-routing`.
+
+`MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION`
+: Требовать подтверждение перед изменением `disabled`. По умолчанию `true`.
+Текущий Telegram workflow всегда использует подтверждение.
 
 ## Local Network And Whitelist
 
@@ -158,8 +226,9 @@ limits.
 : Локальная подсеть, добавляемая в whitelist/default local matching.
 
 `MIKROCLEAR_WHITELIST_IPS`
-: CSV-список IP/CIDR/prefix, которые нельзя блокировать. Используется при выборе
-target IP.
+: CSV-список точных IP-адресов и CIDR-сетей, которые нельзя блокировать.
+Сопоставление выполняется как равенство IP либо принадлежность CIDR; произвольные
+строковые префиксы не принимаются.
 
 `MIKROCLEAR_ENABLE_IPV6`
 : Включает сохранение/обработку IPv6 address-list state.
@@ -193,6 +262,26 @@ target IP.
 
 `MIKROCLEAR_STATE_DIR`
 : Основной каталог state. Целевой путь на SELKS: `/var/lib/mikroclear`.
+
+`MIKROCLEAR_DYNAMIC_WHITELIST_FILE`
+: JSON-файл управляемых исключений. По умолчанию
+`MIKROCLEAR_STATE_DIR/dynamic-whitelist.json`. Telegram может добавлять сюда
+только точные RFC1918 IPv4-адреса, без CIDR. Файл создаётся с режимом `0600`.
+
+`MIKROCLEAR_TELEGRAM_WHITELIST_STATE_FILE`
+: Файл короткоживущих одноразовых Telegram actions для исключений. По умолчанию
+`MIKROCLEAR_STATE_DIR/telegram-whitelist-actions.json`.
+
+Записи из `MIKROCLEAR_WHITELIST_IPS` и встроенной конфигурации считаются
+системными: меню показывает их только для чтения. Удалять через Telegram можно
+только управляемые записи из `dynamic-whitelist.json`. Если этот JSON повреждён,
+имеет неизвестную схему, дубликаты или недопустимый адрес, Mikro-Clear завершает
+startup до чтения событий; автоматического сброса списка нет.
+
+Команда `/status` показывает enable-флаг whitelist control, путь к
+`dynamic-whitelist.json` и количество управляемых записей. Список самих адресов
+в `/status` никогда не выводится; он доступен только администратору через
+`🛡 Mikro-Clear` → `🛡 Исключения`.
 
 `MIKROCLEAR_SAVE_LISTS_LOCATION`
 : JSON-файл сохранения RouterOS IPv4 address-list state.
@@ -237,7 +326,7 @@ MIKROCLEAR_ROUTER_PASSWORD=
 MIKROCLEAR_ROUTER_IP=192.168.10.1
 MIKROCLEAR_USE_SSL=true
 MIKROCLEAR_ROUTER_PORT=8729
-MIKROCLEAR_CA_FILE=/etc/mikrocata/certs/mikrotik-ca.crt
+MIKROCLEAR_CA_FILE=/etc/mikroclear/certs/mikrotik-ca.crt
 MIKROCLEAR_ROUTER_TLS_SERVER_NAME=192.168.10.1
 
 MIKROCLEAR_BLOCK_LIST_NAME=Suricata

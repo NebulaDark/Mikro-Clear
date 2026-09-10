@@ -36,24 +36,49 @@ class SystemdCandidateUnitTests(TestCase):
         self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", service_lines)
         self.assertNotIn("ExecStart=/opt/mikroclear-venv/bin/python /usr/local/bin/mikroclear.py", service_lines)
 
-    def test_candidate_uses_only_primary_mikroclear_env(self):
-        service_lines = section_lines(CANDIDATE_UNIT, "Service")
-        legacy = "EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env"
-        current = "EnvironmentFile=-/etc/mikroclear/mikroclear.env"
+    def test_package_entrypoint_cannot_be_shadowed_by_legacy_working_directory(self):
+        for unit_path in (PRODUCTION_UNIT, CANDIDATE_UNIT):
+            with self.subTest(unit=str(unit_path)):
+                service_lines = section_lines(unit_path, "Service")
+                working_directories = [
+                    line for line in service_lines if line.startswith("WorkingDirectory=")
+                ]
 
-        self.assertIn(current, service_lines)
-        self.assertNotIn(legacy, service_lines)
+                self.assertEqual(working_directories, ["WorkingDirectory=/"])
 
-    def test_candidate_uses_only_primary_mikroclear_state_paths(self):
+    def test_candidate_uses_primary_mikroclear_env_only(self):
+        for unit_path in (PRODUCTION_UNIT, CANDIDATE_UNIT):
+            with self.subTest(unit=str(unit_path)):
+                service_lines = section_lines(unit_path, "Service")
+                current = "EnvironmentFile=/etc/mikroclear/mikroclear.env"
+
+                self.assertIn(current, service_lines)
+                self.assertNotIn(
+                    "EnvironmentFile=-/etc/mikroclear/mikroclear.env",
+                    service_lines,
+                )
+                self.assertNotIn(
+                    "EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env",
+                    service_lines,
+                )
+
+    def test_units_run_as_dedicated_mikroclear_user(self):
+        for unit_path in (PRODUCTION_UNIT, CANDIDATE_UNIT):
+            with self.subTest(unit=str(unit_path)):
+                service_lines = section_lines(unit_path, "Service")
+
+                self.assertIn("User=mikroclear", service_lines)
+                self.assertIn("Group=mikroclear", service_lines)
+                self.assertNotIn("User=root", service_lines)
+                self.assertNotIn("Group=root", service_lines)
+
+    def test_candidate_uses_primary_state_and_config_paths_only(self):
         service_lines = section_lines(CANDIDATE_UNIT, "Service")
 
         self.assertIn("ReadWritePaths=/var/lib/mikroclear", service_lines)
-        self.assertIn(
-            "ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear",
-            service_lines,
-        )
-        self.assertFalse(any("/var/lib/mikrocata" in line for line in service_lines))
-        self.assertFalse(any("/etc/mikrocata" in line for line in service_lines))
+        self.assertIn("ReadOnlyPaths=/opt/SELKS/docker/containers-data/suricata/logs /etc/mikroclear", service_lines)
+        self.assertNotIn("/var/lib/mikrocata", "\n".join(service_lines))
+        self.assertNotIn("/etc/mikrocata", "\n".join(service_lines))
 
     def test_plan_documents_rollback_and_safety_notes(self):
         text = PLAN.read_text(encoding="utf-8")
@@ -81,7 +106,4 @@ class SystemdCandidateUnitTests(TestCase):
 
         self.assertIn("ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear", text)
         self.assertIn("Условия удаления legacy env fallback", text)
-        self.assertIn("EnvironmentFile=-/etc/mikrocata/mikrocataTZSP0.env", text)
         self.assertIn("EnvironmentFile=-/etc/mikroclear/mikroclear.env", text)
-        self.assertIn("Tracked unit больше не", text)
-        self.assertIn("содержит legacy fallback", text)

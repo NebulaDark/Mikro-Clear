@@ -7,6 +7,27 @@ from mikroclear.settings import Settings, load_settings
 
 
 class SettingsTests(TestCase):
+    def test_default_ca_file_uses_mikroclear_config_tree(self):
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings.from_env()
+
+        self.assertEqual(
+            settings.ca_file,
+            "/etc/mikroclear/certs/mikrotik-ca.crt",
+        )
+
+    def test_telegram_long_poll_seconds_default_and_env(self):
+        self.assertEqual(Settings().telegram_long_poll_seconds, 25)
+
+        with patch.dict(
+            os.environ,
+            {"MIKROCLEAR_TELEGRAM_LONG_POLL_SECONDS": "40"},
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertEqual(settings.telegram_long_poll_seconds, 40)
+
     def test_mikroclear_env_overrides_legacy_env(self):
         with patch.dict(
             os.environ,
@@ -36,6 +57,15 @@ class SettingsTests(TestCase):
             settings = Settings.from_env()
 
         self.assertEqual(settings.state_dir, str(Path("/tmp/mikroclear-state").resolve()))
+        self.assertFalse(settings.telegram_whitelist_control_enable)
+        self.assertEqual(
+            settings.dynamic_whitelist_file,
+            str(Path("/tmp/mikroclear-state/dynamic-whitelist.json").resolve()),
+        )
+        self.assertEqual(
+            settings.telegram_whitelist_state_file,
+            str(Path("/tmp/mikroclear-state/telegram-whitelist-actions.json").resolve()),
+        )
         self.assertEqual(
             settings.telegram_unblock_state_file,
             str(Path("/tmp/mikroclear-state/telegram-unblock-actions.json").resolve()),
@@ -72,3 +102,29 @@ class SettingsTests(TestCase):
 
         self.assertIn("MIKROCLEAR_ROUTER_IP", source)
         self.assertNotIn("MIKROCATA_ROUTER_IP", source)
+
+    def test_mangle_control_settings_defaults_and_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MIKROCLEAR_MANGLE_CONTROL_ENABLE": "true",
+                "MIKROCLEAR_MANGLE_COMMENT_PREFIX": "MC:",
+                "MIKROCLEAR_MANGLE_ALLOWED_CHAINS": "prerouting,forward",
+                "MIKROCLEAR_MANGLE_ALLOWED_ACTIONS": "mark-routing,accept",
+                "MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION": "false",
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertTrue(settings.mangle_control_enable)
+        self.assertEqual(settings.mangle_comment_prefix, "MC:")
+        self.assertEqual(settings.mangle_allowed_chains, ("prerouting", "forward"))
+        self.assertEqual(settings.mangle_allowed_actions, ("mark-routing", "accept"))
+        self.assertFalse(settings.mangle_require_confirmation)
+
+    def test_mangle_control_settings_default_allowlist_is_narrow(self):
+        settings = Settings()
+
+        self.assertEqual(settings.mangle_allowed_chains, ("prerouting",))
+        self.assertEqual(settings.mangle_allowed_actions, ("mark-routing",))

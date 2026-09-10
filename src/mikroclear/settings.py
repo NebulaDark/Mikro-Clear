@@ -15,7 +15,7 @@ class Settings:
     use_ssl: bool = True
     port: int = 8729
     allow_self_signed_certs: bool = False
-    ca_file: str = "/etc/mikrocata/certs/mikrotik-ca.crt"
+    ca_file: str = "/etc/mikroclear/certs/mikrotik-ca.crt"
     router_connect_retry_seconds: int = 30
     socket_timeout_seconds: int = 20
     router_heartbeat_seconds: int = 60
@@ -32,7 +32,9 @@ class Settings:
     telegram_system_cooldown_seconds: int = 300
     telegram_unblock_enable: bool = True
     telegram_unblock_ttl_seconds: int = 24 * 3600
+    telegram_whitelist_control_enable: bool = False
     telegram_updates_interval_seconds: int = 5
+    telegram_long_poll_seconds: int = 25
     wan_ip: str = ""
     local_ip_prefix: str = "192.168.0.0/16"
     default_whitelist: tuple[str, ...] = ()
@@ -52,6 +54,8 @@ class Settings:
     ignore_list_location: str = "/var/lib/mikroclear/ignore-tzsp0.conf"
     telegram_lock_file: str = "/var/lib/mikroclear/telegram-rate-limit.lock"
     telegram_unblock_state_file: str = "/var/lib/mikroclear/telegram-unblock-actions.json"
+    dynamic_whitelist_file: str = "/var/lib/mikroclear/dynamic-whitelist.json"
+    telegram_whitelist_state_file: str = "/var/lib/mikroclear/telegram-whitelist-actions.json"
     save_lists: tuple[str, ...] = ("Suricata",)
     save_interval: int = 300
     asset_resolver_enable: bool = True
@@ -59,6 +63,11 @@ class Settings:
     asset_resolver_dhcp_enable: bool = True
     asset_resolver_ptr_enable: bool = True
     asset_resolver_cache_ttl: int = 3600
+    mangle_control_enable: bool = False
+    mangle_comment_prefix: str = "MC:"
+    mangle_allowed_chains: tuple[str, ...] = ("prerouting",)
+    mangle_allowed_actions: tuple[str, ...] = ("mark-routing",)
+    mangle_require_confirmation: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -107,7 +116,7 @@ class Settings:
             use_ssl=use_ssl,
             port=port,
             allow_self_signed_certs=env_bool("MIKROCLEAR_ALLOW_SELF_SIGNED_CERTS", False),
-            ca_file=env_str("MIKROCLEAR_CA_FILE", "/etc/mikrocata/certs/mikrotik-ca.crt"),
+            ca_file=env_str("MIKROCLEAR_CA_FILE", "/etc/mikroclear/certs/mikrotik-ca.crt"),
             router_connect_retry_seconds=env_int("MIKROCLEAR_ROUTER_CONNECT_RETRY_SECONDS", 30),
             socket_timeout_seconds=env_int("MIKROCLEAR_SOCKET_TIMEOUT_SECONDS", 20),
             router_heartbeat_seconds=env_int("MIKROCLEAR_ROUTER_HEARTBEAT_SECONDS", 60),
@@ -124,7 +133,12 @@ class Settings:
             telegram_system_cooldown_seconds=env_int("MIKROCLEAR_TELEGRAM_SYSTEM_COOLDOWN_SECONDS", 300),
             telegram_unblock_enable=env_bool("MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE", True),
             telegram_unblock_ttl_seconds=env_int("MIKROCLEAR_TELEGRAM_UNBLOCK_TTL_SECONDS", 24 * 3600),
+            telegram_whitelist_control_enable=env_bool(
+                "MIKROCLEAR_TELEGRAM_WHITELIST_CONTROL_ENABLE",
+                False,
+            ),
             telegram_updates_interval_seconds=env_int("MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS", 5),
+            telegram_long_poll_seconds=env_int("MIKROCLEAR_TELEGRAM_LONG_POLL_SECONDS", 25),
             wan_ip=wan_ip,
             local_ip_prefix=local_ip_prefix,
             default_whitelist=default_whitelist,
@@ -159,6 +173,18 @@ class Settings:
                     os.path.join(state_dir, "telegram-unblock-actions.json"),
                 )
             ),
+            dynamic_whitelist_file=os.path.abspath(
+                env_str(
+                    "MIKROCLEAR_DYNAMIC_WHITELIST_FILE",
+                    os.path.join(state_dir, "dynamic-whitelist.json"),
+                )
+            ),
+            telegram_whitelist_state_file=os.path.abspath(
+                env_str(
+                    "MIKROCLEAR_TELEGRAM_WHITELIST_STATE_FILE",
+                    os.path.join(state_dir, "telegram-whitelist-actions.json"),
+                )
+            ),
             save_lists=env_csv("MIKROCLEAR_SAVE_LISTS", (block_list_name,)),
             save_interval=env_int("MIKROCLEAR_SAVE_INTERVAL", 300),
             asset_resolver_enable=env_bool("MIKROCLEAR_ASSET_RESOLVER_ENABLE", True),
@@ -166,6 +192,11 @@ class Settings:
             asset_resolver_dhcp_enable=env_bool("MIKROCLEAR_ASSET_RESOLVER_DHCP_ENABLE", True),
             asset_resolver_ptr_enable=env_bool("MIKROCLEAR_ASSET_RESOLVER_PTR_ENABLE", True),
             asset_resolver_cache_ttl=env_int("MIKROCLEAR_ASSET_RESOLVER_CACHE_TTL", 3600),
+            mangle_control_enable=env_bool("MIKROCLEAR_MANGLE_CONTROL_ENABLE", False),
+            mangle_comment_prefix=env_str("MIKROCLEAR_MANGLE_COMMENT_PREFIX", "MC:"),
+            mangle_allowed_chains=env_csv("MIKROCLEAR_MANGLE_ALLOWED_CHAINS", ("prerouting",)),
+            mangle_allowed_actions=env_csv("MIKROCLEAR_MANGLE_ALLOWED_ACTIONS", ("mark-routing",)),
+            mangle_require_confirmation=env_bool("MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION", True),
         )
 
 

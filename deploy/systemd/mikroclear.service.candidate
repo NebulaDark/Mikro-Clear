@@ -7,13 +7,13 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/mikroclear/mikroclear.env
+EnvironmentFile=/etc/mikroclear/mikroclear.env
 ExecStart=/opt/mikroclear-venv/bin/python -m mikroclear
 Restart=on-failure
 RestartSec=30
-User=root
-Group=root
-WorkingDirectory=/usr/local/bin
+User=mikroclear
+Group=mikroclear
+WorkingDirectory=/
 NoNewPrivileges=true
 UMask=0077
 PrivateTmp=true

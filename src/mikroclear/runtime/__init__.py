@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import os
 from typing import Any, Callable
 
+from mikroclear.telegram.polling_worker import TelegramWorkerFatalError
+
 
 @dataclass(frozen=True)
 class RuntimeConfig:
@@ -26,7 +28,10 @@ class RuntimeDependencies:
     seek_to_end: Callable[[str], None]
     get_router_client: Callable[[], Any]
     read_ignore_list: Callable[[str], None]
+    start_telegram_worker: Callable[[], None]
+    check_telegram_worker: Callable[[], None]
     process_telegram_updates: Callable[[], None]
+    stop_telegram_worker: Callable[[], None]
     log: Callable[[str], None]
     debug_traceback: Callable[[], str]
     sleep: Callable[[int], None]
@@ -64,6 +69,7 @@ class MikroClearService:
         self.deps.read_ignore_list(self.config.ignore_list_path)
         self._start_file_watcher()
         self.deps.log(f"Monitoring {self.config.filepath} for Suricata alerts")
+        self.deps.start_telegram_worker()
 
     def _start_file_watcher(self) -> None:
         directory_to_monitor = os.path.dirname(self.config.filepath) or "."
@@ -82,14 +88,12 @@ class MikroClearService:
         if self.notifier is None or self.client is None:
             raise RuntimeError("MikroClearService.startup() must be called before run_once()")
 
+        self.deps.check_telegram_worker()
         self.notifier.process_events()
         if self.notifier.check_events(timeout=1000):
             self.notifier.read_events()
 
-        now = self.deps.time()
-        if now - self.last_telegram_updates_check >= self.config.telegram_updates_interval_seconds:
-            self.last_telegram_updates_check = now
-            self.deps.process_telegram_updates()
+        self.deps.process_telegram_updates()
 
         now = self.deps.time()
         if now - self.last_idle_heartbeat >= self.config.router_heartbeat_seconds:
@@ -100,10 +104,15 @@ class MikroClearService:
         self.install_signal_handlers()
         self.startup()
 
+        exit_code = 0
         try:
             while not self.shutdown_requested:
                 try:
                     self.run_once()
+                except TelegramWorkerFatalError as exc:
+                    self.deps.log(f"Fatal Telegram polling worker error: {exc}")
+                    exit_code = 1
+                    break
                 except KeyboardInterrupt:
                     break
                 except Exception as exc:
@@ -113,9 +122,10 @@ class MikroClearService:
                     self.deps.sleep(5)
         finally:
             self.shutdown()
-        return 0
+        return exit_code
 
     def shutdown(self) -> None:
+        self.deps.stop_telegram_worker()
         if self.notifier is not None:
             try:
                 self.notifier.stop()

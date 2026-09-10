@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+import os
+import re
+import subprocess
+import sys
+
+
+SERVICE_NAME = "mikroclear.service"
+ALLOWED_KEYS = (
+    "MIKROCLEAR_ENABLE_TELEGRAM",
+    "MIKROCLEAR_TELEGRAM_CHATID",
+    "MIKROCLEAR_BOT_ALLOWED_CHAT_IDS",
+    "MIKROCLEAR_BOT_ADMIN_CHAT_IDS",
+    "MIKROCLEAR_MANGLE_CONTROL_ENABLE",
+    "MIKROCLEAR_MANGLE_COMMENT_PREFIX",
+    "MIKROCLEAR_MANGLE_ALLOWED_CHAINS",
+    "MIKROCLEAR_MANGLE_ALLOWED_ACTIONS",
+    "MIKROCLEAR_TELEGRAM_TIMEOUT",
+    "MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS",
+)
+SECRET_RE = re.compile(r"(TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|COOKIE)", re.IGNORECASE)
+
+
+def main() -> int:
+    result = subprocess.run(
+        ["/usr/bin/systemctl", "show", "-p", "MainPID", "--value", SERVICE_NAME],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        return result.returncode
+
+    pid = result.stdout.strip()
+    if not pid or pid == "0":
+        print("MainPID=0")
+        return 0
+
+    path = f"/proc/{pid}/environ"
+    try:
+        entries = os.fsdecode(open(path, "rb").read()).split("\0")
+    except OSError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    for key in ALLOWED_KEYS:
+        prefix = f"{key}="
+        for entry in entries:
+            if entry.startswith(prefix):
+                value = entry[len(prefix):]
+                if SECRET_RE.search(key):
+                    value = "***MASKED***"
+                print(f"{key}={value}")
+                break
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+import fcntl
+import hashlib
+import json
+import os
+import signal
+from contextlib import contextmanager, nullcontext
+from pathlib import Path
+import subprocess
+import sys
+from time import sleep
+from typing import Any, Callable
+
+import requests
+
+
+ENV_PATH = Path("/etc/mikroclear/mikroclear.env")
+ALLOWED_UPDATES = ["message", "callback_query"]
+SERVICE_NAME = "mikroclear.service"
+MASK_MARKER = Path("/run/mikroclear-telegram-reset-mask-owned")
+RUNTIME_MASK_PATH = Path("/run/systemd/system") / SERVICE_NAME
+
+
+def load_env(path: Path = ENV_PATH) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        value = line.strip()
+        if not value or value.startswith("#") or "=" not in value:
+            continue
+        key, item = value.split("=", 1)
+        result[key.strip()] = item.strip().strip('"').strip("'")
+    return result
+
+
+def token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def summarize_get_me(body: dict[str, Any]) -> dict[str, Any]:
+    user = body.get("result", {}) if body.get("ok") else {}
+    return {
+        "ok": bool(body.get("ok")),
+        "id": user.get("id"),
+        "username": user.get("username"),
+    }
+
+
+def summarize_webhook(body: dict[str, Any]) -> dict[str, Any]:
+    webhook = body.get("result", {}) if body.get("ok") else {}
+    return {
+        "ok": bool(body.get("ok")),
+        "url_configured": bool(webhook.get("url")),
+        "pending_update_count": webhook.get("pending_update_count", 0),
+        "allowed_updates": webhook.get("allowed_updates", []),
+    }
+
+
+def summarize_updates(body: dict[str, Any]) -> dict[str, Any]:
+    updates = body.get("result", []) if body.get("ok") else []
+    return {
+        "ok": bool(body.get("ok")),
+        "count": len(updates),
+        "updates": [
+            {
+                "update_id": update.get("update_id"),
+                "type": next(
+                    (key for key in update if key != "update_id"),
+                    "unknown",
+                ),
+            }
+            for update in updates
+        ],
+    }
+
+
+def require_api_success(body: dict[str, Any], method: str) -> None:
+    if not body.get("ok"):
+        description = str(body.get("description", "unknown Telegram API error"))
+        raise RuntimeError(f"{method} failed: {description}")
+
+
+def current_runtime_mask_identity() -> str:
+    stat = RUNTIME_MASK_PATH.lstat()
+    return f"{stat.st_dev}:{stat.st_ino}:{stat.st_ctime_ns}"
+
+
+def read_mask_marker() -> str:
+    try:
+        body = json.loads(MASK_MARKER.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    return str(body.get("mask_identity", "")) if isinstance(body, dict) else ""
+
+
+def write_mask_marker(mask_identity: str) -> None:
+    temporary = MASK_MARKER.with_name(f"{MASK_MARKER.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps({"mask_identity": mask_identity, "pid": os.getpid()}),
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, MASK_MARKER)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@contextmanager
+def service_mask_lock():
+    lock_path = MASK_MARKER.with_name(f"{MASK_MARKER.name}.lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    acquired = False
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            raise RuntimeError("Telegram allowed_updates reset is already in progress") from None
+        yield
+    finally:
+        try:
+            if acquired:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def remove_owned_runtime_mask() -> None:
+    last_error = ""
+    for attempt in range(3):
+        unmask = subprocess.run(
+            ["/usr/bin/systemctl", "unmask", "--runtime", SERVICE_NAME],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if unmask.returncode == 0:
+            try:
+                MASK_MARKER.unlink(missing_ok=True)
+            except OSError as exc:
+                raise RuntimeError(
+                    "runtime service mask was removed but ownership marker remains; "
+                    f"recovery: /usr/bin/rm -f {MASK_MARKER}: {exc}"
+                ) from None
+            return
+        last_error = unmask.stderr.strip() or f"systemctl exit {unmask.returncode}"
+        if attempt < 2:
+            sleep(0.2)
+    raise RuntimeError(
+        "cannot remove mikroclear.service startup inhibitor: "
+        f"{last_error}; recovery: /usr/bin/systemctl unmask --runtime "
+        f"{SERVICE_NAME} && /usr/bin/rm -f {MASK_MARKER}"
+    )
+
+
+@contextmanager
+def inhibit_service_start():
+    with service_mask_lock():
+        def interrupt_reset(_signum: int, _frame: Any) -> None:
+            raise InterruptedError("Telegram reset interrupted")
+
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, interrupt_reset)
+        owns_runtime_mask = False
+        try:
+            state_result = subprocess.run(
+                ["/usr/bin/systemctl", "is-enabled", SERVICE_NAME],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            prior_state = state_result.stdout.strip()
+            if not prior_state:
+                detail = state_result.stderr.strip() or f"systemctl exit {state_result.returncode}"
+                raise RuntimeError(f"cannot determine mikroclear.service mask state: {detail}")
+
+            if prior_state == "masked-runtime":
+                marker_identity = read_mask_marker()
+                owns_runtime_mask = bool(
+                    marker_identity
+                    and marker_identity == current_runtime_mask_identity()
+                )
+                if not owns_runtime_mask:
+                    yield
+                    return
+            elif prior_state == "masked":
+                yield
+                return
+            else:
+                MASK_MARKER.unlink(missing_ok=True)
+                blocked_signals = signal.pthread_sigmask(
+                    signal.SIG_BLOCK,
+                    {signal.SIGTERM},
+                )
+                try:
+                    try:
+                        mask = subprocess.run(
+                            ["/usr/bin/systemctl", "mask", "--runtime", SERVICE_NAME],
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                    except BaseException:
+                        state_after_error = subprocess.run(
+                            ["/usr/bin/systemctl", "is-enabled", SERVICE_NAME],
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                        owns_runtime_mask = (
+                            state_after_error.stdout.strip() == "masked-runtime"
+                        )
+                        raise
+                    if mask.returncode == 0:
+                        owns_runtime_mask = True
+                    else:
+                        state_after_error = subprocess.run(
+                            ["/usr/bin/systemctl", "is-enabled", SERVICE_NAME],
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                        owns_runtime_mask = (
+                            state_after_error.stdout.strip() == "masked-runtime"
+                        )
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, blocked_signals)
+                if mask.returncode != 0:
+                    detail = mask.stderr.strip() or f"systemctl exit {mask.returncode}"
+                    raise RuntimeError(f"cannot inhibit mikroclear.service startup: {detail}")
+                write_mask_marker(current_runtime_mask_identity())
+
+            yield
+        finally:
+            cleanup_error: Exception | None = None
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            try:
+                if owns_runtime_mask:
+                    remove_owned_runtime_mask()
+            except Exception as exc:
+                cleanup_error = exc
+            finally:
+                signal.signal(signal.SIGTERM, previous_sigterm)
+            if cleanup_error is not None:
+                raise cleanup_error
+
+
+def run_probe(
+    argv: list[str],
+    *,
+    env: dict[str, str],
+    runtime_token: str | None,
+    request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
+    service_active: Callable[[], bool],
+    service_inhibitor: Callable[[], Any] = nullcontext,
+) -> dict[str, Any]:
+    config_token = env.get("MIKROCLEAR_TELEGRAM_TOKEN", "")
+    if not config_token:
+        raise RuntimeError("MIKROCLEAR_TELEGRAM_TOKEN is empty")
+
+    arguments = argv[1:]
+    if any(argument != "--reset-allowed-updates" for argument in arguments):
+        raise RuntimeError("usage: mikroclear-telegram-getupdates-probe [--reset-allowed-updates]")
+    reset = "--reset-allowed-updates" in arguments
+    result: dict[str, Any] = {
+        "mode": "reset-allowed-updates" if reset else "read-only",
+        "config_token_fingerprint": token_fingerprint(config_token),
+        "runtime_token_fingerprint": (
+            token_fingerprint(runtime_token) if runtime_token else None
+        ),
+        "tokens_match": bool(runtime_token and runtime_token == config_token),
+    }
+
+    if reset:
+        with service_inhibitor():
+            if service_active():
+                raise RuntimeError(
+                    "mikroclear.service must be stopped before allowed_updates reset"
+                )
+            webhook_before = request("getWebhookInfo", config_token, None)
+            require_api_success(webhook_before, "getWebhookInfo before reset")
+            result["webhook_before"] = summarize_webhook(webhook_before)
+            if service_active():
+                raise RuntimeError(
+                    "mikroclear.service must remain stopped during allowed_updates reset"
+                )
+            updates = request(
+                "getUpdates",
+                config_token,
+                {
+                    "offset": 0,
+                    "timeout": 0,
+                    "allowed_updates": json.dumps(ALLOWED_UPDATES),
+                },
+            )
+            require_api_success(updates, "getUpdates")
+            result["updates"] = summarize_updates(updates)
+            if service_active():
+                raise RuntimeError(
+                    "mikroclear.service started during allowed_updates reset"
+                )
+            webhook_after = request("getWebhookInfo", config_token, None)
+            require_api_success(webhook_after, "getWebhookInfo after reset")
+            result["webhook_after"] = summarize_webhook(webhook_after)
+            if set(result["webhook_after"]["allowed_updates"]) != set(ALLOWED_UPDATES):
+                raise RuntimeError(
+                    "allowed_updates reset did not establish message and callback_query"
+                )
+        return result
+
+    identities = {
+        "config": {
+            "get_me": summarize_get_me(request("getMe", config_token, None)),
+            "webhook": summarize_webhook(
+                request("getWebhookInfo", config_token, None)
+            ),
+        }
+    }
+    if runtime_token and runtime_token != config_token:
+        identities["runtime"] = {
+            "get_me": summarize_get_me(request("getMe", runtime_token, None)),
+            "webhook": summarize_webhook(
+                request("getWebhookInfo", runtime_token, None)
+            ),
+        }
+    result["identities"] = identities
+    return result
+
+
+def read_runtime_token() -> str | None:
+    result = subprocess.run(
+        ["/usr/bin/systemctl", "show", "-p", "MainPID", "--value", SERVICE_NAME],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    pid = result.stdout.strip()
+    if not pid or pid == "0":
+        return None
+    try:
+        entries = os.fsdecode(Path(f"/proc/{pid}/environ").read_bytes()).split("\0")
+    except OSError:
+        return None
+    prefix = "MIKROCLEAR_TELEGRAM_TOKEN="
+    return next(
+        (entry[len(prefix):] for entry in entries if entry.startswith(prefix)),
+        None,
+    )
+
+
+def is_service_active() -> bool:
+    result = subprocess.run(
+        ["/usr/bin/systemctl", "is-active", "--quiet", SERVICE_NAME],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 3:
+        return False
+    raise RuntimeError(
+        f"cannot verify mikroclear.service state: systemctl exit {result.returncode}"
+    )
+
+
+def telegram_request(
+    method: str,
+    token: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        response = requests.get(
+            f"https://api.telegram.org/bot{token}/{method}",
+            params=params,
+            timeout=10,
+        )
+        body = response.json()
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"HTTP {response.status_code}: {body.get('description', 'Telegram API error')}"
+            )
+        return body
+    except Exception as exc:
+        message = str(exc).replace(token, "***MASKED***")
+        raise RuntimeError(message) from None
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = argv or sys.argv
+    env = load_env()
+    token = env.get("MIKROCLEAR_TELEGRAM_TOKEN", "")
+    try:
+        result = run_probe(
+            arguments,
+            env=env,
+            runtime_token=read_runtime_token(),
+            request=telegram_request,
+            service_active=is_service_active,
+            service_inhibitor=inhibit_service_start,
+        )
+    except Exception as exc:
+        message = str(exc).replace(token, "***MASKED***") if token else str(exc)
+        print(message, file=sys.stderr)
+        return 2
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

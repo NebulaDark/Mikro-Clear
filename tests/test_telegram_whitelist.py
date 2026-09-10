@@ -1,0 +1,2011 @@
+import json
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import threading
+import types
+from unittest import TestCase
+from unittest.mock import Mock
+
+from mikroclear.bot.audit import BotAuditLog
+from mikroclear.bot.auth import BotAuth
+from mikroclear.bot.settings import BotSettings
+from mikroclear.settings import Settings
+from mikroclear.state.dynamic_whitelist import DynamicWhitelistStore
+from mikroclear.suricata.whitelist_policy import WhitelistPolicy
+from mikroclear.telegram.unblock import build_unblock_keyboard
+from mikroclear.telegram.whitelist_actions import (
+    WhitelistActionStore,
+    WhitelistActionStoreError,
+    append_managed_exception_button,
+    build_whitelist_confirm_keyboard,
+    parse_whitelist_callback,
+)
+from mikroclear.telegram.whitelist_handler import TelegramWhitelistHandler
+
+
+class TelegramWhitelistActionTests(TestCase):
+    def test_two_store_instances_allow_exactly_one_concurrent_consume(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "actions.json")
+            creator = WhitelistActionStore(
+                path,
+                token_factory=lambda: "consume123",
+            )
+            token = creator.create(
+                kind="add_confirm",
+                address="192.168.98.200",
+                list_name="Suricata",
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+                ttl_seconds=300,
+            )
+            first = WhitelistActionStore(path)
+            second = WhitelistActionStore(path)
+            first_at_write = threading.Event()
+            second_has_read = threading.Event()
+            original_first_write = first._write_state
+            original_second_read = second._read_state
+
+            def pause_first_write(state):
+                first_at_write.set()
+                second_has_read.wait(0.25)
+                original_first_write(state)
+
+            def observe_second_read():
+                state = original_second_read()
+                second_has_read.set()
+                return state
+
+            first._write_state = pause_first_write
+            second._read_state = observe_second_read
+            results = []
+            errors = []
+
+            def consume(store):
+                try:
+                    results.append(
+                        store.consume(
+                            token,
+                            now=101,
+                            chat_id="chat-1",
+                            user_id="user-1",
+                        )
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            second_thread = threading.Thread(
+                target=lambda: (
+                    first_at_write.wait(),
+                    consume(second),
+                ),
+            )
+            first_thread = threading.Thread(target=consume, args=(first,))
+            second_thread.start()
+            first_thread.start()
+            first_thread.join(2)
+            second_thread.join(2)
+
+            self.assertFalse(first_thread.is_alive())
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(
+                sum(payload is not None for payload in results),
+                1,
+            )
+
+    def test_two_store_instances_preserve_both_concurrent_creates(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "actions.json")
+            first = WhitelistActionStore(
+                path,
+                token_factory=lambda: "created01",
+            )
+            second = WhitelistActionStore(
+                path,
+                token_factory=lambda: "created02",
+            )
+            first_at_write = threading.Event()
+            second_has_read = threading.Event()
+            original_first_write = first._write_state
+            original_second_read = second._read_state
+
+            def pause_first_write(state):
+                first_at_write.set()
+                second_has_read.wait(0.25)
+                original_first_write(state)
+
+            def observe_second_read():
+                state = original_second_read()
+                second_has_read.set()
+                return state
+
+            first._write_state = pause_first_write
+            second._read_state = observe_second_read
+            errors = []
+
+            def create(store, address):
+                try:
+                    store.create(
+                        kind="add_confirm",
+                        address=address,
+                        list_name="Suricata",
+                        chat_id="chat-1",
+                        user_id="user-1",
+                        now=100,
+                        ttl_seconds=300,
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            second_thread = threading.Thread(
+                target=lambda: (
+                    first_at_write.wait(),
+                    create(second, "192.168.98.201"),
+                ),
+            )
+            first_thread = threading.Thread(
+                target=create,
+                args=(first, "192.168.98.200"),
+            )
+            second_thread.start()
+            first_thread.start()
+            first_thread.join(2)
+            second_thread.join(2)
+
+            self.assertFalse(first_thread.is_alive())
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(errors, [])
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(set(persisted), {"created01", "created02"})
+
+    def test_action_token_is_single_use_expiring_and_requester_bound(self):
+        with TemporaryDirectory() as tmp:
+            actions = WhitelistActionStore(
+                Path(tmp, "actions.json"),
+                token_factory=lambda: "token123",
+            )
+            token = actions.create(
+                kind="add_confirm",
+                address="192.168.98.200",
+                list_name="Suricata",
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+                ttl_seconds=300,
+                source_chat_id="chat-1",
+                source_message_id=77,
+                source_reply_markup={"inline_keyboard": []},
+            )
+
+            self.assertEqual(token, "token123")
+            self.assertIsNone(
+                actions.consume(
+                    token,
+                    now=101,
+                    chat_id="chat-1",
+                    user_id="other",
+                )
+            )
+            self.assertIsNotNone(
+                actions.consume(
+                    token,
+                    now=101,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertIsNone(
+                actions.consume(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+
+    def test_add_request_accepts_clicking_user_but_remains_chat_bound(self):
+        with TemporaryDirectory() as tmp:
+            actions = WhitelistActionStore(
+                Path(tmp, "actions.json"),
+                token_factory=lambda: "request1",
+            )
+            token = actions.create(
+                kind="add_request",
+                address="10.0.0.8",
+                list_name="Suricata",
+                chat_id="chat-1",
+                user_id="",
+                now=100,
+                ttl_seconds=300,
+            )
+
+            self.assertIsNone(
+                actions.consume(
+                    token,
+                    now=101,
+                    chat_id="other",
+                    user_id="admin-1",
+                )
+            )
+            self.assertEqual(
+                actions.consume(
+                    token,
+                    now=101,
+                    chat_id="chat-1",
+                    user_id="admin-1",
+                )["kind"],
+                "add_request",
+            )
+
+    def test_add_request_is_promoted_in_place_and_reused_for_same_admin(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "actions.json")
+            actions = WhitelistActionStore(
+                path,
+                token_factory=lambda: "request1",
+            )
+            token = actions.create(
+                kind="add_request",
+                address="10.0.0.8",
+                list_name="Suricata",
+                sid="2402000",
+                chat_id="chat-1",
+                user_id="",
+                now=100,
+                ttl_seconds=300,
+            )
+            source_markup = {
+                "inline_keyboard": [
+                    [{"text": "Existing", "callback_data": "existing"}]
+                ]
+            }
+
+            first = actions.promote_add_request(
+                token,
+                now=101,
+                chat_id="chat-1",
+                user_id="admin-1",
+                source_chat_id="chat-1",
+                source_message_id=77,
+                source_reply_markup=source_markup,
+            )
+            second = actions.promote_add_request(
+                token,
+                now=102,
+                chat_id="chat-1",
+                user_id="admin-1",
+                source_chat_id="ignored",
+                source_message_id=999,
+                source_reply_markup={"inline_keyboard": []},
+            )
+
+            self.assertEqual(first, second)
+            self.assertEqual(first["kind"], "add_confirm")
+            self.assertEqual(first["user_id"], "admin-1")
+            self.assertEqual(first["created_at"], 100)
+            self.assertEqual(first["expires_at"], 400)
+            self.assertEqual(first["source_chat_id"], "chat-1")
+            self.assertEqual(first["source_message_id"], 77)
+            self.assertEqual(first["source_reply_markup"], source_markup)
+            self.assertEqual(set(json.loads(path.read_text())), {token})
+            self.assertIsNone(
+                actions.promote_add_request(
+                    token,
+                    now=103,
+                    chat_id="chat-1",
+                    user_id="admin-2",
+                    source_chat_id="chat-1",
+                    source_message_id=77,
+                    source_reply_markup=source_markup,
+                )
+            )
+
+    def test_expired_token_is_removed_without_consuming_other_tokens(self):
+        tokens = iter(("expired1", "current1"))
+        with TemporaryDirectory() as tmp:
+            actions = WhitelistActionStore(
+                Path(tmp, "actions.json"),
+                token_factory=lambda: next(tokens),
+            )
+            expired = actions.create(
+                kind="add_confirm",
+                address="172.16.0.8",
+                list_name="Suricata",
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+                ttl_seconds=1,
+            )
+            current = actions.create(
+                kind="remove_confirm",
+                address="192.168.1.8",
+                list_name="Suricata",
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+                ttl_seconds=300,
+            )
+
+            self.assertIsNone(
+                actions.peek(
+                    expired,
+                    now=101,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertIsNotNone(
+                actions.peek(
+                    current,
+                    now=101,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+
+    def test_cancel_is_bound_single_use_and_persists_private_payload(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "actions.json")
+            actions = WhitelistActionStore(path, token_factory=lambda: "cancel12")
+            token = actions.create(
+                kind="remove_confirm",
+                address="192.168.98.200",
+                list_name="Suricata",
+                sid="2402000",
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+                ttl_seconds=300,
+                source_chat_id="chat-1",
+                source_message_id=77,
+                source_reply_markup={"inline_keyboard": []},
+            )
+
+            payload = json.loads(path.read_text(encoding="utf-8"))[token]
+            self.assertEqual(
+                set(payload),
+                {
+                    "kind",
+                    "address",
+                    "list_name",
+                    "sid",
+                    "chat_id",
+                    "user_id",
+                    "created_at",
+                    "expires_at",
+                    "source_chat_id",
+                    "source_message_id",
+                    "source_reply_markup",
+                },
+            )
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            lock_path = path.with_name(f"{path.name}.lock")
+            self.assertEqual(os.stat(lock_path).st_mode & 0o777, 0o600)
+            self.assertFalse(
+                actions.cancel(
+                    token,
+                    now=101,
+                    chat_id="chat-1",
+                    user_id="other",
+                )
+            )
+            self.assertTrue(
+                actions.cancel(
+                    token,
+                    now=101,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertFalse(
+                actions.cancel(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+
+    def test_rejects_non_rfc1918_and_invalid_requester_payloads(self):
+        invalid_cases = (
+            {"address": "8.8.8.8"},
+            {"address": "192.168.0.0/24"},
+            {"kind": "unknown"},
+            {"chat_id": ""},
+            {"kind": "add_confirm", "user_id": ""},
+        )
+        for overrides in invalid_cases:
+            with self.subTest(overrides=overrides), TemporaryDirectory() as tmp:
+                values = {
+                    "kind": "add_confirm",
+                    "address": "192.168.98.200",
+                    "list_name": "Suricata",
+                    "chat_id": "chat-1",
+                    "user_id": "user-1",
+                    "now": 100,
+                    "ttl_seconds": 300,
+                }
+                values.update(overrides)
+                actions = WhitelistActionStore(
+                    Path(tmp, "actions.json"),
+                    token_factory=lambda: "invalid1",
+                )
+                with self.assertRaises(ValueError):
+                    actions.create(**values)
+
+    def test_malformed_persisted_state_fails_closed(self):
+        malformed_documents = (
+            "{",
+            json.dumps({"token123": {}}),
+        )
+        for document in malformed_documents:
+            with self.subTest(document=document), TemporaryDirectory() as tmp:
+                path = Path(tmp, "actions.json")
+                path.write_text(document, encoding="utf-8")
+                actions = WhitelistActionStore(path)
+
+                with self.assertRaises(WhitelistActionStoreError):
+                    actions.peek(
+                        "token123",
+                        now=101,
+                        chat_id="chat-1",
+                        user_id="user-1",
+                    )
+
+    def test_token_collision_fails_without_replacing_existing_action(self):
+        with TemporaryDirectory() as tmp:
+            actions = WhitelistActionStore(
+                Path(tmp, "actions.json"),
+                token_factory=lambda: "collision123",
+            )
+            actions.create(
+                kind="add_confirm",
+                address="192.168.98.200",
+                list_name="Suricata",
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+                ttl_seconds=300,
+            )
+
+            with self.assertRaisesRegex(ValueError, "collision"):
+                actions.create(
+                    kind="add_confirm",
+                    address="192.168.98.201",
+                    list_name="Suricata",
+                    chat_id="chat-1",
+                    user_id="user-1",
+                    now=101,
+                    ttl_seconds=300,
+                )
+
+            payload = actions.peek(
+                "collision123",
+                now=102,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(payload["address"], "192.168.98.200")
+
+    def test_parse_whitelist_callback_accepts_only_approved_namespace(self):
+        approved = {
+            "add-request",
+            "add-confirm",
+            "remove-request",
+            "remove-confirm",
+            "retry-unblock",
+            "cancel",
+        }
+        for action in approved:
+            with self.subTest(action=action):
+                self.assertEqual(
+                    parse_whitelist_callback(
+                        f"whitelist:v1:{action}:token123"
+                    ),
+                    (action, "token123"),
+                )
+
+        for data in (
+            "whitelist:v2:add-request:token123",
+            "whitelist:v1:add:token123",
+            "whitelist:v1:add-request:short",
+            "whitelist:v1:add-request:token123:extra",
+            None,
+        ):
+            with self.subTest(data=data):
+                self.assertIsNone(parse_whitelist_callback(data))
+
+    def test_longest_callback_accepts_24_byte_token_below_telegram_limit(self):
+        token = "A" * 24
+        callback = f"whitelist:v1:remove-confirm:{token}"
+
+        self.assertEqual(
+            parse_whitelist_callback(callback),
+            ("remove-confirm", token),
+        )
+        self.assertEqual(len(callback.encode("utf-8")), 52)
+        self.assertLessEqual(len(callback.encode("utf-8")), 64)
+        self.assertIsNone(
+            parse_whitelist_callback(
+                f"whitelist:v1:remove-confirm:{token}A"
+            )
+        )
+
+    def test_append_exception_action_keeps_existing_rows(self):
+        existing = build_unblock_keyboard(
+            "192.168.98.200",
+            "unblock-token",
+        )
+
+        markup = append_managed_exception_button(
+            existing,
+            address="192.168.98.200",
+            token="whitelist-token",
+        )
+
+        rows = markup["inline_keyboard"]
+        self.assertEqual(
+            rows[0][0]["text"],
+            "🔓 Unblock 192.168.98.200",
+        )
+        self.assertEqual(
+            [button["text"] for button in rows[1]],
+            ["AbuseIPDB", "VirusTotal"],
+        )
+        self.assertEqual(
+            rows[2][0]["text"],
+            "🛡 Добавить в исключения 192.168.98.200",
+        )
+        self.assertEqual(
+            rows[2][0]["callback_data"],
+            "whitelist:v1:add-request:whitelist-token",
+        )
+        self.assertEqual(len(existing["inline_keyboard"]), 2)
+
+    def test_build_confirm_keyboard_uses_approved_add_and_cancel_callbacks(self):
+        markup = build_whitelist_confirm_keyboard("token123")
+
+        self.assertEqual(
+            markup,
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "✅ Добавить и разблокировать",
+                            "callback_data": "whitelist:v1:add-confirm:token123",
+                        }
+                    ],
+                    [
+                        {
+                            "text": "❌ Отмена",
+                            "callback_data": "whitelist:v1:cancel:token123",
+                        }
+                    ],
+                ]
+            },
+        )
+
+
+class RecordingStore:
+    def __init__(self, events=None, addresses=()):
+        self.events = events if events is not None else []
+        self.addresses = set(addresses)
+        self.add_calls = 0
+        self.remove_calls = 0
+
+    def snapshot(self):
+        return tuple(sorted(self.addresses))
+
+    def contains(self, address):
+        return address in self.addresses
+
+    def add(self, address):
+        self.add_calls += 1
+        self.events.append(f"store:add:{address}")
+        changed = address not in self.addresses
+        self.addresses.add(address)
+        return changed
+
+    def remove(self, address):
+        self.remove_calls += 1
+        self.events.append(f"store:remove:{address}")
+        changed = address in self.addresses
+        self.addresses.discard(address)
+        return changed
+
+
+class FailingStore(RecordingStore):
+    def add(self, address):
+        self.add_calls += 1
+        self.events.append(f"store:add:{address}")
+        raise OSError("disk full")
+
+
+class RecordingAddressList:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def select(self, *_keys):
+        return self
+
+    def where(self, *_filters):
+        return (
+            [
+                {
+                    ".id": "*1",
+                    "list": "Suricata",
+                    "address": self.owner.expected_address,
+                }
+            ]
+            if self.owner.row_present
+            else []
+        )
+
+    def remove(self, _row_id):
+        self.owner.events.append(
+            f"router:remove:{self.owner.expected_address}"
+        )
+        self.owner.row_present = False
+
+
+class RecordingRouter:
+    def __init__(self, events=None, *, removed=1):
+        self.events = events if events is not None else []
+        self.removed = removed
+        self.row_present = bool(removed)
+        self.expected_address = "192.168.98.200"
+        self.run_calls = 0
+        self.address_list = RecordingAddressList(self)
+
+    def paths(self):
+        return self.address_list, None, ()
+
+    def run_with_reconnect(self, operation_name, callback):
+        self.run_calls += 1
+        if operation_name != "telegram managed whitelist unblock":
+            raise AssertionError(operation_name)
+        return callback()
+
+
+class FailingRouter(RecordingRouter):
+    def run_with_reconnect(self, operation_name, callback):
+        self.run_calls += 1
+        raise ConnectionError("router unavailable")
+
+
+class ForgedActions:
+    def __init__(self, payload):
+        self.payload = dict(payload)
+        self.consume_calls = 0
+
+    def consume(self, *_args, **_kwargs):
+        self.consume_calls += 1
+        return dict(self.payload)
+
+    def peek(self, *_args, **_kwargs):
+        return dict(self.payload)
+
+
+class FailingAudit:
+    def __init__(self, exception=PermissionError("secret audit path")):
+        self.exception = exception
+
+    def record(self, *_args, **_kwargs):
+        raise self.exception
+
+
+class PostAttemptFailingAudit:
+    def __init__(self):
+        self.calls = 0
+
+    def record(self, *_args, **_kwargs):
+        self.calls += 1
+        if self.calls > 1:
+            raise OSError("secret disk full detail")
+
+
+def sample_event():
+    return {"alert": {"signature_id": 2402000}}
+
+
+def admin_auth():
+    return BotAuth(
+        BotSettings(admin_chat_ids=("chat-1",)),
+        legacy_chat_id="",
+    )
+
+
+def callback(
+    data,
+    *,
+    chat_id="chat-1",
+    user_id="user-1",
+    message_id=77,
+    reply_markup=None,
+):
+    message = {
+        "message_id": message_id,
+        "chat": {"id": chat_id},
+    }
+    if reply_markup is not None:
+        message["reply_markup"] = reply_markup
+    return {
+        "id": "cb-1",
+        "data": data,
+        "message": message,
+        "from": {"id": user_id},
+    }
+
+
+def execute_callback(token):
+    return callback(f"whitelist:v1:add-confirm:{token}")
+
+
+def retry_callback(token):
+    return callback(f"whitelist:v1:retry-unblock:{token}")
+
+
+def read_audit(handler):
+    lines = Path(handler.audit.path).read_text(encoding="utf-8").splitlines()
+    return json.loads(lines[-1])
+
+
+def last_answer(handler):
+    args = handler.answer_callback.call_args.args
+    return args[1], args[2]
+
+
+def make_handler(
+    tmp,
+    *,
+    store=None,
+    router=None,
+    actions=None,
+    dry_run=False,
+    control_enabled=True,
+    unblock_enabled=True,
+    admin_chat_ids=("chat-1",),
+    bot_enable=True,
+    bot_modules=("whitelist_control",),
+):
+    resolved_store = store or RecordingStore()
+    resolved_router = router or RecordingRouter()
+    token_values = iter(
+        (
+            "request001",
+            "confirm001",
+            "remove001",
+            "retry0001",
+            "retry0002",
+            "extra0001",
+        )
+    )
+    resolved_actions = actions or WhitelistActionStore(
+        Path(tmp, "actions.json"),
+        token_factory=lambda: next(token_values),
+    )
+    settings = Settings(
+        enable_telegram=True,
+        telegram_token="token",
+        telegram_chatid="chat-1",
+        telegram_unblock_enable=unblock_enabled,
+        telegram_whitelist_control_enable=control_enabled,
+        telegram_unblock_ttl_seconds=300,
+        block_list_name="Suricata",
+    )
+    bot_settings = BotSettings(
+        enable=bot_enable,
+        dry_run=dry_run,
+        admin_chat_ids=admin_chat_ids,
+        modules=bot_modules,
+        audit_log=str(Path(tmp, "audit.jsonl")),
+    )
+    router_factory = Mock(return_value=resolved_router)
+    handler = TelegramWhitelistHandler(
+        settings,
+        bot_settings=bot_settings,
+        store=resolved_store,
+        policy=WhitelistPolicy(("10.0.0.0/8",), resolved_store),
+        actions=resolved_actions,
+        audit=BotAuditLog(Path(bot_settings.audit_log)),
+        get_router_client=router_factory,
+        log=Mock(),
+    )
+    handler.router = router_factory
+    handler.answer_callback = Mock()
+    handler.send_message = Mock(
+        return_value=types.SimpleNamespace(ok=True, retryable=False)
+    )
+    handler.edit_message = Mock(
+        return_value=types.SimpleNamespace(ok=True, retryable=False)
+    )
+    handler.edit_markup = Mock(
+        return_value=types.SimpleNamespace(ok=True, retryable=False)
+    )
+    return handler
+
+
+def create_action(
+    handler,
+    *,
+    kind="add_confirm",
+    address="192.168.98.200",
+    now=100,
+    ttl_seconds=300,
+    source_reply_markup=None,
+):
+    return handler.actions.create(
+        kind=kind,
+        address=address,
+        list_name="Suricata",
+        sid="2402000",
+        chat_id="chat-1",
+        user_id="user-1",
+        now=now,
+        ttl_seconds=ttl_seconds,
+        source_chat_id="chat-1",
+        source_message_id=77,
+        source_reply_markup=source_reply_markup
+        or build_unblock_keyboard(address, "unblock-token"),
+    )
+
+
+def dispatch_whitelist_callback(handler, callback_value, *, now=101, auth=None):
+    return handler.handle_callback(
+        callback=callback_value,
+        auth=auth or admin_auth(),
+        answer_callback=handler.answer_callback,
+        send_message=handler.send_message,
+        edit_message=handler.edit_message,
+        edit_reply_markup=handler.edit_markup,
+        telegram_token="token",
+        timeout=7,
+        now=now,
+    )
+
+
+class TelegramWhitelistHandlerTests(TestCase):
+    def test_disabled_bot_or_missing_module_rejects_old_callback_without_peek_or_consume(self):
+        for bot_settings in (
+            BotSettings(
+                enable=False,
+                admin_chat_ids=("chat-1",),
+                modules=("whitelist_control",),
+            ),
+            BotSettings(
+                enable=True,
+                admin_chat_ids=("chat-1",),
+                modules=("status",),
+            ),
+        ):
+            with self.subTest(bot_settings=bot_settings), TemporaryDirectory() as tmp:
+                actions = Mock()
+                handler = make_handler(tmp, actions=actions)
+                handler.bot_settings = bot_settings
+
+                handled = dispatch_whitelist_callback(
+                    handler,
+                    execute_callback("forged001"),
+                )
+
+                self.assertTrue(handled)
+                actions.peek.assert_not_called()
+                actions.consume.assert_not_called()
+                handler.router.assert_not_called()
+                self.assertEqual(handler.store.snapshot(), ())
+                self.assertEqual(
+                    last_answer(handler),
+                    ("Функция недоступна", True),
+                )
+
+    def test_stale_or_forged_list_name_is_rejected_without_consume_or_routeros(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            actions = ForgedActions(
+                {
+                    "kind": "add_confirm",
+                    "address": "192.168.98.200",
+                    "list_name": "OtherList",
+                    "sid": "1",
+                    "chat_id": "chat-1",
+                    "user_id": "user-1",
+                    "source_chat_id": "chat-1",
+                    "source_message_id": 77,
+                    "source_reply_markup": {"inline_keyboard": []},
+                }
+            )
+            handler = make_handler(tmp, store=store, actions=actions)
+
+            dispatch_whitelist_callback(
+                handler,
+                execute_callback("forged001"),
+            )
+
+            self.assertEqual(actions.consume_calls, 0)
+            self.assertEqual(store.add_calls, 0)
+            handler.router.assert_not_called()
+            self.assertEqual(
+                last_answer(handler),
+                ("Запрос относится к другому address-list", True),
+            )
+
+    def test_routeros_remove_that_leaves_exact_row_is_partial_and_offers_retry(self):
+        class LingeringAddressList:
+            def select(self, *_keys):
+                return self
+
+            def where(self, *_filters):
+                return [{".id": "*1", "list": "Suricata", "address": "192.168.98.200"}]
+
+            def remove(self, _row_id):
+                return None
+
+        class LingeringRouter(RecordingRouter):
+            def __init__(self):
+                super().__init__()
+                self.address_list = LingeringAddressList()
+
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            handler = make_handler(tmp, store=store, router=LingeringRouter())
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            self.assertTrue(store.contains("192.168.98.200"))
+            self.assertEqual(read_audit(handler)["outcome"], "partial")
+            self.assertIn(
+                "🔄 Повторить разблокировку",
+                json.dumps(
+                    handler.edit_markup.call_args.kwargs["reply_markup"],
+                    ensure_ascii=False,
+                ),
+            )
+
+    def test_add_attempt_audit_failure_aborts_before_token_consume_and_business_mutation(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter()
+            handler = make_handler(tmp, store=store, router=router)
+            token = create_action(handler)
+            handler.audit = FailingAudit()
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(router.run_calls, 0)
+            self.assertIsNotNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertIn(
+                "Не удалось записать аудит",
+                handler.send_message.call_args.kwargs["text"],
+            )
+            self.assertTrue(
+                any("PermissionError" in call.args[0] for call in handler.log.call_args_list)
+            )
+            self.assertFalse(
+                any("secret audit path" in call.args[0] for call in handler.log.call_args_list)
+            )
+
+    def test_remove_attempt_audit_failure_aborts_before_token_consume_and_store_mutation(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store)
+            token = create_action(handler, kind="remove_confirm")
+            handler.audit = FailingAudit(OSError("disk full secret"))
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertEqual(store.remove_calls, 0)
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertIsNotNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertIn(
+                "Не удалось записать аудит",
+                handler.send_message.call_args.kwargs["text"],
+            )
+
+    def test_post_mutation_audit_failure_is_best_effort_and_keeps_factual_add_result(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter()
+            handler = make_handler(tmp, store=store, router=router)
+            handler.audit = PostAttemptFailingAudit()
+            token = create_action(handler)
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertTrue(handled)
+            self.assertTrue(store.contains("192.168.98.200"))
+            self.assertEqual(router.run_calls, 1)
+            self.assertIn(
+                "✅ В исключениях 192.168.98.200",
+                json.dumps(
+                    handler.edit_markup.call_args.kwargs["reply_markup"],
+                    ensure_ascii=False,
+                ),
+            )
+            self.assertTrue(
+                any("OSError" in call.args[0] for call in handler.log.call_args_list)
+            )
+            self.assertFalse(
+                any(
+                    "secret disk full detail" in call.args[0]
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_post_mutation_audit_failure_is_best_effort_for_remove(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store)
+            handler.audit = PostAttemptFailingAudit()
+            token = create_action(handler, kind="remove_confirm")
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.remove_calls, 1)
+            handler.edit_message.assert_called_once()
+            self.assertTrue(
+                any("OSError" in call.args[0] for call in handler.log.call_args_list)
+            )
+
+    def test_gate_is_rechecked_after_attempt_audit_before_token_consume(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            handler = make_handler(tmp, store=store)
+
+            class DisablingAudit:
+                def record(self, *_args, **_kwargs):
+                    object.__setattr__(
+                        handler.settings,
+                        "telegram_whitelist_control_enable",
+                        False,
+                    )
+
+            handler.audit = DisablingAudit()
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertEqual(store.add_calls, 0)
+            handler.router.assert_not_called()
+            self.assertIsNotNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+    def test_add_persists_before_routeros_remove_and_updates_only_markup(self):
+        with TemporaryDirectory() as tmp:
+            events = []
+            store = RecordingStore(events)
+            router = RecordingRouter(events, removed=1)
+            handler = make_handler(
+                tmp,
+                store=store,
+                router=router,
+                dry_run=False,
+            )
+            handler.answer_callback.side_effect = (
+                lambda *_args: events.append("callback:answer")
+            )
+            token = create_action(handler)
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(
+                events[:3],
+                [
+                    "callback:answer",
+                    "store:add:192.168.98.200",
+                    "router:remove:192.168.98.200",
+                ],
+            )
+            self.assertTrue(store.contains("192.168.98.200"))
+            self.assertIn(
+                "✅ В исключениях 192.168.98.200",
+                json.dumps(
+                    handler.edit_markup.call_args.kwargs,
+                    ensure_ascii=False,
+                ),
+            )
+            handler.edit_message.assert_not_called()
+            self.assertEqual(read_audit(handler)["outcome"], "success")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+
+    def test_ack_failure_leaves_every_valid_action_and_business_state_untouched(self):
+        cases = (
+            ("add_request", "add-request"),
+            ("remove_confirm", "remove-request"),
+            ("add_confirm", "add-confirm"),
+            ("remove_confirm", "remove-confirm"),
+            ("retry_unblock", "retry-unblock"),
+            ("add_confirm", "cancel"),
+        )
+        for kind, action_name in cases:
+            with self.subTest(action_name=action_name), TemporaryDirectory() as tmp:
+                initial_addresses = (
+                    ("192.168.98.200",)
+                    if action_name in {"remove-request", "retry-unblock"}
+                    else ()
+                )
+                store = RecordingStore(addresses=initial_addresses)
+                router = RecordingRouter()
+                handler = make_handler(tmp, store=store, router=router)
+                handler.answer_callback.side_effect = ConnectionError(
+                    "telegram unavailable"
+                )
+                token = create_action(handler, kind=kind)
+                callback_value = callback(
+                    f"whitelist:v1:{action_name}:{token}"
+                )
+
+                with self.assertRaises(ConnectionError):
+                    dispatch_whitelist_callback(
+                        handler,
+                        callback_value,
+                    )
+
+                self.assertEqual(store.snapshot(), initial_addresses)
+                self.assertEqual(store.add_calls, 0)
+                self.assertEqual(store.remove_calls, 0)
+                self.assertEqual(router.run_calls, 0)
+                handler.send_message.assert_not_called()
+                handler.edit_message.assert_not_called()
+                handler.edit_markup.assert_not_called()
+                self.assertIsNotNone(
+                    handler.actions.peek(
+                        token,
+                        now=102,
+                        chat_id="chat-1",
+                        user_id="user-1",
+                    )
+                )
+
+    def test_persistence_failure_never_calls_routeros(self):
+        with TemporaryDirectory() as tmp:
+            store = FailingStore()
+            handler = make_handler(tmp, store=store, router=RecordingRouter())
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            handler.router.assert_not_called()
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(read_audit(handler)["outcome"], "failure")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+            self.assertIn(
+                "Не удалось сохранить исключение",
+                handler.send_message.call_args.kwargs["text"],
+            )
+
+    def test_routeros_failure_keeps_exception_and_offers_removal_only_retry(self):
+        with TemporaryDirectory() as tmp:
+            store = DynamicWhitelistStore(Path(tmp, "whitelist.json"))
+            router = FailingRouter()
+            handler = make_handler(tmp, store=store, router=router)
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            self.assertTrue(store.contains("192.168.98.200"))
+            markup = handler.edit_markup.call_args.kwargs["reply_markup"]
+            text = json.dumps(markup, ensure_ascii=False)
+            self.assertIn("✅ В исключениях 192.168.98.200", text)
+            self.assertIn("🔄 Повторить разблокировку", text)
+            self.assertEqual(read_audit(handler)["outcome"], "partial")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+
+    def test_dry_run_changes_neither_store_nor_routeros(self):
+        with TemporaryDirectory() as tmp:
+            handler = make_handler(tmp, dry_run=True)
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            self.assertEqual(handler.store.snapshot(), ())
+            handler.router.assert_not_called()
+            self.assertEqual(read_audit(handler)["outcome"], "dry-run")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+            self.assertIn(
+                "Dry-run: исключение не добавлено",
+                handler.send_message.call_args.kwargs["text"],
+            )
+
+    def test_remove_only_changes_managed_store(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store)
+            token = create_action(handler, kind="remove_confirm")
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertFalse(handler.store.contains("192.168.98.200"))
+            handler.router.assert_not_called()
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(store.remove_calls, 1)
+            self.assertEqual(read_audit(handler)["outcome"], "success")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+
+    def test_successful_remove_edit_exception_sends_factual_fallback(self):
+        with TemporaryDirectory() as tmp:
+            events = []
+            store = RecordingStore(
+                events,
+                addresses=("192.168.98.200",),
+            )
+            handler = make_handler(tmp, store=store)
+            handler.answer_callback.side_effect = (
+                lambda *_args: events.append("callback:answer")
+            )
+            handler.edit_message.side_effect = ConnectionError(
+                "edit unavailable"
+            )
+            token = create_action(handler, kind="remove_confirm")
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(
+                events[:2],
+                [
+                    "callback:answer",
+                    "store:remove:192.168.98.200",
+                ],
+            )
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.remove_calls, 1)
+            handler.router.assert_not_called()
+            handler.answer_callback.assert_called_once_with(
+                "cb-1",
+                "",
+                False,
+            )
+            handler.send_message.assert_called_once()
+            self.assertEqual(
+                handler.send_message.call_args.kwargs["text"],
+                "Исключение удалено",
+            )
+            self.assertTrue(
+                any(
+                    "POST-REMOVE VIEW FAILED" in call.args[0]
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_successful_remove_returned_delivery_failures_are_swallowed_and_logged(self):
+        with TemporaryDirectory() as tmp:
+            events = []
+            store = RecordingStore(
+                events,
+                addresses=("192.168.98.200",),
+            )
+            handler = make_handler(tmp, store=store)
+            handler.answer_callback.side_effect = (
+                lambda *_args: events.append("callback:answer")
+            )
+            handler.edit_message.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            handler.send_message.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            token = create_action(handler, kind="remove_confirm")
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(
+                events[:2],
+                [
+                    "callback:answer",
+                    "store:remove:192.168.98.200",
+                ],
+            )
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.remove_calls, 1)
+            handler.router.assert_not_called()
+            handler.answer_callback.assert_called_once_with(
+                "cb-1",
+                "",
+                False,
+            )
+            self.assertEqual(handler.send_message.call_count, 2)
+            self.assertEqual(
+                handler.send_message.call_args_list[-1].kwargs["text"],
+                "Исключение удалено",
+            )
+            self.assertTrue(
+                any(
+                    call.args[0]
+                    == "TELEGRAM WHITELIST REMOVE RESULT SEND FAILED"
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_alert_extension_requires_private_ip_admin_and_both_features(self):
+        cases = (
+            ("192.168.98.200", True, True, ("chat-1",), "BLOCKED", True),
+            ("8.8.8.8", True, True, ("chat-1",), "BLOCKED", False),
+            ("192.168.98.200", False, True, ("chat-1",), "BLOCKED", False),
+            ("192.168.98.200", True, False, ("chat-1",), "BLOCKED", False),
+            ("192.168.98.200", True, True, ("other",), "BLOCKED", False),
+            ("192.168.98.200", True, True, ("chat-1",), "MONITOR", False),
+        )
+        for address, control, unblock, admins, action_type, expected in cases:
+            with self.subTest(
+                address=address,
+                control=control,
+                action_type=action_type,
+            ), TemporaryDirectory() as tmp:
+                handler = make_handler(
+                    tmp,
+                    control_enabled=control,
+                    unblock_enabled=unblock,
+                    admin_chat_ids=admins,
+                )
+                markup = handler.extend_alert_keyboard(
+                    build_unblock_keyboard(address, "unblock-token"),
+                    event=sample_event(),
+                    wanted_ip=address,
+                    action_type=action_type,
+                    now=100,
+                )
+                self.assertEqual(
+                    "Добавить в исключения"
+                    in json.dumps(markup, ensure_ascii=False),
+                    expected,
+                )
+
+    def test_alert_extension_requires_effective_bot_and_module_gate(self):
+        for bot_enable, modules in (
+            (False, ("whitelist_control",)),
+            (True, ("status",)),
+        ):
+            with self.subTest(
+                bot_enable=bot_enable,
+                modules=modules,
+            ), TemporaryDirectory() as tmp:
+                handler = make_handler(
+                    tmp,
+                    bot_enable=bot_enable,
+                    bot_modules=modules,
+                )
+                original = build_unblock_keyboard(
+                    "192.168.98.200",
+                    "unblock-token",
+                )
+
+                markup = handler.extend_alert_keyboard(
+                    original,
+                    event=sample_event(),
+                    wanted_ip="192.168.98.200",
+                    action_type="BLOCKED",
+                    now=100,
+                )
+
+                self.assertEqual(markup, original)
+                self.assertFalse(Path(handler.actions.path).exists())
+
+    def test_execute_rechecks_admin_and_feature_flags_before_consume(self):
+        for case in ("admin", "control", "unblock"):
+            with self.subTest(case=case), TemporaryDirectory() as tmp:
+                handler = make_handler(tmp)
+                token = create_action(handler)
+                if case == "admin":
+                    auth = BotAuth(BotSettings(), legacy_chat_id="")
+                else:
+                    auth = admin_auth()
+                    object.__setattr__(
+                        handler.settings,
+                        (
+                            "telegram_whitelist_control_enable"
+                            if case == "control"
+                            else "telegram_unblock_enable"
+                        ),
+                        False,
+                    )
+
+                dispatch_whitelist_callback(
+                    handler,
+                    execute_callback(token),
+                    auth=auth,
+                )
+
+                self.assertEqual(handler.store.snapshot(), ())
+                handler.router.assert_not_called()
+                self.assertEqual(read_audit(handler)["outcome"], "denied")
+                self.assertIsNotNone(
+                    handler.actions.peek(
+                        token,
+                        now=102,
+                        chat_id="chat-1",
+                        user_id="user-1",
+                    )
+                )
+                expected_answer = {
+                    "admin": ("Unauthorized", True),
+                    "control": ("Функция недоступна", True),
+                    "unblock": ("Разблокировка недоступна", True),
+                }[case]
+                self.assertEqual(last_answer(handler), expected_answer)
+
+    def test_execute_rejects_public_address_from_forged_token(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            actions = ForgedActions(
+                {
+                    "kind": "add_confirm",
+                    "address": "8.8.8.8",
+                    "list_name": "Suricata",
+                    "sid": "1",
+                    "chat_id": "chat-1",
+                    "user_id": "user-1",
+                    "source_chat_id": "chat-1",
+                    "source_message_id": 77,
+                    "source_reply_markup": {"inline_keyboard": []},
+                }
+            )
+            handler = make_handler(tmp, store=store, actions=actions)
+
+            dispatch_whitelist_callback(
+                handler,
+                execute_callback("forged001"),
+            )
+
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.add_calls, 0)
+            handler.router.assert_not_called()
+            self.assertEqual(
+                last_answer(handler),
+                ("Недопустимый адрес исключения", True),
+            )
+
+    def test_expired_and_replayed_tokens_do_not_mutate(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            handler = make_handler(tmp, store=store)
+            expired = create_action(handler, now=100, ttl_seconds=1)
+
+            dispatch_whitelist_callback(
+                handler,
+                execute_callback(expired),
+                now=101,
+            )
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(store.remove_calls, 0)
+            handler.router.assert_not_called()
+            valid = create_action(handler, now=200)
+            dispatch_whitelist_callback(
+                handler,
+                execute_callback(valid),
+                now=201,
+            )
+            store_events_after_success = list(store.events)
+            router_calls_after_success = handler.router.call_count
+            dispatch_whitelist_callback(
+                handler,
+                execute_callback(valid),
+                now=202,
+            )
+
+            self.assertEqual(
+                store.events,
+                store_events_after_success,
+            )
+            self.assertEqual(
+                handler.router.call_count,
+                router_calls_after_success,
+            )
+            self.assertEqual(
+                last_answer(handler),
+                ("Запрос истёк или уже использован", True),
+            )
+            outcomes = [
+                json.loads(line)["outcome"]
+                for line in Path(handler.audit.path)
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(outcomes[0], "stale")
+            self.assertEqual(outcomes[-1], "stale")
+
+    def test_cancel_consumes_token_without_mutation(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            handler = make_handler(tmp, store=store)
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:cancel:{token}"),
+            )
+
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(store.remove_calls, 0)
+            handler.router.assert_not_called()
+            self.assertIsNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertEqual(read_audit(handler)["outcome"], "cancelled")
+            self.assertEqual(last_answer(handler), ("", False))
+            self.assertIn(
+                "Отменено",
+                handler.send_message.call_args.kwargs["text"],
+            )
+
+    def test_add_existing_address_is_idempotent(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            router = RecordingRouter(removed=0)
+            handler = make_handler(tmp, store=store, router=router)
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertEqual(store.add_calls, 1)
+            self.assertEqual(router.run_calls, 1)
+            self.assertEqual(read_audit(handler)["outcome"], "success")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+
+    def test_remove_missing_address_is_idempotent(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            handler = make_handler(tmp, store=store)
+            token = create_action(handler, kind="remove_confirm")
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertEqual(store.snapshot(), ())
+            self.assertEqual(store.remove_calls, 0)
+            handler.router.assert_not_called()
+            self.assertEqual(read_audit(handler)["outcome"], "noop")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+
+    def test_retry_unblock_never_rewrites_or_removes_store(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            router = RecordingRouter(removed=1)
+            handler = make_handler(tmp, store=store, router=router)
+            token = create_action(handler, kind="retry_unblock")
+
+            dispatch_whitelist_callback(handler, retry_callback(token))
+
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(store.remove_calls, 0)
+            self.assertEqual(router.run_calls, 1)
+            self.assertEqual(read_audit(handler)["outcome"], "success")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+
+    def test_post_mutation_edit_failure_sends_result_without_second_mutation(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter(removed=1)
+            handler = make_handler(tmp, store=store, router=router)
+            handler.edit_markup.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            token = create_action(handler)
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+
+            self.assertEqual(store.add_calls, 1)
+            self.assertEqual(router.run_calls, 1)
+            handler.send_message.assert_called_once()
+            self.assertIn(
+                "Исключение добавлено",
+                handler.send_message.call_args.kwargs["text"],
+            )
+            self.assertEqual(read_audit(handler)["outcome"], "success")
+            self.assertEqual(
+                last_answer(handler),
+                ("", False),
+            )
+
+    def test_post_mutation_delivery_exceptions_are_swallowed_without_replay(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter(removed=1)
+            handler = make_handler(tmp, store=store, router=router)
+            handler.edit_markup.side_effect = ConnectionError(
+                "edit unavailable"
+            )
+            handler.send_message.side_effect = ConnectionError(
+                "send unavailable"
+            )
+            token = create_action(handler)
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(store.add_calls, 1)
+            self.assertEqual(router.run_calls, 1)
+            handler.answer_callback.assert_called_once_with(
+                "cb-1",
+                "",
+                False,
+            )
+            self.assertIsNone(
+                handler.actions.peek(
+                    token,
+                    now=102,
+                    chat_id="chat-1",
+                    user_id="user-1",
+                )
+            )
+            self.assertTrue(
+                any(
+                    "POST-MUTATION MARKUP FAILED" in call.args[0]
+                    for call in handler.log.call_args_list
+                )
+            )
+            self.assertTrue(
+                any(
+                    "RESULT SEND FAILED" in call.args[0]
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_post_mutation_nonretryable_result_failure_is_logged(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = RecordingRouter(removed=1)
+            handler = make_handler(tmp, store=store, router=router)
+            handler.edit_markup.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            handler.send_message.return_value = types.SimpleNamespace(
+                ok=False,
+                retryable=False,
+            )
+            token = create_action(handler)
+
+            handled = dispatch_whitelist_callback(
+                handler,
+                execute_callback(token),
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(store.add_calls, 1)
+            self.assertEqual(router.run_calls, 1)
+            self.assertTrue(
+                any(
+                    call.args[0] == "TELEGRAM WHITELIST RESULT SEND FAILED"
+                    for call in handler.log.call_args_list
+                )
+            )
+
+    def test_confirmation_delivery_retry_reuses_promoted_request_token(self):
+        with TemporaryDirectory() as tmp:
+            handler = make_handler(tmp)
+            markup = handler.extend_alert_keyboard(
+                build_unblock_keyboard(
+                    "192.168.98.200",
+                    "unblock-token",
+                ),
+                event=sample_event(),
+                wanted_ip="192.168.98.200",
+                action_type="BLOCKED",
+                now=100,
+            )
+            request_data = markup["inline_keyboard"][-1][0]["callback_data"]
+            request_token = request_data.rsplit(":", 1)[1]
+            handler.send_message.side_effect = (
+                ConnectionError("temporary delivery failure"),
+                types.SimpleNamespace(ok=True, retryable=False),
+            )
+            request_callback = callback(
+                request_data,
+                reply_markup=markup,
+            )
+
+            with self.assertRaises(ConnectionError):
+                dispatch_whitelist_callback(
+                    handler,
+                    request_callback,
+                )
+            promoted = handler.actions.peek(
+                request_token,
+                now=102,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(promoted["kind"], "add_confirm")
+
+            dispatch_whitelist_callback(
+                handler,
+                request_callback,
+                now=102,
+            )
+
+            self.assertEqual(handler.send_message.call_count, 2)
+            callback_data = [
+                call.kwargs["reply_markup"]["inline_keyboard"][0][0][
+                    "callback_data"
+                ]
+                for call in handler.send_message.call_args_list
+            ]
+            self.assertEqual(
+                callback_data,
+                [
+                    f"whitelist:v1:add-confirm:{request_token}",
+                    f"whitelist:v1:add-confirm:{request_token}",
+                ],
+            )
+            self.assertEqual(
+                set(
+                    json.loads(
+                        Path(handler.actions.path).read_text(encoding="utf-8")
+                    )
+                ),
+                {request_token},
+            )
+
+    def test_partial_retry_preserves_source_and_second_partial_issues_retry(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore()
+            router = FailingRouter()
+            handler = make_handler(tmp, store=store, router=router)
+            source_markup = build_unblock_keyboard(
+                "192.168.98.200",
+                "unblock-token",
+            )
+            token = create_action(
+                handler,
+                source_reply_markup=source_markup,
+            )
+
+            dispatch_whitelist_callback(handler, execute_callback(token))
+            first_markup = handler.edit_markup.call_args.kwargs[
+                "reply_markup"
+            ]
+            first_retry_data = first_markup["inline_keyboard"][-1][0][
+                "callback_data"
+            ]
+            _prefix, first_retry_token = first_retry_data.rsplit(":", 1)
+            first_payload = handler.actions.peek(
+                first_retry_token,
+                now=102,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(first_payload["kind"], "retry_unblock")
+            self.assertEqual(first_payload["source_chat_id"], "chat-1")
+            self.assertEqual(first_payload["source_message_id"], 77)
+            self.assertEqual(
+                first_payload["source_reply_markup"],
+                source_markup,
+            )
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(first_retry_data),
+                now=102,
+            )
+
+            second_markup = handler.edit_markup.call_args.kwargs[
+                "reply_markup"
+            ]
+            second_retry_data = second_markup["inline_keyboard"][-1][0][
+                "callback_data"
+            ]
+            self.assertNotEqual(second_retry_data, first_retry_data)
+            _prefix, second_retry_token = second_retry_data.rsplit(":", 1)
+            second_payload = handler.actions.peek(
+                second_retry_token,
+                now=103,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(second_payload["kind"], "retry_unblock")
+            self.assertEqual(
+                second_payload["source_reply_markup"],
+                source_markup,
+            )
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertEqual(store.add_calls, 1)
+            self.assertEqual(store.remove_calls, 0)
+            self.assertEqual(router.run_calls, 2)
+            self.assertEqual(read_audit(handler)["outcome"], "partial")
+
+    def test_remove_dry_run_has_no_mutation_and_delivers_factual_result(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store, dry_run=True)
+            token = create_action(handler, kind="remove_confirm")
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(f"whitelist:v1:remove-confirm:{token}"),
+            )
+
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(store.remove_calls, 0)
+            handler.router.assert_not_called()
+            self.assertEqual(read_audit(handler)["outcome"], "dry-run")
+            self.assertIn(
+                "Dry-run: исключение не удалено",
+                handler.send_message.call_args.kwargs["text"],
+            )
+            self.assertEqual(last_answer(handler), ("", False))
+
+    def test_retry_dry_run_has_no_mutation_and_delivers_factual_result(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store, dry_run=True)
+            token = create_action(handler, kind="retry_unblock")
+
+            dispatch_whitelist_callback(handler, retry_callback(token))
+
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            self.assertEqual(store.add_calls, 0)
+            self.assertEqual(store.remove_calls, 0)
+            handler.router.assert_not_called()
+            self.assertEqual(read_audit(handler)["outcome"], "dry-run")
+            self.assertIn(
+                "Dry-run: адрес не разблокирован",
+                handler.send_message.call_args.kwargs["text"],
+            )
+            self.assertEqual(last_answer(handler), ("", False))
+
+    def test_add_request_binds_confirm_to_clicker_and_preserves_alert_source(self):
+        with TemporaryDirectory() as tmp:
+            handler = make_handler(tmp)
+            markup = handler.extend_alert_keyboard(
+                build_unblock_keyboard(
+                    "192.168.98.200",
+                    "unblock-token",
+                ),
+                event=sample_event(),
+                wanted_ip="192.168.98.200",
+                action_type="BLOCKED",
+                now=100,
+            )
+            request_data = markup["inline_keyboard"][-1][0]["callback_data"]
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(
+                    request_data,
+                    reply_markup=markup,
+                ),
+            )
+
+            confirm_markup = handler.send_message.call_args.kwargs[
+                "reply_markup"
+            ]
+            confirm_data = confirm_markup["inline_keyboard"][0][0][
+                "callback_data"
+            ]
+            _prefix, token = confirm_data.rsplit(":", 1)
+            payload = handler.actions.peek(
+                token,
+                now=102,
+                chat_id="chat-1",
+                user_id="user-1",
+            )
+            self.assertEqual(payload["kind"], "add_confirm")
+            self.assertEqual(payload["source_message_id"], 77)
+            self.assertEqual(payload["source_reply_markup"], markup)
+            self.assertEqual(handler.store.snapshot(), ())
+            handler.router.assert_not_called()
+
+    def test_remove_request_is_read_only_until_confirmation(self):
+        with TemporaryDirectory() as tmp:
+            store = RecordingStore(addresses=("192.168.98.200",))
+            handler = make_handler(tmp, store=store)
+            view = handler.menu_view(
+                page=0,
+                chat_id="chat-1",
+                user_id="user-1",
+                now=100,
+            )
+            remove_data = next(
+                button["callback_data"]
+                for row in view.reply_markup["inline_keyboard"]
+                for button in row
+                if button["callback_data"].startswith(
+                    "whitelist:v1:remove-request:"
+                )
+            )
+
+            dispatch_whitelist_callback(
+                handler,
+                callback(remove_data),
+            )
+
+            self.assertEqual(store.snapshot(), ("192.168.98.200",))
+            handler.router.assert_not_called()
+            self.assertIn(
+                "Удалить 192.168.98.200",
+                handler.edit_message.call_args.kwargs["text"],
+            )

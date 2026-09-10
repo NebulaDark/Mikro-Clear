@@ -138,7 +138,7 @@ Read/write module for managed Mangle rules only.
 
 Allowed scope:
 
-- `/ip firewall mangle` rules where `comment` starts with `MC:`;
+- `/ip firewall mangle` rules where `comment` starts with `MC:`.
 - only chains listed in `MIKROCLEAR_MANGLE_ALLOWED_CHAINS`;
 - only actions listed in `MIKROCLEAR_MANGLE_ALLOWED_ACTIONS`.
 
@@ -186,8 +186,8 @@ MIKROCLEAR_BOT_ALLOWED_CHAT_IDS=
 MIKROCLEAR_BOT_MODULES=status,asset_resolver,mangle_control,parental_control
 
 MIKROCLEAR_MANGLE_COMMENT_PREFIX=MC:
-MIKROCLEAR_MANGLE_ALLOWED_CHAINS=prerouting,forward,postrouting
-MIKROCLEAR_MANGLE_ALLOWED_ACTIONS=mark-routing,mark-connection,change-mss,accept,drop
+MIKROCLEAR_MANGLE_ALLOWED_CHAINS=prerouting
+MIKROCLEAR_MANGLE_ALLOWED_ACTIONS=mark-routing
 
 MIKROCLEAR_PARENTAL_ADDRESS_LIST=MC-Parental-Blocked
 MIKROCLEAR_PARENTAL_ALLOWED_TIMEOUTS=15m,30m,60m
@@ -221,8 +221,9 @@ explicit confirmation workflow outside v1.
 
 ### Mangle Rules
 
-Managed Mangle rules must have comments starting with `MC:`. Rules without that
-prefix are out of scope even if they otherwise match an allowed chain/action.
+Managed Mangle rules must have comments starting with `MC:` and must also match
+the configured chain/action allowlists. Rules without that prefix are out of
+scope even if their chain/action would otherwise be allowed.
 
 ### DHCP Leases
 

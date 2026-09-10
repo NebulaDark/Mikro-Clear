@@ -8,8 +8,16 @@ from mikroclear.bot.auth import BotAuth
 from mikroclear.bot.dispatcher import dispatch_message
 from mikroclear.bot.settings import BotSettings
 from mikroclear.security import mask_known_secret, sanitize_exception_text
-from mikroclear.telegram.commands import process_callback_update, process_message_command
-from mikroclear.telegram.notify import send_telegram_message
+from mikroclear.telegram.commands import (
+    process_callback_update,
+    process_message_command,
+    raise_for_retryable_delivery,
+)
+from mikroclear.telegram.notify import (
+    edit_telegram_message,
+    edit_telegram_reply_markup,
+    send_telegram_message,
+)
 
 try:
     import ujson  # type: ignore
@@ -54,50 +62,85 @@ class TelegramUpdatePoller:
         self,
         settings: Any,
         *,
+        bot_settings: BotSettings | None = None,
         status_snapshot_factory: Callable[[], Any],
         handle_unblock_action: Callable[[dict[str, Any]], Any],
         answer_callback: Callable[[str, str, bool], None],
         send_system_notification: Callable[[str, str], Any],
         log: Callable[[str], None],
         now: Callable[[], float],
+        menu_handler: Any = None,
+        mangle_handler: Any = None,
+        whitelist_handler: Any = None,
         http_get: Callable[..., Any] = requests.get,
         send_message: Callable[..., Any] = send_telegram_message,
+        edit_message: Callable[..., Any] = edit_telegram_message,
+        edit_reply_markup: Callable[..., Any] = edit_telegram_reply_markup,
         backoff: TelegramPollingBackoff | None = None,
     ) -> None:
         self.settings = settings
+        self.bot_settings = bot_settings or BotSettings.from_env()
         self.status_snapshot_factory = status_snapshot_factory
         self.handle_unblock_action = handle_unblock_action
         self.answer_callback = answer_callback
         self.send_system_notification = send_system_notification
         self.log = log
         self.now = now
+        self.menu_handler = menu_handler
+        self.mangle_handler = mangle_handler
+        self.whitelist_handler = whitelist_handler
         self.http_get = http_get
         self.send_message = send_message
+        self.edit_message = edit_message
+        self.edit_reply_markup = edit_reply_markup
         self.backoff = backoff or TelegramPollingBackoff()
         self.update_offset = 0
+        self._pending_callback_answers: dict[str, tuple[str, bool]] = {}
+        self._answered_callback_ids: set[str] = set()
 
     def process_updates(self) -> None:
-        if (
-            not self.settings.enable_telegram
-            or not self.settings.telegram_unblock_enable
-            or not self.settings.telegram_token
-            or not self.settings.telegram_chatid
-        ):
+        updates = self.fetch_updates(long_poll_seconds=0)
+        if updates is None:
             return
+        for update in updates:
+            try:
+                self.process_update(update)
+            except Exception as exc:
+                self._record_failure(
+                    sanitize_exception_text(exc, self.settings.telegram_token)
+                )
+                break
+            self.acknowledge_update(update)
 
+    def _enabled(self) -> bool:
+        return bool(
+            self.settings.enable_telegram
+            and self.settings.telegram_token
+            and self.settings.telegram_chatid
+        )
+
+    def fetch_updates(
+        self,
+        *,
+        long_poll_seconds: int = 0,
+    ) -> list[dict[str, Any]] | None:
+        if not self._enabled():
+            return None
         current_time = self.now()
         if not self.backoff.should_poll(current_time):
-            return
-
+            return None
         try:
             response = self.http_get(
                 f"https://api.telegram.org/bot{self.settings.telegram_token}/getUpdates",
                 params={
                     "offset": self.update_offset,
-                    "timeout": 0,
+                    "timeout": long_poll_seconds,
                     "allowed_updates": ujson.dumps(["callback_query", "message"]),
                 },
-                timeout=self.settings.telegram_timeout,
+                timeout=max(
+                    self.settings.telegram_timeout,
+                    long_poll_seconds + 5,
+                ),
             )
             if response.status_code != 200:
                 error_text = mask_known_secret(
@@ -117,12 +160,53 @@ class TelegramUpdatePoller:
             self._record_failure(sanitize_exception_text(exc, self.settings.telegram_token))
             return
 
-        for update in body.get("result", []):
-            update_id = int(update.get("update_id", 0))
-            self.update_offset = max(self.update_offset, update_id + 1)
-            if self._process_message(update):
-                continue
-            self._process_callback(update)
+        updates = list(body.get("result", []))
+        if updates:
+            self.log(
+                "Telegram updates received: "
+                f"{len(updates)} item(s), current offset={self.update_offset}"
+            )
+
+        return updates
+
+    def process_update(self, update: dict[str, Any]) -> None:
+        if self._process_message(update):
+            return
+        self._process_callback(update)
+
+    def acknowledge_update(self, update: dict[str, Any]) -> None:
+        update_id = int(update["update_id"])
+        self.update_offset = max(self.update_offset, update_id + 1)
+        callback = update.get("callback_query") or {}
+        callback_id = str(callback.get("id", ""))
+        self._pending_callback_answers.pop(callback_id, None)
+        self._answered_callback_ids.discard(callback_id)
+
+    def _send_message(self, **kwargs: Any) -> Any:
+        response = self.send_message(**kwargs)
+        raise_for_retryable_delivery(response)
+        return response
+
+    def _answer_callback(self, callback_id: str, text: str, alert: bool) -> Any:
+        try:
+            response = self.answer_callback(callback_id, text, alert)
+            raise_for_retryable_delivery(response)
+        except Exception:
+            self._pending_callback_answers[callback_id] = (text, alert)
+            raise
+        self._pending_callback_answers.pop(callback_id, None)
+        self._answered_callback_ids.add(callback_id)
+        return response
+
+    def _edit_message(self, **kwargs: Any) -> Any:
+        response = self.edit_message(**kwargs)
+        raise_for_retryable_delivery(response)
+        return response
+
+    def _edit_reply_markup(self, **kwargs: Any) -> Any:
+        response = self.edit_reply_markup(**kwargs)
+        raise_for_retryable_delivery(response)
+        return response
 
     def _record_failure(self, error_text: str) -> None:
         should_log, delay = self.backoff.record_failure(self.now(), error_text)
@@ -136,14 +220,42 @@ class TelegramUpdatePoller:
 
         chat = message_update.get("chat") or {}
         chat_id = str(chat.get("id", ""))
-        auth = BotAuth(BotSettings.from_env(), legacy_chat_id=str(self.settings.telegram_chatid))
+        user = message_update.get("from") or {}
+        user_id = str(user.get("id", ""))
+        text = message_update.get("text", "")
+        command_name = _command_name(text)
+        if command_name:
+            self.log(f"Telegram command update: command={command_name} chat={chat_id} user={user_id}")
+        auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
+        if self.menu_handler is not None and self.menu_handler.handle_message(
+            text=text,
+            chat_id=chat_id,
+            user_id=user_id,
+            auth=auth,
+            send_message=self._send_message,
+            token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            update_id=str(update.get("update_id", "")),
+        ):
+            return True
+        if self.mangle_handler is not None and self.mangle_handler.handle_message(
+            text=text,
+            chat_id=chat_id,
+            user_id=user_id,
+            auth=auth,
+            send_message=self._send_message,
+            token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            update_id=str(update.get("update_id", "")),
+        ):
+            return True
         return process_message_command(
-            text=message_update.get("text", ""),
+            text=text,
             chat_id=chat_id,
             auth=auth,
             status_snapshot_factory=self.status_snapshot_factory,
             dispatch_message=dispatch_message,
-            send_message=self.send_message,
+            send_message=self._send_message,
             token=self.settings.telegram_token,
             timeout=self.settings.telegram_timeout,
             log=self.log,
@@ -154,7 +266,92 @@ class TelegramUpdatePoller:
         if not callback:
             return False
 
-        from mikroclear.telegram.unblock import consume_unblock_token, parse_unblock_callback
+        callback_id = str(callback.get("id", ""))
+        callback_data = str(callback.get("data", ""))
+        callback_action = _callback_action_name(callback_data)
+        message = callback.get("message") or {}
+        chat = message.get("chat") or {}
+        chat_id = str(chat.get("id", ""))
+        user = callback.get("from") or {}
+        user_id = str(user.get("id", ""))
+        self.log(
+            "Telegram callback update: "
+            f"id={callback_id} action={callback_action} chat={chat_id} user={user_id}"
+        )
+
+        pending_answer = self._pending_callback_answers.get(callback_id)
+        callback_answered = callback_id in self._answered_callback_ids
+        if pending_answer is not None:
+            text, alert = pending_answer
+            self._answer_callback(callback_id, text, alert)
+            callback_answered = True
+
+        auth = BotAuth(self.bot_settings, legacy_chat_id=str(self.settings.telegram_chatid))
+        if self.menu_handler is not None and self.menu_handler.handle_callback(
+            callback=callback,
+            auth=auth,
+            answer_callback=(
+                (lambda _callback_id, _text, _alert: None)
+                if callback_answered
+                else self._answer_callback
+            ),
+            send_message=self._send_message,
+            edit_message=self._edit_message,
+            telegram_token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            now=int(self.now()),
+        ):
+            return True
+        if callback_answered:
+            if (
+                callback_data.startswith("whitelist:v1:")
+                and self.whitelist_handler is not None
+                and self.whitelist_handler.handle_callback(
+                    callback=callback,
+                    auth=auth,
+                    answer_callback=(
+                        lambda _callback_id, _text, _alert: None
+                    ),
+                    send_message=self._send_message,
+                    edit_message=self._edit_message,
+                    edit_reply_markup=self._edit_reply_markup,
+                    telegram_token=self.settings.telegram_token,
+                    timeout=self.settings.telegram_timeout,
+                    now=int(self.now()),
+                )
+            ):
+                return True
+            return True
+        if self.mangle_handler is not None and self.mangle_handler.handle_callback(
+            callback=callback,
+            auth=auth,
+            answer_callback=self._answer_callback,
+            send_message=self._send_message,
+            telegram_token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            now=int(self.now()),
+            update_id=str(update.get("update_id", "")),
+        ):
+            return True
+        if self.whitelist_handler is not None and self.whitelist_handler.handle_callback(
+            callback=callback,
+            auth=auth,
+            answer_callback=self._answer_callback,
+            send_message=self._send_message,
+            edit_message=self._edit_message,
+            edit_reply_markup=self._edit_reply_markup,
+            telegram_token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            now=int(self.now()),
+        ):
+            return True
+
+        from mikroclear.telegram.unblock import (
+            cancel_unblock_token,
+            consume_unblock_token,
+            parse_unblock_callback,
+            peek_unblock_token,
+        )
 
         return process_callback_update(
             callback=callback,
@@ -164,10 +361,32 @@ class TelegramUpdatePoller:
             parse_unblock_callback=parse_unblock_callback,
             consume_unblock_token=consume_unblock_token,
             handle_unblock_action=self.handle_unblock_action,
-            answer_callback=self.answer_callback,
+            answer_callback=self._answer_callback,
             send_system_notification=self.send_system_notification,
             log=self.log,
+            peek_unblock_token=peek_unblock_token,
+            cancel_unblock_token=cancel_unblock_token,
+            send_message=self._send_message,
+            telegram_token=self.settings.telegram_token,
+            telegram_timeout=self.settings.telegram_timeout,
         )
 
 
 __all__ = ["TelegramPollingBackoff", "TelegramUpdatePoller"]
+
+
+def _command_name(text: Any) -> str:
+    value = str(text or "").strip()
+    if not value.startswith("/"):
+        return ""
+    return value.split()[0].split("@", 1)[0].lower()
+
+
+def _callback_action_name(data: Any) -> str:
+    value = str(data or "")
+    if not value:
+        return ""
+    parts = value.split(":", 2)
+    if len(parts) >= 2:
+        return ":".join(parts[:2])
+    return value

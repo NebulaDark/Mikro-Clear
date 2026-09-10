@@ -26,6 +26,16 @@ def default_peer_formatter(ip_text: Any) -> str:
     return f"<code>{escape_html_safe(ip_text or 'N/A')}</code>"
 
 
+def strip_asset_source_suffix(display_text: Any) -> str:
+    text = "" if display_text is None else str(display_text).strip()
+    if not text:
+        return ""
+
+    text = re.sub(r"\s*<code>\s*(?:dhcp|ptr|static)\s*</code>\s*$", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s+(?:[-—]\s+)?(?:dhcp|ptr|static)\s*$", "", text, flags=re.IGNORECASE).strip()
+    return text
+
+
 def format_alert_message(
     event: dict[str, Any],
     wanted_ip: Any,
@@ -50,6 +60,7 @@ def format_alert_message(
 
     signature = sanitize_text(alert.get("signature", "N/A"), 150) or "N/A"
     format_peer = peer_formatter or default_peer_formatter
+    formatted_peer = strip_asset_source_suffix(format_peer(peer_ip))
 
     return f"""
 <b>Mikro-Clear Alert - {escape_html_safe(action_type)}</b>
@@ -60,7 +71,7 @@ def format_alert_message(
 <b>Time:</b> <code>{escape_html_safe(formatted_time)}</code>
 
 <b>Network:</b>
-- Source/peer: {format_peer(peer_ip)}
+- Source/peer: {formatted_peer}
 - Protocol: <code>{escape_html_safe(protocol)}</code>
 - Port: <code>{escape_html_safe(wanted_port or 'N/A')}</code>
 - Interface: <code>{escape_html_safe(in_iface)}</code>
@@ -93,4 +104,5 @@ __all__ = [
     "format_alert_message",
     "format_system_message",
     "sanitize_text",
+    "strip_asset_source_suffix",
 ]

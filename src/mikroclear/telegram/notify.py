@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 import requests
 
-from mikroclear.security import mask_known_secret
+from mikroclear.security import mask_known_secret, sanitize_exception_text
 from mikroclear.telegram.formatting import escape_html_safe, format_alert_message, format_system_message
 from mikroclear.telegram.rate_limit import TelegramRateLimitLock
 from mikroclear.telegram.unblock import build_unblock_keyboard, create_unblock_token
@@ -17,6 +17,40 @@ class TelegramSendResult:
     status_code: int = 0
     response_text: str = ""
     retry_after: int = 0
+    retryable: bool = False
+
+
+def _post_telegram_method(
+    token: str,
+    method: str,
+    payload: dict[str, Any],
+    timeout: int,
+) -> TelegramSendResult:
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/{method}",
+            data=payload,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return TelegramSendResult(
+            ok=False,
+            response_text=sanitize_exception_text(exc, token),
+            retryable=True,
+        )
+    retry_after = 0
+    if response.status_code == 429:
+        try:
+            retry_after = int(response.json().get("parameters", {}).get("retry_after", 0))
+        except Exception:
+            retry_after = 0
+    return TelegramSendResult(
+        ok=response.status_code == 200,
+        status_code=response.status_code,
+        response_text=mask_known_secret(response.text, token),
+        retry_after=retry_after,
+        retryable=response.status_code == 429 or response.status_code >= 500,
+    )
 
 
 def send_telegram_message(
@@ -35,23 +69,53 @@ def send_telegram_message(
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup if isinstance(reply_markup, str) else json.dumps(reply_markup)
 
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data=payload,
-        timeout=timeout,
+    return _post_telegram_method(
+        token,
+        "sendMessage",
+        payload,
+        timeout,
     )
-    retry_after = 0
-    if response.status_code == 429:
-        try:
-            retry_after = int(response.json().get("parameters", {}).get("retry_after", 0))
-        except Exception:
-            retry_after = 0
 
-    return TelegramSendResult(
-        ok=response.status_code == 200,
-        status_code=response.status_code,
-        response_text=mask_known_secret(response.text, token),
-        retry_after=retry_after,
+
+def edit_telegram_message(
+    token: str,
+    chat_id: str,
+    message_id: int,
+    text: str,
+    reply_markup: Any,
+    timeout: int = 10,
+) -> TelegramSendResult:
+    return _post_telegram_method(
+        token,
+        "editMessageText",
+        {
+            "chat_id": chat_id,
+            "message_id": int(message_id),
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": json.dumps(reply_markup),
+        },
+        timeout,
+    )
+
+
+def edit_telegram_reply_markup(
+    token: str,
+    chat_id: str,
+    message_id: int,
+    reply_markup: Any,
+    timeout: int = 10,
+) -> TelegramSendResult:
+    return _post_telegram_method(
+        token,
+        "editMessageReplyMarkup",
+        {
+            "chat_id": chat_id,
+            "message_id": int(message_id),
+            "reply_markup": json.dumps(reply_markup),
+        },
+        timeout,
     )
 
 
@@ -66,6 +130,7 @@ class TelegramNotifier:
         sanitize_exception_text: Callable[..., str],
         now: Callable[[], float],
         send_message: Callable[..., TelegramSendResult] = send_telegram_message,
+        whitelist_keyboard_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.settings = settings
         self.peer_formatter = peer_formatter
@@ -74,6 +139,7 @@ class TelegramNotifier:
         self.sanitize_exception_text = sanitize_exception_text
         self.now = now
         self.send_message = send_message
+        self.whitelist_keyboard_factory = whitelist_keyboard_factory
         self.last_sent = 0.0
         self.lock = TelegramRateLimitLock(settings.telegram_lock_file, now=now, debug_log=debug_log)
 
@@ -186,13 +252,23 @@ class TelegramNotifier:
                 self.log(f"Could not create Telegram unblock token for {wanted_ip}: {exc}")
 
         if token:
-            return build_unblock_keyboard(str(wanted_ip), token)
-
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "AbuseIPDB", "url": f"https://www.abuseipdb.com/check/{wanted_ip}"},
-                    {"text": "VirusTotal", "url": f"https://www.virustotal.com/gui/ip-address/{wanted_ip}"},
+            reply_markup = build_unblock_keyboard(str(wanted_ip), token)
+        else:
+            reply_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "AbuseIPDB", "url": f"https://www.abuseipdb.com/check/{wanted_ip}"},
+                        {"text": "VirusTotal", "url": f"https://www.virustotal.com/gui/ip-address/{wanted_ip}"},
+                    ]
                 ]
-            ]
-        }
+            }
+
+        if self.whitelist_keyboard_factory is None:
+            return reply_markup
+        return self.whitelist_keyboard_factory(
+            reply_markup,
+            event=event,
+            wanted_ip=str(wanted_ip),
+            action_type=action_type,
+            now=now,
+        )
