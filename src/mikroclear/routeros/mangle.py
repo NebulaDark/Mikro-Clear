@@ -119,7 +119,10 @@ def set_mangle_rule_disabled(api: Any, rule_id: str, disabled: bool, settings: A
     rule = get_managed_mangle_rule(api, rule_id, settings)
     if rule is None:
         raise PermissionError("Mangle rule is not managed by Mikro-Clear")
-    _mangle_resource(api).update(rule.rule_id, disabled="yes" if disabled else "no")
+    _mangle_resource(api).update(**{
+        ".id": rule.rule_id,
+        "disabled": "yes" if disabled else "no",
+    })
 
 
 __all__ = [

@@ -1,4 +1,5 @@
 from unittest import TestCase
+from librouteros.api import Path
 
 from mikroclear.settings import Settings
 from mikroclear.routeros.mangle import (
@@ -28,7 +29,8 @@ class FakeMangleResource:
     def select(self, *keys):
         return FakeWhere(self.rows)
 
-    def update(self, rule_id, **kwargs):
+    def update(self, **kwargs):
+        rule_id = kwargs.pop(".id")
         self.updated.append((rule_id, kwargs))
 
 
@@ -55,6 +57,36 @@ def settings(**overrides):
 
 
 class RouterOsMangleTests(TestCase):
+    def test_update_uses_real_librouteros_path_with_exact_id_and_disabled(self):
+        class RecordingApi:
+            def __init__(self):
+                self.writes = []
+
+            def path(self, name):
+                return Path(name, self)
+
+            def rawCmd(self, command, *words):
+                if command != "/ip/firewall/mangle/print":
+                    raise AssertionError(command)
+                return iter([{
+                    ".id": "*1", "comment": "MC:Test",
+                    "chain": "prerouting", "action": "mark-routing",
+                    "disabled": "no",
+                }])
+
+            def __call__(self, command, **kwargs):
+                self.writes.append((command, kwargs))
+                return iter(())
+
+        api = RecordingApi()
+        for disabled, expected in ((True, "yes"), (False, "no")):
+            with self.subTest(disabled=disabled):
+                set_mangle_rule_disabled(api, "*1", disabled, settings())
+                self.assertEqual(api.writes[-1], (
+                    "/ip/firewall/mangle/set", {".id": "*1", "disabled": expected},
+                ))
+        self.assertEqual(len(api.writes), 2)
+
     def test_list_managed_rules_filters_prefix_chain_and_action(self):
         api = FakeApi(
             [
