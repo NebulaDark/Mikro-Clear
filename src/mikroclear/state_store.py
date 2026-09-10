@@ -1,4 +1,4 @@
-"""Compatibility shim for runtime state helpers."""
+"""Deprecated compatibility shim for runtime state helpers."""
 
 from mikroclear.state import (
     StateStoreConfig,

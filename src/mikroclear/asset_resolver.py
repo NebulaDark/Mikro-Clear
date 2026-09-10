@@ -1,4 +1,4 @@
-"""Compatibility shim for asset resolver imports."""
+"""Deprecated compatibility shim for asset resolver imports."""
 
 from mikroclear.assets.resolver import (
     EMPTY_ASSET,

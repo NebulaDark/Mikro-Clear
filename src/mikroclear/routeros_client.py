@@ -1,3 +1,5 @@
+"""Deprecated compatibility shim for RouterOS client helpers."""
+
 from mikroclear.routeros.client import (
     RouterOsApiLifecycle,
     RouterOsConnectConfig,

@@ -67,17 +67,23 @@ rollback procedures no longer depend on them.
 
 2. Remove legacy env fallback from systemd.
 
-   Follow `docs/ru/systemd-env-fallback-policy.md`.
+   Completed in the tracked units. The canonical env file is mandatory.
+   Follow `docs/ru/systemd-env-fallback-policy.md` for older installations.
 
 3. Remove legacy state paths from systemd sandbox.
 
-   Only after `/var/lib/mikroclear` has all required state files and rollback no
-   longer needs `/var/lib/mikrocata`.
+   Completed in the tracked units. On an older server, first verify that
+   `/var/lib/mikroclear` has all required state files and a usable backup.
 
 4. Deprecate top-level shims.
 
-   Add deprecation notes or warnings only if they will not affect production
-   logs. Prefer docs/tests first.
+   Current status: top-level shims are marked as deprecated compatibility
+   shims in module docstrings. Runtime warnings are intentionally not emitted,
+   so production logs stay quiet. Details:
+
+   ```text
+   docs/ru/compatibility-shim-deprecation.md
+   ```
 
 5. Remove top-level shims and `src/mikrocata/*`.
 
@@ -94,6 +100,8 @@ rollback procedures no longer depend on them.
 Do not remove compatibility shims yet. The current safe stop point is:
 
 - runtime ownership is canonical;
-- production deploys from wheel/package entrypoint;
-- env primary path has migrated to `/etc/mikroclear/mikroclear.env`;
-- legacy env/state paths remain rollback compatibility boundaries.
+- the supported deployment uses the wheel/package entrypoint;
+- tracked units require `/etc/mikroclear/mikroclear.env` and run as `mikroclear`;
+- tracked units contain no legacy env/state paths;
+- the current production configuration requires a separate live check;
+- compatibility imports remain available until the removal gates are met.

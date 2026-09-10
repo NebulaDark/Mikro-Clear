@@ -1,3 +1,5 @@
+"""Deprecated compatibility shim for Suricata alert logic helpers."""
+
 from mikroclear.suricata.alert_logic import (
     AlertDecision,
     deduplicate_alerts_by_target,

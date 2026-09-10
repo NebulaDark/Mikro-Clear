@@ -1,3 +1,5 @@
+"""Deprecated compatibility shim for Telegram unblock helpers."""
+
 from mikroclear.telegram.unblock import (
     UnblockCallbackResult,
     build_unblock_confirm_keyboard,

@@ -2,6 +2,11 @@
 
 Дата: 2026-07-06.
 
+> Исторический план на указанную дату. Текущее состояние исходников и
+> поддерживаемая установка описаны в [инструкции установки](install-from-github.md)
+> и [политике env](systemd-env-fallback-policy.md). Указанные ниже production
+> результаты не являются проверкой сервера на сегодняшний день.
+
 Этот документ является сводным планом: что уже сделано, что подтверждено в
 production, и что осталось выполнить. Детальные документы остаются источниками
 подробностей, а этот файл служит навигацией по текущему состоянию.
@@ -217,6 +222,7 @@ breakage.
 
 ```text
 docs/ru/legacy-compatibility-cleanup-plan.md
+docs/ru/compatibility-shim-deprecation.md
 ```
 
 ### E. Dedicated service user
@@ -233,6 +239,12 @@ docs/ru/legacy-compatibility-cleanup-plan.md
 - restart и проверка logs.
 
 Этот шаг не должен смешиваться с удалением legacy fallback.
+
+Подробный cutover checklist:
+
+```text
+docs/ru/dedicated-service-user-cutover.md
+```
 
 ## Текущий safe stop point
 
