@@ -45,7 +45,8 @@ class FakeMangleResource:
     def select(self, *keys):
         return FakeWhere(self.rows)
 
-    def update(self, rule_id, **kwargs):
+    def update(self, **kwargs):
+        rule_id = kwargs.pop(".id")
         if self.update_error is not None:
             raise self.update_error
         self.updated.append((rule_id, kwargs))
