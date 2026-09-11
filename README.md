@@ -27,8 +27,8 @@ docs/architecture.md
 ```
 
 New production code should import canonical package modules under
-`src/mikroclear/`. Old top-level modules are compatibility shims for legacy
-imports.
+`src/mikroclear/`. Legacy top-level compatibility shims were removed; use
+canonical imports only.
 
 Russian deployment and operator documentation:
 

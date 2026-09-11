@@ -15,16 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class RebrandTests(TestCase):
     def test_mikroclear_package_is_primary_import(self):
-        import mikroclear.alert_logic
-        import mikroclear.events
-        import mikroclear.telegram_unblock
+        import mikroclear.suricata.alert_logic
+        import mikroclear.suricata.events
+        import mikroclear.telegram.unblock
 
-        self.assertTrue(mikroclear.alert_logic.is_valid_ip("1.1.1.1"))
+        self.assertTrue(mikroclear.suricata.alert_logic.is_valid_ip("1.1.1.1"))
 
-    def test_old_mikrocata_imports_still_work(self):
-        import mikrocata.alert_logic
-
-        self.assertTrue(mikrocata.alert_logic.is_valid_ip("1.1.1.1"))
+    def test_old_mikrocata_imports_are_removed(self):
+        with self.assertRaises(ModuleNotFoundError):
+            __import__("mikrocata.alert_logic")
 
     def test_mikroclear_env_takes_precedence_over_legacy_env(self):
         with patch.dict(

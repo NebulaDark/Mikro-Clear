@@ -3,8 +3,8 @@
 Состояние после canonical module ownership и деплоя 2026-07-06.
 
 Runtime-код живет в canonical package modules под `src/mikroclear/`. Старые
-top-level файлы оставлены только как compatibility shims для старых импортов.
-Новый production-код должен импортировать canonical modules.
+top-level compatibility shims удалены. Новый production-код должен импортировать
+только canonical modules.
 
 ## Entry Points
 

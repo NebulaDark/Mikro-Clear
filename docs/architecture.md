@@ -3,8 +3,8 @@
 Current state as of 2026-07-06.
 
 Mikro-Clear runtime code is owned by canonical package modules under
-`src/mikroclear/`. Old top-level modules remain only as compatibility shims for
-older imports and tests. New production code should import canonical modules.
+`src/mikroclear/`. Legacy top-level compatibility shims were removed. New
+production code should import canonical modules.
 
 ## Entry Points
 

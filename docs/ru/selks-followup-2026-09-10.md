@@ -76,6 +76,27 @@ Stable window для управляющих операций не подтвер
 не проверены. В репозитории legacy-импорты найдены в compatibility tests и
 самих алиасах `src/mikrocata`. Удалять их до закрытия этих условий нельзя.
 
+### Проверка восстановления после перезагрузки RouterOS (2026-09-11)
+
+После установки `84ec7cc` служба `mikroclear.service` оставалась активной
+(`Tasks=2`, `NRestarts=0`). В журнале зафиксирована последовательность:
+
+```text
+14:29:52 RouterOS API reconnect requested: heartbeat failed
+14:30:04 Unexpected error in main loop: No route to host
+14:34:02 Router reboot detected - restoring saved lists
+```
+
+Это подтверждает, что новый путь обнаружил перезагрузку RouterOS и запустил
+восстановление сохранённых списков. Количество фактически добавленных записей
+нужно сверить на RouterOS с JSONL-файлом состояния: production debug-режим
+выключен и счётчик в журнал не выводится.
+
+Сверка выполнена оператором: `saved_v4_lines=45`, на RouterOS
+`/ip firewall address-list ... list="Suricata"` также `45`; IPv6-файл
+отсутствует, а IPv6-список RouterOS содержит `0`. Восстановление согласовано
+по количеству записей.
+
 ## Следующая read-only проверка оператором
 
 Выполнить на SELKS с sudo-доступом. Команды не изменяют конфигурацию и не

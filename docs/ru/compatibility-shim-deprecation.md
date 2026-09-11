@@ -28,8 +28,8 @@ mikroclear.routeros.address_list
 
 ## Deprecated compatibility shims
 
-Эти files остаются import-only wrappers и помечены как deprecated compatibility
-shims:
+До cleanup эти files были import-only wrappers и помечались как deprecated
+compatibility shims. В текущем main они удалены:
 
 ```text
 src/mikroclear/asset_resolver.py
@@ -44,9 +44,8 @@ src/mikroclear/alert_logic.py
 src/mikroclear/events.py
 ```
 
-В shims намеренно не добавлены runtime warnings: эти modules могут быть
-импортированы в compatibility tests или emergency rollback context, и warnings
-не должны шуметь в production logs.
+Старые import paths больше не являются поддерживаемым API. Rollback должен
+использовать предыдущий wheel целиком, а не старые Python-импорты.
 
 ## Audit result
 
@@ -58,13 +57,13 @@ rg -n "from mikroclear import (asset_resolver|state_store|eve_watcher|telegram_n
 
 Текущий допустимый результат:
 
-- production code under `src/mikroclear/` не импортирует deprecated shims;
-- совпадения остаются только в tests, которые проверяют compatibility behavior,
-  и docs, которые описывают migration/rollback.
+- production code under `src/mikroclear/` использует только canonical modules;
+- compatibility-тесты заменены на negative checks (`ModuleNotFoundError`).
 
 ## Removal gate
 
-Удалять shims можно только отдельным PR после stable window:
+Удаление выполнено отдельным cleanup PR без ожидания stable window по решению
+оператора. Перед production deploy требуется проверить:
 
 1. SELKS production прошел observation window после удаления legacy env fallback.
 2. Rollback plan больше не требует старых Python import paths.
