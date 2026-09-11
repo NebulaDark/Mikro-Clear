@@ -189,10 +189,40 @@ class MangleControlFormattingTests(TestCase):
         buttons = keyboard["inline_keyboard"]
         self.assertEqual(buttons[0][0]["text"], "✅ Site")
         self.assertEqual(buttons[0][0]["callback_data"], "mangle:request:*1-disable")
-        self.assertEqual(buttons[1][0]["text"], "❌ Backup")
-        self.assertEqual(buttons[1][0]["callback_data"], "mangle:request:*2-enable")
-        self.assertEqual(buttons[-2][0], {"text": "🔄 Обновить", "callback_data": "mangle:refresh"})
-        self.assertEqual(buttons[-1][0], {"text": "⬅️ Назад", "callback_data": "menu:v1:root"})
+        self.assertEqual(buttons[0][0]["style"], "success")
+        self.assertEqual(buttons[0][1]["text"], "❌ Backup")
+        self.assertEqual(buttons[0][1]["callback_data"], "mangle:request:*2-enable")
+        self.assertEqual(buttons[0][1]["style"], "danger")
+        self.assertEqual(buttons[-2][0], {"text": "🔄 Обновить", "callback_data": "mangle:refresh", "style": "primary"})
+        self.assertEqual(buttons[-1][0], {"text": "⬅️ Назад", "callback_data": "menu:v1:root", "style": "primary"})
+
+    def test_grid_preserves_order_and_creates_one_token_per_rule(self):
+        for count in (0, 1, 2, 3, 5):
+            with self.subTest(count=count):
+                rules = [
+                    MangleRule(str(i), f"Rule {i}", f"MC:Rule {i}",
+                               "prerouting", "mark-routing", bool(i % 2))
+                    for i in range(count)
+                ]
+                tokens = Mock(side_effect=lambda rule, action: f"{rule.rule_id}-{action}")
+                rows = build_mangle_control_keyboard(rules, token_factory=tokens)["inline_keyboard"]
+                self.assertEqual([len(row) for row in rows[:-2]],
+                                 [min(2, count - i) for i in range(0, count, 2)])
+                buttons = [button for row in rows[:-2] for button in row]
+                self.assertEqual([button["text"] for button in buttons],
+                                 [("❌ " if rule.disabled else "✅ ") + rule.name for rule in rules])
+                self.assertEqual([button["callback_data"] for button in buttons],
+                                 [f"mangle:request:{rule.rule_id}-{'enable' if rule.disabled else 'disable'}" for rule in rules])
+                self.assertEqual(tokens.call_count, count)
+                self.assertEqual([call.args for call in tokens.call_args_list],
+                                 [(rule, "enable" if rule.disabled else "disable") for rule in rules])
+                self.assertEqual([row[0]["style"] for row in rows[-2:]], ["primary", "primary"])
+
+    def test_status_navigation_uses_primary_style(self):
+        rows = mangle_control.build_mangle_status_keyboard()["inline_keyboard"]
+        self.assertEqual([row[0]["style"] for row in rows], ["primary", "primary"])
+        self.assertEqual([row[0]["callback_data"] for row in rows],
+                         ["menu:v1:status:mangle", "menu:v1:status"])
 
     def test_legacy_keyboard_name_keeps_compact_contract(self):
         keyboard = build_mangle_keyboard(
@@ -208,6 +238,8 @@ class MangleControlFormattingTests(TestCase):
         buttons = keyboard["inline_keyboard"][0]
         self.assertEqual(buttons[0]["callback_data"], "mangle:confirm:tok123")
         self.assertEqual(buttons[1]["callback_data"], "mangle:cancel:tok123")
+        self.assertEqual(buttons[0]["style"], "success")
+        self.assertEqual(buttons[1]["style"], "danger")
 
 
 class TelegramMangleHandlerTests(TestCase):
