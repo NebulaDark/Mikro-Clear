@@ -48,7 +48,7 @@ def add_saved_lists(
     config: StateStoreConfig,
     is_v6: bool = False,
     debug_log: Callable[[str], None],
-) -> None:
+) -> tuple[int, int]:
     curr_file = config.save_lists_location_v6 if is_v6 else config.save_lists_location
 
     try:
@@ -56,7 +56,7 @@ def add_saved_lists(
             rows = [ujson.loads(line) for line in handle if line.strip()]
     except FileNotFoundError:
         debug_log(f"No saved list file: {curr_file}")
-        return
+        return (0, 0)
 
     restored = 0
     skipped = 0
@@ -81,6 +81,7 @@ def add_saved_lists(
             raise
 
     debug_log(f"Restored {restored} saved addresses from {curr_file}, skipped={skipped}")
+    return restored, skipped
 
 
 __all__ = ["StateStoreConfig", "add_saved_lists", "save_lists"]

@@ -251,9 +251,11 @@ class RuntimeProviders:
         if check_tik_uptime(resources, config=config, debug_log=self.debug_log):
             log("Router reboot detected - restoring saved lists")
             self.notifier.send_system_notification("Router reboot detected - restoring saved address lists", "RESTORE")
-            add_saved_lists(address_list, config=config, debug_log=self.debug_log)
+            restored, skipped = add_saved_lists(address_list, config=config, debug_log=self.debug_log)
+            log(f"Restored {restored} saved addresses, skipped={skipped}")
             if self.settings.enable_ipv6 and address_list_v6 is not None:
-                add_saved_lists(address_list_v6, config=config, is_v6=True, debug_log=self.debug_log)
+                restored_v6, skipped_v6 = add_saved_lists(address_list_v6, config=config, is_v6=True, debug_log=self.debug_log)
+                log(f"Restored {restored_v6} saved IPv6 addresses, skipped={skipped_v6}")
 
     def validate_event(self, event: Any) -> dict[str, Any] | None:
         validated = validate_event(event)
