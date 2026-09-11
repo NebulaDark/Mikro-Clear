@@ -63,6 +63,7 @@ def build_runtime_service(settings: Settings) -> MikroClearService:
             send_system_notification=providers.notifier.send_system_notification,
             seek_to_end=providers.tailer.seek_to_end,
             get_router_client=providers.get_router_client,
+            restore_router_state=providers.restore_saved_lists_if_rebooted,
             read_ignore_list=providers.ignore_rules.load,
             start_telegram_worker=providers.polling_worker.start,
             check_telegram_worker=providers.polling_worker.check_health,

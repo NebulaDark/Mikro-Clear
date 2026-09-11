@@ -94,6 +94,7 @@ class RuntimeServiceTests(TestCase):
             send_system_notification=lambda message, kind: calls.append(("send_system_notification", message, kind)),
             seek_to_end=lambda path: calls.append(("seek_to_end", path)),
             get_router_client=lambda: client,
+            restore_router_state=lambda restored_client: calls.append(("restore_router_state", restored_client)),
             read_ignore_list=lambda path: calls.append(("read_ignore_list", path)),
             start_telegram_worker=lambda: calls.append(("start_telegram_worker",)),
             check_telegram_worker=check_telegram_worker
@@ -117,6 +118,7 @@ class RuntimeServiceTests(TestCase):
         service.startup()
 
         self.assertTrue(client.connected)
+        self.assertIn(("restore_router_state", client), calls)
         self.assertEqual(client.heartbeats, [True])
         self.assertEqual(watch_manager.watches, [("/var/log", 15, False)])
         self.assertIn(("seek_to_end", "/var/log/eve.json"), calls)

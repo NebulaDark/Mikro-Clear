@@ -235,6 +235,16 @@ class RuntimeProviders:
         )
 
     def save_restore_lists(self, client: Any) -> None:
+        self.restore_saved_lists_if_rebooted(client)
+        address_list, address_list_v6, _resources = client.paths()
+        config = self.state_store_config()
+
+        save_lists(address_list, config=config, debug_log=self.debug_log)
+
+        if self.settings.enable_ipv6 and address_list_v6 is not None:
+            save_lists(address_list_v6, config=config, is_v6=True, debug_log=self.debug_log)
+
+    def restore_saved_lists_if_rebooted(self, client: Any) -> None:
         address_list, address_list_v6, resources = client.paths()
         config = self.state_store_config()
 
@@ -244,11 +254,6 @@ class RuntimeProviders:
             add_saved_lists(address_list, config=config, debug_log=self.debug_log)
             if self.settings.enable_ipv6 and address_list_v6 is not None:
                 add_saved_lists(address_list_v6, config=config, is_v6=True, debug_log=self.debug_log)
-
-        save_lists(address_list, config=config, debug_log=self.debug_log)
-
-        if self.settings.enable_ipv6 and address_list_v6 is not None:
-            save_lists(address_list_v6, config=config, is_v6=True, debug_log=self.debug_log)
 
     def validate_event(self, event: Any) -> dict[str, Any] | None:
         validated = validate_event(event)
