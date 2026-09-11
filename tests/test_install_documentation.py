@@ -25,6 +25,17 @@ class InstallDocumentationTests(TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, text)
 
+    def test_readme_documents_git_github_install_source(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        for required in (
+            "https://github.com/NebulaDark/Mikro-Clear.git",
+            "git switch --detach <tag-or-commit>",
+            "sudo ./scripts/install-selks.sh",
+            "git archive HEAD",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
     def test_new_install_docs_have_no_external_or_legacy_install_dependency(self):
         for path in (GUIDE, REPRO):
             with self.subTest(path=path):

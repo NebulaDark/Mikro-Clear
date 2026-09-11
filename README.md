@@ -47,6 +47,26 @@ docs/ru/compatibility-shim-deprecation.md
 docs/ru/dedicated-service-user-cutover.md
 ```
 
+## Установка из Git или GitHub
+
+Источник установки — этот Git-репозиторий. На SELKS получите проверенный
+commit или tag и запускайте единственный установщик из checkout:
+
+```bash
+git clone https://github.com/NebulaDark/Mikro-Clear.git
+cd Mikro-Clear
+git switch --detach <tag-or-commit>
+git rev-parse HEAD
+sudo ./scripts/install-selks.sh
+```
+
+Для обновления существующей установки выполните `git fetch origin`, выберите
+новый commit или tag и снова запустите `sudo ./scripts/install-selks.sh`.
+Установщик собирает wheel из `git archive HEAD`, создаёт резервную копию и
+проверяет службу после обновления. Он не выполняет `git pull` автоматически.
+Полная процедура и режимы `--interactive`, `--config-template` и `--start`
+описаны в [инструкции установки](docs/ru/install-from-github.md).
+
 ## Checks
 
 ```bash
