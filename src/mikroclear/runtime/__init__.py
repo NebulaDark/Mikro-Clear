@@ -27,6 +27,7 @@ class RuntimeDependencies:
     send_system_notification: Callable[[str, str], Any]
     seek_to_end: Callable[[str], None]
     get_router_client: Callable[[], Any]
+    restore_router_state: Callable[[Any], None]
     read_ignore_list: Callable[[str], None]
     start_telegram_worker: Callable[[], None]
     check_telegram_worker: Callable[[], None]
@@ -65,6 +66,7 @@ class MikroClearService:
         self.client = self.deps.get_router_client()
         self.client.connect()
         self.client.heartbeat(force=True)
+        self.deps.restore_router_state(self.client)
 
         self.deps.read_ignore_list(self.config.ignore_list_path)
         self._start_file_watcher()
