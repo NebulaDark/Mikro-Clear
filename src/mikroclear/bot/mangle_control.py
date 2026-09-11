@@ -32,23 +32,23 @@ def build_mangle_control_keyboard(
     *,
     token_factory: Callable[[MangleRule, str], str],
 ) -> dict[str, object]:
-    rows: list[list[dict[str, str]]] = []
+    buttons: list[dict[str, str]] = []
     for rule in rules:
         action = "enable" if rule.disabled else "disable"
         token = token_factory(rule, action)
         icon = "❌" if rule.disabled else "✅"
-        rows.append(
-            [
-                {
-                    "text": f"{icon} {rule.name}",
-                    "callback_data": f"mangle:request:{token}",
-                }
-            ]
+        buttons.append(
+            {
+                "text": f"{icon} {rule.name}",
+                "callback_data": f"mangle:request:{token}",
+                "style": "danger" if rule.disabled else "success",
+            }
         )
+    rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
     rows.extend(
         [
-            [{"text": "🔄 Обновить", "callback_data": "mangle:refresh"}],
-            [{"text": "⬅️ Назад", "callback_data": "menu:v1:root"}],
+            [{"text": "🔄 Обновить", "callback_data": "mangle:refresh", "style": "primary"}],
+            [{"text": "⬅️ Назад", "callback_data": "menu:v1:root", "style": "primary"}],
         ]
     )
     return {"inline_keyboard": rows}
@@ -71,9 +71,10 @@ def build_mangle_status_keyboard() -> dict[str, object]:
                 {
                     "text": "🔄 Обновить",
                     "callback_data": "menu:v1:status:mangle",
+                    "style": "primary",
                 }
             ],
-            [{"text": "⬅️ Назад", "callback_data": "menu:v1:status"}],
+            [{"text": "⬅️ Назад", "callback_data": "menu:v1:status", "style": "primary"}],
         ]
     }
 
@@ -82,8 +83,16 @@ def build_mangle_confirm_keyboard(token: str) -> dict[str, object]:
     return {
         "inline_keyboard": [
             [
-                {"text": "✅ Confirm", "callback_data": f"mangle:confirm:{token}"},
-                {"text": "❌ Cancel", "callback_data": f"mangle:cancel:{token}"},
+                {
+                    "text": "✅ Confirm",
+                    "callback_data": f"mangle:confirm:{token}",
+                    "style": "success",
+                },
+                {
+                    "text": "❌ Cancel",
+                    "callback_data": f"mangle:cancel:{token}",
+                    "style": "danger",
+                },
             ]
         ]
     }
