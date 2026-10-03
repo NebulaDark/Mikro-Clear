@@ -2,8 +2,13 @@
 
 from dataclasses import dataclass
 import os
+from urllib.parse import urlparse
 
 from mikroclear.config import env_bool, env_csv, env_int, env_str
+
+
+class SettingsError(ValueError):
+    """Raised when runtime settings violate a required safety invariant."""
 
 
 @dataclass(frozen=True)
@@ -71,7 +76,7 @@ class Settings:
     parental_control_enable: bool = False
     parental_device_list_name: str = "MC-Parental"
     pihole_enable: bool = False
-    pihole_base_url: str = "https://192.168.10.32"
+    pihole_base_url: str = ""
     pihole_app_password: str = ""
     pihole_verify_tls: bool = True
     pihole_ca_file: str = "/etc/mikroclear/certs/pihole-ca.crt"
@@ -82,6 +87,27 @@ class Settings:
     parental_youtube_require_confirmation: bool = True
     parental_action_ttl_seconds: int = 300
     parental_youtube_domains_file: str = "/etc/mikroclear/youtube-domains.txt"
+
+    def __post_init__(self) -> None:
+        if not self.pihole_enable:
+            return
+
+        base_url = self.pihole_base_url.strip()
+        if not base_url:
+            raise SettingsError(
+                "MIKROCLEAR_PIHOLE_BASE_URL is required when MIKROCLEAR_PIHOLE_ENABLE=true"
+            )
+
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise SettingsError(
+                "MIKROCLEAR_PIHOLE_BASE_URL must be an absolute HTTP(S) URL"
+            )
+        if self.pihole_verify_tls and parsed.scheme != "https":
+            raise SettingsError(
+                "MIKROCLEAR_PIHOLE_BASE_URL must use https:// when "
+                "MIKROCLEAR_PIHOLE_VERIFY_TLS=true"
+            )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -214,7 +240,7 @@ class Settings:
             parental_control_enable=env_bool("MIKROCLEAR_PARENTAL_CONTROL_ENABLE", False),
             parental_device_list_name=env_str("MIKROCLEAR_PARENTAL_DEVICE_LIST_NAME", "MC-Parental"),
             pihole_enable=env_bool("MIKROCLEAR_PIHOLE_ENABLE", False),
-            pihole_base_url=env_str("MIKROCLEAR_PIHOLE_BASE_URL", "https://192.168.10.32"),
+            pihole_base_url=env_str("MIKROCLEAR_PIHOLE_BASE_URL", ""),
             pihole_app_password=env_str("MIKROCLEAR_PIHOLE_APP_PASSWORD", ""),
             pihole_verify_tls=env_bool("MIKROCLEAR_PIHOLE_VERIFY_TLS", True),
             pihole_ca_file=env_str("MIKROCLEAR_PIHOLE_CA_FILE", "/etc/mikroclear/certs/pihole-ca.crt"),
