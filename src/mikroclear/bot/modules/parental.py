@@ -37,4 +37,26 @@ def build_parental_confirmation(device: Any, action: str, token: str) -> MenuVie
     ]]})
 
 
-__all__ = ["build_parental_confirmation", "build_parental_view"]
+def build_parental_error_view(*, mutation: bool, device: Any = None, ip: str = "") -> MenuView:
+    if mutation:
+        device_name = getattr(device, "name", "") or ip
+        device_ip = getattr(device, "ip", "") or ip
+        text = (
+            "❌ <b>Не удалось применить политику YouTube</b>\n\n"
+            f"Устройство: {escape_html_safe(device_name)}\n"
+            f"IP: <code>{escape_html_safe(device_ip)}</code>\n\n"
+            "Изменение не подтверждено.\n"
+            "Обновите состояние и повторите попытку."
+        )
+    else:
+        text = (
+            "⚠️ <b>Не удалось получить состояние Parental Control</b>\n\n"
+            "Попробуйте обновить данные позже."
+        )
+    return MenuView(text, {"inline_keyboard": [
+        [{"text": "🔄 Обновить", "callback_data": "parental:v1:refresh"}],
+        [{"text": "⬅️ Назад", "callback_data": "menu:v1:root"}],
+    ]})
+
+
+__all__ = ["build_parental_confirmation", "build_parental_error_view", "build_parental_view"]

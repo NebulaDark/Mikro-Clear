@@ -10,7 +10,11 @@ from typing import Any, Callable
 from mikroclear.bot.auth import BotAuth
 from mikroclear.bot.audit import BotAuditLog
 from mikroclear.bot.gates import bot_module_enabled
-from mikroclear.bot.modules.parental import build_parental_confirmation, build_parental_view
+from mikroclear.bot.modules.parental import (
+    build_parental_confirmation,
+    build_parental_error_view,
+    build_parental_view,
+)
 from mikroclear.security import sanitize_exception_text
 from mikroclear.telegram.commands import raise_for_retryable_delivery
 
@@ -49,19 +53,20 @@ class TelegramParentalHandler:
             getattr(self.settings, "pihole_app_password", ""),
             getattr(self.settings, "pihole_sid", ""),
             getattr(self.settings, "routeros_password", ""),
+            getattr(self.settings, "telegram_token", ""),
             *extra_secrets,
         ]
         return sanitize_exception_text(exc, *(secret for secret in secrets if secret))
 
-    def menu_view(self, *, chat_id: str, user_id: str, now: int) -> Any:
+    def menu_view(self, *, chat_id: str, user_id: str, now: int, telegram_token: str = "") -> Any:
         if not self._enabled():
             return build_parental_view([])
         try:
             states = [self.policy.get_state(device) for device in self.policy.list_devices()]
             return build_parental_view(states)
         except Exception as exc:
-            self.log(f"Parental state failed: {self._safe_error(exc)}")
-            return build_parental_view([])
+            self.log(f"Parental state failed: {self._safe_error(exc, telegram_token)}")
+            return build_parental_error_view(mutation=False)
 
     def handle_callback(self, *, callback: dict[str, Any], auth: BotAuth, answer_callback: Callable[[str, str, bool], Any], send_message: Callable[..., Any], edit_message: Callable[..., Any], telegram_token: str, timeout: int, now: int) -> bool:
         data = str(callback.get("data", ""))
@@ -78,7 +83,7 @@ class TelegramParentalHandler:
         action = parts[2] if len(parts) > 2 else ""
         if action == "refresh":
             answer_callback(callback_id, "", False)
-            return self._render(self.menu_view(chat_id=chat_id, user_id=user_id, now=now), callback, edit_message, send_message, telegram_token, chat_id, timeout)
+            return self._render(self.menu_view(chat_id=chat_id, user_id=user_id, now=now, telegram_token=telegram_token), callback, edit_message, send_message, telegram_token, chat_id, timeout)
         if action == "youtube" and len(parts) >= 5 and parts[3] == "request":
             try:
                 index, wanted = int(parts[4]), parts[5]
@@ -108,16 +113,21 @@ class TelegramParentalHandler:
                 return True
             if parts[3] == "cancel":
                 answer_callback(callback_id, "Отменено", False)
-                return self._render(self.menu_view(chat_id=chat_id, user_id=user_id, now=now), callback, edit_message, send_message, telegram_token, chat_id, timeout)
+                return self._render(self.menu_view(chat_id=chat_id, user_id=user_id, now=now, telegram_token=telegram_token), callback, edit_message, send_message, telegram_token, chat_id, timeout)
             answer_callback(callback_id, "Применяю политику...", False)
+            device = None
             try:
                 device = next(item for item in self.policy.list_devices() if item.ip == payload["ip"])
                 self.policy.block(device) if payload["action"] == "block" else self.policy.allow(device)
                 self.audit.record(f"parental.youtube.{payload['action']}", "success", chat_id, user_id, device.ip, f"group={self.settings.parental_youtube_group_name}")
             except Exception as exc:
-                self.audit.record(f"parental.youtube.{payload['action']}", "error", chat_id, user_id, payload["ip"], type(exc).__name__)
+                try:
+                    self.audit.record(f"parental.youtube.{payload['action']}", "error", chat_id, user_id, payload["ip"], type(exc).__name__)
+                except Exception as audit_exc:
+                    self.log(f"Parental audit failed: {self._safe_error(audit_exc, telegram_token)}")
                 self.log(f"Parental action failed: {self._safe_error(exc, telegram_token)}")
-            return self._render(self.menu_view(chat_id=chat_id, user_id=user_id, now=now), callback, edit_message, send_message, telegram_token, chat_id, timeout)
+                return self._render(build_parental_error_view(mutation=True, device=device, ip=payload["ip"]), callback, edit_message, send_message, telegram_token, chat_id, timeout)
+            return self._render(self.menu_view(chat_id=chat_id, user_id=user_id, now=now, telegram_token=telegram_token), callback, edit_message, send_message, telegram_token, chat_id, timeout)
         return False
 
     @staticmethod

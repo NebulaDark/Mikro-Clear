@@ -54,10 +54,18 @@ class PiholeClient:
             payload = response.json()
             sid = payload.get("session", {}).get("sid")
         except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise PiholeClientError("Pi-hole authentication returned invalid JSON") from exc
+            raise PiholeClientError(
+                self._sanitize_error("Pi-hole authentication returned invalid JSON")
+            ) from None
         if not sid:
-            raise PiholeClientError("Pi-hole authentication did not return a session")
+            raise PiholeClientError(
+                self._sanitize_error("Pi-hole authentication did not return a session")
+            )
         self._sid = str(sid)
+
+    def _sanitize_error(self, value: object) -> str:
+        sanitized = mask_known_secret(value, self.app_password)
+        return mask_known_secret(sanitized, self._sid)
 
     def _send(self, method: str, path: str, **kwargs: Any) -> Any:
         try:
@@ -68,8 +76,10 @@ class PiholeClient:
                 **kwargs,
             )
         except Exception as exc:
-            message = mask_known_secret(str(exc), self.app_password)
-            raise PiholeClientError(f"Pi-hole request failed: {message[:180]}") from exc
+            message = self._sanitize_error(exc)
+            raise PiholeClientError(
+                f"Pi-hole request failed: {message[:180]}"
+            ) from None
 
     def request(self, method: str, path: str, **kwargs: Any) -> Any:
         method = str(method).upper()
@@ -94,8 +104,8 @@ class PiholeClient:
                     continue
                 if is_mutation:
                     raise PiholeClientError(
-                        str(exc), ambiguous=True
-                    ) from exc
+                        self._sanitize_error(exc), ambiguous=True
+                    ) from None
                 raise
 
             if response.status_code == 401 and not reauth_attempted:
@@ -104,7 +114,9 @@ class PiholeClient:
                 continue
             if response.status_code == 401:
                 raise PiholeClientError(
-                    "Pi-hole API authentication failed after re-authentication",
+                    self._sanitize_error(
+                        "Pi-hole API authentication failed after re-authentication"
+                    ),
                     ambiguous=is_mutation,
                     status_code=401,
                 )
@@ -113,7 +125,9 @@ class PiholeClient:
                     read_retries += 1
                     continue
             if response.status_code >= 400:
-                detail = mask_known_secret(str(getattr(response, "text", ""))[:180], self.app_password)
+                detail = self._sanitize_error(
+                    str(getattr(response, "text", ""))[:180]
+                )
                 raise PiholeClientError(
                     f"Pi-hole API HTTP {response.status_code}: {detail}",
                     ambiguous=is_mutation and (response.status_code == 429 or response.status_code >= 500),
@@ -123,9 +137,9 @@ class PiholeClient:
                 return response.json()
             except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise PiholeClientError(
-                    "Pi-hole API returned invalid JSON",
+                    self._sanitize_error("Pi-hole API returned invalid JSON"),
                     ambiguous=is_mutation,
-                ) from exc
+                ) from None
 
     def close(self) -> None:
         if not self._sid:
