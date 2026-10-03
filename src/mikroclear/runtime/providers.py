@@ -10,6 +10,9 @@ from typing import Any
 from mikroclear.assets.resolver import AssetResolver, AssetResolverConfig
 from mikroclear.bot.audit import BotAuditLog
 from mikroclear.bot.settings import BotSettings
+from mikroclear.pihole.client import PiholeClient
+from mikroclear.parental.youtube import YouTubePolicyService
+from mikroclear.routeros.parental import RouterOSParentalInventory
 from mikroclear.runtime import MikroClearService
 from mikroclear.runtime.status_snapshot import build_status_snapshot
 from mikroclear.routeros.client import RouterOSClient
@@ -38,6 +41,7 @@ from mikroclear.telegram.polling_worker import TelegramPollingWorker
 from mikroclear.telegram.unblock_handler import TelegramUnblockHandler
 from mikroclear.telegram.whitelist_actions import WhitelistActionStore
 from mikroclear.telegram.whitelist_handler import TelegramWhitelistHandler
+from mikroclear.telegram.parental_handler import TelegramParentalHandler
 
 
 def log(message: str) -> None:
@@ -118,12 +122,38 @@ class RuntimeProviders:
             get_router_client=self.get_router_client,
             log=log,
         )
+        self.pihole = PiholeClient(
+            self.settings.pihole_base_url,
+            self.settings.pihole_app_password,
+            verify_tls=self.settings.pihole_verify_tls,
+            ca_file=self.settings.pihole_ca_file,
+            connect_timeout=self.settings.pihole_connect_timeout_seconds,
+            read_timeout=self.settings.pihole_read_timeout_seconds,
+            retry_count=self.settings.pihole_retry_count,
+        )
+        self.parental_inventory = RouterOSParentalInventory(
+            self.get_router_client,
+            self.settings.parental_device_list_name,
+        )
+        self.parental_policy = YouTubePolicyService(
+            self.parental_inventory,
+            self.pihole,
+            group_name=self.settings.parental_youtube_group_name,
+        )
+        self.parental_handler = TelegramParentalHandler(
+            self.settings,
+            policy=self.parental_policy,
+            bot_settings=self.bot_settings,
+            audit=self.audit,
+            log=log,
+        )
         self.menu_handler = TelegramMenuHandler(
             self.settings,
             bot_settings=self.bot_settings,
             status_snapshot_factory=self.build_status_snapshot,
             mangle_handler=self.mangle_handler,
             whitelist_handler=self.whitelist_handler,
+            parental_handler=self.parental_handler,
             log=log,
         )
         self.pipeline = AlertPipeline(
@@ -150,6 +180,7 @@ class RuntimeProviders:
             menu_handler=self.menu_handler,
             mangle_handler=self.mangle_handler,
             whitelist_handler=self.whitelist_handler,
+            parental_handler=self.parental_handler,
             edit_message=edit_telegram_message,
             edit_reply_markup=edit_telegram_reply_markup,
         )

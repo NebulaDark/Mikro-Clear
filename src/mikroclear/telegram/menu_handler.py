@@ -48,6 +48,11 @@ class WhitelistMenuAdapter(Protocol):
         raise NotImplementedError
 
 
+class ParentalMenuAdapter(Protocol):
+    def menu_view(self, *, chat_id: str, user_id: str, now: int) -> MenuView:
+        raise NotImplementedError
+
+
 class TelegramMenuHandler:
     def __init__(
         self,
@@ -57,6 +62,7 @@ class TelegramMenuHandler:
         status_snapshot_factory: Callable[[], Any],
         mangle_handler: MangleMenuAdapter | None = None,
         whitelist_handler: WhitelistMenuAdapter | None = None,
+        parental_handler: ParentalMenuAdapter | None = None,
         registry: MenuRegistry | None = None,
         log: Callable[[str], None] | None = None,
     ) -> None:
@@ -65,6 +71,7 @@ class TelegramMenuHandler:
         self.status_snapshot_factory = status_snapshot_factory
         self.mangle_handler = mangle_handler
         self.whitelist_handler = whitelist_handler
+        self.parental_handler = parental_handler
         self.registry = registry or default_menu_registry()
         self.log = log or (lambda _message: None)
 
@@ -185,6 +192,10 @@ class TelegramMenuHandler:
                 item.item_id == "whitelist_control"
                 and self.whitelist_handler is None
             )
+            and not (
+                item.item_id == "parental_control"
+                and self.parental_handler is None
+            )
         )
 
     def _root_view(self, *, chat_id: str, auth: BotAuth) -> MenuView:
@@ -214,6 +225,19 @@ class TelegramMenuHandler:
             )
         )
 
+    def _parental_available(self) -> bool:
+        return bool(
+            self.parental_handler is not None
+            and bot_module_enabled(
+                self.bot_settings,
+                "parental_control",
+                feature_enabled=bool(
+                    self.settings.parental_control_enable
+                    and self.settings.pihole_enable
+                ),
+            )
+        )
+
     def _route_available(self, route: str) -> bool:
         if not self.bot_settings.enable:
             return False
@@ -225,6 +249,8 @@ class TelegramMenuHandler:
             return self._mangle_available()
         if route.startswith("exceptions"):
             return self._whitelist_available()
+        if route == "parental":
+            return self._parental_available()
         return False
 
     def _view_for_route(
@@ -262,6 +288,12 @@ class TelegramMenuHandler:
             return self.mangle_handler.control_view(
                 chat_id=chat_id,
                 user_id=user_id,
+            )
+
+        if route == "parental":
+            assert self.parental_handler is not None
+            return self.parental_handler.menu_view(
+                chat_id=chat_id, user_id=user_id, now=now
             )
 
         assert self.whitelist_handler is not None
@@ -336,4 +368,5 @@ __all__ = [
     "MangleMenuAdapter",
     "TelegramMenuHandler",
     "WhitelistMenuAdapter",
+    "ParentalMenuAdapter",
 ]

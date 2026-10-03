@@ -72,6 +72,7 @@ class TelegramUpdatePoller:
         menu_handler: Any = None,
         mangle_handler: Any = None,
         whitelist_handler: Any = None,
+        parental_handler: Any = None,
         http_get: Callable[..., Any] = requests.get,
         send_message: Callable[..., Any] = send_telegram_message,
         edit_message: Callable[..., Any] = edit_telegram_message,
@@ -89,6 +90,7 @@ class TelegramUpdatePoller:
         self.menu_handler = menu_handler
         self.mangle_handler = mangle_handler
         self.whitelist_handler = whitelist_handler
+        self.parental_handler = parental_handler
         self.http_get = http_get
         self.send_message = send_message
         self.edit_message = edit_message
@@ -321,6 +323,21 @@ class TelegramUpdatePoller:
                 )
             ):
                 return True
+            if (
+                callback_data.startswith("parental:v1:")
+                and self.parental_handler is not None
+                and self.parental_handler.handle_callback(
+                    callback=callback,
+                    auth=auth,
+                    answer_callback=lambda _callback_id, _text, _alert: None,
+                    send_message=self._send_message,
+                    edit_message=self._edit_message,
+                    telegram_token=self.settings.telegram_token,
+                    timeout=self.settings.telegram_timeout,
+                    now=int(self.now()),
+                )
+            ):
+                return True
             return True
         if self.mangle_handler is not None and self.mangle_handler.handle_callback(
             callback=callback,
@@ -340,6 +357,17 @@ class TelegramUpdatePoller:
             send_message=self._send_message,
             edit_message=self._edit_message,
             edit_reply_markup=self._edit_reply_markup,
+            telegram_token=self.settings.telegram_token,
+            timeout=self.settings.telegram_timeout,
+            now=int(self.now()),
+        ):
+            return True
+        if self.parental_handler is not None and self.parental_handler.handle_callback(
+            callback=callback,
+            auth=auth,
+            answer_callback=self._answer_callback,
+            send_message=self._send_message,
+            edit_message=self._edit_message,
             telegram_token=self.settings.telegram_token,
             timeout=self.settings.telegram_timeout,
             now=int(self.now()),

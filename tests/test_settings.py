@@ -128,3 +128,20 @@ class SettingsTests(TestCase):
 
         self.assertEqual(settings.mangle_allowed_chains, ("prerouting",))
         self.assertEqual(settings.mangle_allowed_actions, ("mark-routing",))
+
+    def test_parental_settings_are_disabled_and_configurable(self):
+        with patch.dict(os.environ, {
+            "MIKROCLEAR_PARENTAL_CONTROL_ENABLE": "true",
+            "MIKROCLEAR_PIHOLE_ENABLE": "true",
+            "MIKROCLEAR_PIHOLE_BASE_URL": "https://pihole.test",
+            "MIKROCLEAR_PIHOLE_VERIFY_TLS": "true",
+            "MIKROCLEAR_PARENTAL_ACTION_TTL_SECONDS": "120",
+        }, clear=True):
+            settings = Settings.from_env()
+
+        self.assertTrue(settings.parental_control_enable)
+        self.assertTrue(settings.pihole_enable)
+        self.assertEqual(settings.pihole_base_url, "https://pihole.test")
+        self.assertEqual(settings.parental_action_ttl_seconds, 120)
+        self.assertFalse(Settings().parental_control_enable)
+        self.assertFalse(Settings().pihole_enable)
