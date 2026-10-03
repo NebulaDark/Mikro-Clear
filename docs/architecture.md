@@ -189,6 +189,8 @@ import time.
 never at import time.
 - Tests mock RouterOS and Telegram network operations.
 - No secrets belong in source, tests, docs, or git history.
+- Parental control reads RouterOS `MC-Parental` and changes only the configured
+  Pi-hole YouTube group membership through its REST API.
 
 ## Verification
 

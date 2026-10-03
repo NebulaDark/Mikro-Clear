@@ -1,0 +1,8 @@
+# Regex domains assigned manually to the MikroClear-YouTube-Blocked Pi-hole group.
+(^|\.)youtube\.com$
+(^|\.)youtu\.be$
+(^|\.)googlevideo\.com$
+(^|\.)ytimg\.com$
+(^|\.)youtube-nocookie\.com$
+(^|\.)youtubei\.googleapis\.com$
+(^|\.)youtube\.googleapis\.com$

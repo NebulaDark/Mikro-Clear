@@ -68,6 +68,20 @@ class Settings:
     mangle_allowed_chains: tuple[str, ...] = ("prerouting",)
     mangle_allowed_actions: tuple[str, ...] = ("mark-routing",)
     mangle_require_confirmation: bool = True
+    parental_control_enable: bool = False
+    parental_device_list_name: str = "MC-Parental"
+    pihole_enable: bool = False
+    pihole_base_url: str = "https://192.168.10.32"
+    pihole_app_password: str = ""
+    pihole_verify_tls: bool = True
+    pihole_ca_file: str = "/etc/mikroclear/certs/pihole-ca.crt"
+    pihole_connect_timeout_seconds: int = 3
+    pihole_read_timeout_seconds: int = 5
+    pihole_retry_count: int = 1
+    parental_youtube_group_name: str = "MikroClear-YouTube-Blocked"
+    parental_youtube_require_confirmation: bool = True
+    parental_action_ttl_seconds: int = 300
+    parental_youtube_domains_file: str = "/etc/mikroclear/youtube-domains.txt"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -197,6 +211,20 @@ class Settings:
             mangle_allowed_chains=env_csv("MIKROCLEAR_MANGLE_ALLOWED_CHAINS", ("prerouting",)),
             mangle_allowed_actions=env_csv("MIKROCLEAR_MANGLE_ALLOWED_ACTIONS", ("mark-routing",)),
             mangle_require_confirmation=env_bool("MIKROCLEAR_MANGLE_REQUIRE_CONFIRMATION", True),
+            parental_control_enable=env_bool("MIKROCLEAR_PARENTAL_CONTROL_ENABLE", False),
+            parental_device_list_name=env_str("MIKROCLEAR_PARENTAL_DEVICE_LIST_NAME", "MC-Parental"),
+            pihole_enable=env_bool("MIKROCLEAR_PIHOLE_ENABLE", False),
+            pihole_base_url=env_str("MIKROCLEAR_PIHOLE_BASE_URL", "https://192.168.10.32"),
+            pihole_app_password=env_str("MIKROCLEAR_PIHOLE_APP_PASSWORD", ""),
+            pihole_verify_tls=env_bool("MIKROCLEAR_PIHOLE_VERIFY_TLS", True),
+            pihole_ca_file=env_str("MIKROCLEAR_PIHOLE_CA_FILE", "/etc/mikroclear/certs/pihole-ca.crt"),
+            pihole_connect_timeout_seconds=env_int("MIKROCLEAR_PIHOLE_CONNECT_TIMEOUT_SECONDS", 3),
+            pihole_read_timeout_seconds=env_int("MIKROCLEAR_PIHOLE_READ_TIMEOUT_SECONDS", 5),
+            pihole_retry_count=env_int("MIKROCLEAR_PIHOLE_RETRY_COUNT", 1),
+            parental_youtube_group_name=env_str("MIKROCLEAR_PARENTAL_YOUTUBE_GROUP", "MikroClear-YouTube-Blocked"),
+            parental_youtube_require_confirmation=env_bool("MIKROCLEAR_PARENTAL_YOUTUBE_REQUIRE_CONFIRMATION", True),
+            parental_action_ttl_seconds=env_int("MIKROCLEAR_PARENTAL_ACTION_TTL_SECONDS", 300),
+            parental_youtube_domains_file=env_str("MIKROCLEAR_PARENTAL_YOUTUBE_DOMAINS_FILE", "/etc/mikroclear/youtube-domains.txt"),
         )
 
 

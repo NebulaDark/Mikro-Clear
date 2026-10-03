@@ -111,6 +111,14 @@ def default_menu_registry() -> MenuRegistry:
                 "whitelist_control",
                 lambda settings: settings.telegram_whitelist_control_enable,
             ),
+            MenuItem(
+                "parental_control",
+                "👨‍👩‍👧 Родительский контроль",
+                40,
+                "admin",
+                "parental_control",
+                lambda settings: settings.parental_control_enable and settings.pihole_enable,
+            ),
         )
     )
 
@@ -120,6 +128,7 @@ def build_root_view(items: tuple[MenuItem, ...]) -> MenuView:
         "status": "status",
         "mangle_control": "mangle",
         "whitelist_control": "exceptions",
+        "parental_control": "parental",
     }
     buttons = [
         {

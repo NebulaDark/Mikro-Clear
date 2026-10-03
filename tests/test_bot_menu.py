@@ -130,7 +130,11 @@ class BotMenuTests(unittest.TestCase):
                         {
                             "text": "🛡 Исключения",
                             "callback_data": "menu:v1:exceptions",
-                        }
+                        },
+                        {
+                            "text": "👨‍👩‍👧 Родительский контроль",
+                            "callback_data": "menu:v1:parental",
+                        },
                     ],
                 ]
             },

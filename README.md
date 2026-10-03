@@ -218,3 +218,7 @@ MIKROCLEAR_TELEGRAM_UNBLOCK_ENABLE=true
 MIKROCLEAR_TELEGRAM_UNBLOCK_TTL_SECONDS=86400
 MIKROCLEAR_TELEGRAM_UPDATES_INTERVAL_SECONDS=5
 ```
+
+# Parental YouTube control
+
+The optional parental-control module reads devices from the RouterOS `MC-Parental` address-list and changes only the configured Pi-hole YouTube group membership. It is disabled by default; see [the Russian runbook](docs/ru/parental-youtube-control.md) for bootstrap and limitations.
