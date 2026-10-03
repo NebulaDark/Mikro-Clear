@@ -11,6 +11,8 @@ Mikro-Clear показывает устройства из RouterOS address-list
 
 Все новые настройки по умолчанию выключены. Включение требует `MIKROCLEAR_PARENTAL_CONTROL_ENABLE=true`, `MIKROCLEAR_PIHOLE_ENABLE=true` и application password Pi-hole в environment file. Пароль не хранится в Git и не выводится в Telegram или логах.
 
+`MIKROCLEAR_PIHOLE_BASE_URL` задаётся только через environment. При включённой интеграции URL должен быть непустым и использовать hostname или IP, который присутствует в SAN TLS-сертификата Pi-hole. Для текущего production Pi-hole проверен адрес `https://pihole.21port.ru`; код не подставляет endpoint автоматически.
+
 ## Подготовка
 
 1. На RouterOS вручную создать static DHCP lease и добавить IP устройства в `MC-Parental`.

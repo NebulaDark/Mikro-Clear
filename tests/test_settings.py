@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
-from mikroclear.settings import Settings, load_settings
+from mikroclear.settings import Settings, SettingsError, load_settings
 
 
 class SettingsTests(TestCase):
@@ -145,3 +145,60 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.parental_action_ttl_seconds, 120)
         self.assertFalse(Settings().parental_control_enable)
         self.assertFalse(Settings().pihole_enable)
+
+    def test_pihole_disabled_with_empty_url_is_valid(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MIKROCLEAR_PIHOLE_ENABLE": "false",
+                "MIKROCLEAR_PIHOLE_BASE_URL": "",
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertFalse(settings.pihole_enable)
+        self.assertEqual(settings.pihole_base_url, "")
+
+    def test_pihole_enabled_requires_base_url(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MIKROCLEAR_PIHOLE_ENABLE": "true",
+                "MIKROCLEAR_PIHOLE_BASE_URL": "",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(SettingsError, "BASE_URL is required"):
+                Settings.from_env()
+
+    def test_pihole_enabled_https_url_with_tls_verification_is_valid(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MIKROCLEAR_PIHOLE_ENABLE": "true",
+                "MIKROCLEAR_PIHOLE_BASE_URL": "https://pihole.example.com",
+                "MIKROCLEAR_PIHOLE_VERIFY_TLS": "true",
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertEqual(settings.pihole_base_url, "https://pihole.example.com")
+
+    def test_pihole_http_url_is_rejected_when_tls_verification_enabled(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MIKROCLEAR_PIHOLE_ENABLE": "true",
+                "MIKROCLEAR_PIHOLE_BASE_URL": "http://pihole.example.com",
+                "MIKROCLEAR_PIHOLE_VERIFY_TLS": "true",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(SettingsError, "must use https"):
+                Settings.from_env()
+
+    def test_settings_default_has_no_pihole_environment_endpoint(self):
+        self.assertEqual(Settings().pihole_base_url, "")
+        self.assertNotIn("192.168.10.32", Settings().pihole_base_url)
