@@ -79,6 +79,7 @@ def parse_menu_callback(data: Any) -> str | None:
         "status:mangle",
         "mangle",
         "exceptions",
+        "parental",
     }:
         return route
     return route if re.fullmatch(r"exceptions:[0-9]+", route) else None

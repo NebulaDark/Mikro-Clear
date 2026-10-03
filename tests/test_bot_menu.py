@@ -92,6 +92,7 @@ class BotMenuTests(unittest.TestCase):
             "menu:v1:status:mangle": "status:mangle",
             "menu:v1:mangle": "mangle",
             "menu:v1:exceptions": "exceptions",
+            "menu:v1:parental": "parental",
             "menu:v1:exceptions:0": "exceptions:0",
             "menu:v1:exceptions:17": "exceptions:17",
         }
@@ -111,6 +112,18 @@ class BotMenuTests(unittest.TestCase):
         ):
             with self.subTest(data=data):
                 self.assertIsNone(parse_menu_callback(data))
+
+    def test_parental_root_callback_round_trips_through_parser(self):
+        parental_item = next(
+            item
+            for item in default_menu_registry().items
+            if item.item_id == "parental_control"
+        )
+        view = build_root_view((parental_item,))
+        callback_data = view.reply_markup["inline_keyboard"][0][0]["callback_data"]
+
+        self.assertEqual(callback_data, "menu:v1:parental")
+        self.assertEqual(parse_menu_callback(callback_data), "parental")
 
     def test_root_view_uses_two_column_ordered_routes(self):
         items = default_menu_registry().items
