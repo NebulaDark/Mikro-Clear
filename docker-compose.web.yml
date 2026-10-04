@@ -7,12 +7,12 @@ services:
     container_name: mikroclear-web
     restart: unless-stopped
     env_file:
-      - \${MIKROCLEAR_WEB_ENV_FILE:-docker/web/mikroclear-web.env}
+      - ${MIKROCLEAR_WEB_ENV_FILE:-docker/web/mikroclear-web.env}
     ports:
-      - "127.0.0.1:\${MIKROCLEAR_WEB_PUBLISH_PORT:-8080}:8080"
+      - "127.0.0.1:${MIKROCLEAR_WEB_PUBLISH_PORT:-8080}:8080"
     volumes:
-      - \${MIKROCLEAR_EVE_HOST_PATH:-/opt/SELKS/docker/containers-data/suricata/logs/eve.json}:/data/eve.json:ro
-      - \${MIKROCLEAR_CERTS_HOST_DIR:-./docker-data/certs}:/etc/mikroclear/certs:ro
+      - ${MIKROCLEAR_EVE_HOST_PATH:-/opt/SELKS/docker/containers-data/suricata/logs/eve.json}:/data/eve.json:ro
+      - ${MIKROCLEAR_CERTS_HOST_DIR:-./docker-data/certs}:/etc/mikroclear/certs:ro
       - mikroclear_web_state:/var/lib/mikroclear
     read_only: true
     tmpfs:
