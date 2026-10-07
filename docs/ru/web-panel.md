@@ -20,6 +20,7 @@ Browser → HTTPS/reverse proxy → Vue 3 SPA → FastAPI → existing Mikro-Cle
 - пароль и session secret только через environment;
 - SameSite=Strict session cookie; Secure cookie включается для HTTPS;
 - CSRF для write actions;
+- ограничение частоты: 5 попыток входа в минуту с одного IP и 30 write-запросов в минуту для администратора; лимит хранится в памяти Web-процесса, поэтому reverse proxy также должен ограничивать запросы при публичном доступе;
 - short-lived one-time confirmation token;
 - confirmation token привязан к login session; после рестарта Web-процесса ожидающие подтверждения недействительны;
 - повторная проверка managed Mangle rule перед update;

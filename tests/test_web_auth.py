@@ -37,6 +37,41 @@ class WebAuthTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/settings").status_code, 401)
         self.assertEqual(self.client.post("/api/router/unblock/request", json={"address": "192.0.2.4"}).status_code, 401)
 
+    def test_login_attempts_are_rate_limited_per_client(self):
+        for _ in range(5):
+            response = self.client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "wrong"},
+            )
+            self.assertEqual(response.status_code, 401)
+        response = self.client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "test-only-password"},
+        )
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers.get("Retry-After"), "60")
+
+    def test_router_write_requests_are_rate_limited_without_blocking_logout(self):
+        csrf = self.client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "test-only-password"},
+        ).json()["csrf"]
+        for _ in range(30):
+            response = self.client.post(
+                "/api/router/unblock/request",
+                json={"address": "192.0.2.4"},
+                headers={"X-CSRF-Token": csrf},
+            )
+            self.assertEqual(response.status_code, 409)
+        response = self.client.post(
+            "/api/router/unblock/request",
+            json={"address": "192.0.2.4"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(self.client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf}).status_code, 200)
+        self.gateway.return_value.unblock.assert_not_called()
+
     def test_login_cookie_csrf_and_logout(self):
         denied = self.client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
         self.assertEqual(denied.status_code, 401)

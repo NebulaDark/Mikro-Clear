@@ -20,6 +20,7 @@ from mikroclear.security import mask_known_secret
 from mikroclear.settings import Settings
 from mikroclear.web.actions import ConfirmationError, ConfirmationStore
 from mikroclear.web.config import WebSettings
+from mikroclear.web.rate_limit import SlidingWindowLimiter
 from mikroclear.web.readers import read_jsonl, recent_alerts, text_log
 from mikroclear.web.router_gateway import RouterWebGateway
 
@@ -108,6 +109,8 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
     audit = BotAuditLog(Path(bot.audit_log))
     gateway = RouterWebGateway(core)
     confirmations = ConfirmationStore(web.session_secret, ttl_seconds=web.confirm_ttl_seconds)
+    login_limiter = SlidingWindowLimiter(limit=5, window_seconds=60)
+    write_limiter = SlidingWindowLimiter(limit=30, window_seconds=60)
     known_secrets = tuple(
         secret for secret in (
             core.password,
@@ -161,6 +164,12 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
             raise HTTPException(status_code=403, detail="CSRF validation failed")
         return username
 
+    def require_write_csrf(request: Request) -> str:
+        username = require_csrf(request)
+        if not write_limiter.allow(username):
+            raise HTTPException(status_code=429, detail="Write request rate limit exceeded", headers={"Retry-After": "60"})
+        return username
+
     def audit_record(action: str, outcome: str, username: str, target: str, detail: str = "") -> None:
         audit.record(
             *(
@@ -175,6 +184,9 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
 
     @app.post("/api/auth/login")
     def login(payload: LoginRequest, request: Request) -> dict[str, Any]:
+        client_ip = request.client.host if request.client else "unknown"
+        if not login_limiter.allow(client_ip):
+            raise HTTPException(status_code=429, detail="Login rate limit exceeded", headers={"Retry-After": "60"})
         valid_user = hmac.compare_digest(payload.username, web.admin_username)
         valid_password = hmac.compare_digest(payload.password, web.admin_password)
         if not (valid_user and valid_password):
@@ -249,7 +261,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         return {"items": rows, "count": len(rows), "enabled": core.mangle_control_enable}
 
     @app.post("/api/router/mangle/{rule_id}/request")
-    def request_mangle(rule_id: str, payload: MangleRequest, request: Request, username: str = Depends(require_csrf)) -> dict[str, Any]:
+    def request_mangle(rule_id: str, payload: MangleRequest, request: Request, username: str = Depends(require_write_csrf)) -> dict[str, Any]:
         if core.monitor_only:
             raise HTTPException(status_code=409, detail="Monitor-only mode is enabled")
         if not core.mangle_control_enable:
@@ -262,7 +274,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         return {"token": token, "expires_in": web.confirm_ttl_seconds, "target": current["name"], "disabled": payload.disabled}
 
     @app.post("/api/router/mangle/confirm")
-    def confirm_mangle(payload: ConfirmRequest, request: Request, username: str = Depends(require_csrf)) -> dict[str, Any]:
+    def confirm_mangle(payload: ConfirmRequest, request: Request, username: str = Depends(require_write_csrf)) -> dict[str, Any]:
         try:
             action = confirmations.consume(payload.token, kind="mangle", owner=str(request.session["session_id"]))
             gateway.set_mangle_disabled(str(action["rule_id"]), bool(action["disabled"]))
@@ -279,7 +291,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         return {"ok": True}
 
     @app.post("/api/router/unblock/request")
-    def request_unblock(payload: UnblockRequest, request: Request, username: str = Depends(require_csrf)) -> dict[str, Any]:
+    def request_unblock(payload: UnblockRequest, request: Request, username: str = Depends(require_write_csrf)) -> dict[str, Any]:
         if core.monitor_only:
             raise HTTPException(status_code=409, detail="Monitor-only mode is enabled")
         existing = next((row for row in gateway.block_entries(limit=2000) if row["address"] == payload.address), None)
@@ -290,7 +302,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         return {"token": token, "expires_in": web.confirm_ttl_seconds, "target": existing["address"]}
 
     @app.post("/api/router/unblock/confirm")
-    def confirm_unblock(payload: ConfirmRequest, request: Request, username: str = Depends(require_csrf)) -> dict[str, Any]:
+    def confirm_unblock(payload: ConfirmRequest, request: Request, username: str = Depends(require_write_csrf)) -> dict[str, Any]:
         try:
             action = confirmations.consume(payload.token, kind="unblock", owner=str(request.session["session_id"]))
             removed = gateway.unblock(str(action["address"]))
