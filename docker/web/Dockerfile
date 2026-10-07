@@ -1,9 +1,9 @@
 FROM node:22-alpine AS ui-build
 
 WORKDIR /build/webui
-COPY webui/package.json webui/vite.config.js webui/index.html ./
+COPY webui/package.json webui/package-lock.json webui/vite.config.js webui/index.html ./
 COPY webui/src ./src
-RUN npm install --no-audit --no-fund \
+RUN npm ci --no-audit --no-fund \
     && npm run build
 
 FROM python:3.11-slim AS runtime

@@ -96,19 +96,17 @@ class RouterWebGateway:
         if not self.settings.mangle_control_enable:
             raise PermissionError("Mangle control is disabled")
         with self._lock:
-            def operation() -> None:
-                set_mangle_rule_disabled(self._api(), str(rule_id), bool(disabled), self.settings)
-            self._client.run_with_reconnect("web mangle update", operation)
+            self._client.lifecycle.heartbeat(False)
+            set_mangle_rule_disabled(self._api(), str(rule_id), bool(disabled), self.settings)
 
     def unblock(self, address: str) -> int:
         if self.settings.monitor_only:
             raise PermissionError("Mikro-Clear is in monitor-only mode")
         normalized = str(ipaddress.ip_address(str(address).strip()))
         with self._lock:
-            def operation() -> int:
-                resource = self._api().path("/ip/firewall/address-list")
-                return remove_from_address_list(resource, self.settings.block_list_name, normalized)
-            return int(self._client.run_with_reconnect("web address-list unblock", operation))
+            self._client.lifecycle.heartbeat(False)
+            resource = self._api().path("/ip/firewall/address-list")
+            return int(remove_from_address_list(resource, self.settings.block_list_name, normalized))
 
 
 __all__ = ["RouterWebGateway"]

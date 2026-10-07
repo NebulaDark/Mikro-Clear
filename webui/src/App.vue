@@ -39,7 +39,7 @@ async function api(path, options = {}) {
     user.value = null;
     throw new Error("Требуется авторизация");
   }
-  let payload = {};
+  let payload;
   try { payload = await response.json(); } catch { payload = {}; }
   if (!response.ok) throw new Error(payload.detail || ("HTTP " + response.status));
   return payload;

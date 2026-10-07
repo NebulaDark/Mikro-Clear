@@ -16,6 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from mikroclear.bot.audit import BotAuditLog
 from mikroclear.bot.settings import BotSettings
+from mikroclear.security import mask_known_secret
 from mikroclear.settings import Settings
 from mikroclear.web.actions import ConfirmationError, ConfirmationStore
 from mikroclear.web.config import WebSettings
@@ -87,6 +88,18 @@ def _safe_settings(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _mask_public_value(value: Any, secrets: tuple[str, ...]) -> Any:
+    if isinstance(value, str):
+        for secret in secrets:
+            value = mask_known_secret(value, secret)
+        return value
+    if isinstance(value, list):
+        return [_mask_public_value(item, secrets) for item in value]
+    if isinstance(value, dict):
+        return {key: _mask_public_value(item, secrets) for key, item in value.items()}
+    return value
+
+
 def create_app(*, core_settings: Settings | None = None, web_settings: WebSettings | None = None) -> FastAPI:
     core = core_settings or Settings.from_env()
     web = web_settings or WebSettings.from_env()
@@ -95,6 +108,15 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
     audit = BotAuditLog(Path(bot.audit_log))
     gateway = RouterWebGateway(core)
     confirmations = ConfirmationStore(web.session_secret, ttl_seconds=web.confirm_ttl_seconds)
+    known_secrets = tuple(
+        secret for secret in (
+            core.password,
+            core.telegram_token,
+            core.pihole_app_password,
+            web.admin_password,
+            web.session_secret,
+        ) if secret
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -127,7 +149,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
 
     def current_user(request: Request) -> str:
         username = str(request.session.get("user", ""))
-        if not username:
+        if not username or not request.session.get("session_id"):
             raise HTTPException(status_code=401, detail="Authentication required")
         return username
 
@@ -140,7 +162,12 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         return username
 
     def audit_record(action: str, outcome: str, username: str, target: str, detail: str = "") -> None:
-        audit.record(action, outcome, "web", username, target, detail)
+        audit.record(
+            *(
+                _mask_public_value(value, known_secrets)
+                for value in (action, outcome, "web", username, target, detail)
+            )
+        )
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -155,7 +182,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
             raise HTTPException(status_code=401, detail="Invalid credentials")
         csrf = secrets.token_urlsafe(24)
         request.session.clear()
-        request.session.update({"user": web.admin_username, "role": "admin", "csrf": csrf})
+        request.session.update({"user": web.admin_username, "role": "admin", "csrf": csrf, "session_id": secrets.token_urlsafe(24)})
         audit_record("web.login", "success", web.admin_username, "session")
         return {"user": web.admin_username, "role": "admin", "csrf": csrf}
 
@@ -202,12 +229,12 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
     def logs(limit: int = 200, q: str = "", _username: str = Depends(current_user)) -> dict[str, Any]:
         if not web.service_log_file:
             return {"items": [], "count": 0, "available": False, "message": "MIKROCLEAR_WEB_LOG_FILE is not configured"}
-        rows = text_log(web.service_log_file, limit=limit, query=q, max_bytes=web.max_tail_bytes)
+        rows = _mask_public_value(text_log(web.service_log_file, limit=limit, query=q, max_bytes=web.max_tail_bytes), known_secrets)
         return {"items": rows, "count": len(rows), "available": True}
 
     @app.get("/api/audit")
     def audit_view(limit: int = 200, _username: str = Depends(current_user)) -> dict[str, Any]:
-        rows = read_jsonl(bot.audit_log, limit=max(1, min(limit, 1000)), max_bytes=web.max_tail_bytes)
+        rows = _mask_public_value(read_jsonl(bot.audit_log, limit=max(1, min(limit, 1000)), max_bytes=web.max_tail_bytes), known_secrets)
         rows.reverse()
         return {"items": rows, "count": len(rows)}
 
@@ -222,7 +249,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         return {"items": rows, "count": len(rows), "enabled": core.mangle_control_enable}
 
     @app.post("/api/router/mangle/{rule_id}/request")
-    def request_mangle(rule_id: str, payload: MangleRequest, username: str = Depends(require_csrf)) -> dict[str, Any]:
+    def request_mangle(rule_id: str, payload: MangleRequest, request: Request, username: str = Depends(require_csrf)) -> dict[str, Any]:
         if core.monitor_only:
             raise HTTPException(status_code=409, detail="Monitor-only mode is enabled")
         if not core.mangle_control_enable:
@@ -230,45 +257,51 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         current = next((row for row in gateway.managed_mangle() if row["id"] == rule_id), None)
         if current is None:
             raise HTTPException(status_code=404, detail="Managed mangle rule not found")
-        token = confirmations.create("mangle", {"rule_id": rule_id, "disabled": payload.disabled, "name": current["name"]})
+        token = confirmations.create("mangle", {"rule_id": rule_id, "disabled": payload.disabled, "name": current["name"]}, owner=str(request.session["session_id"]))
         audit_record("web.mangle.request", "pending", username, current["name"], f"disabled={payload.disabled}")
         return {"token": token, "expires_in": web.confirm_ttl_seconds, "target": current["name"], "disabled": payload.disabled}
 
     @app.post("/api/router/mangle/confirm")
-    def confirm_mangle(payload: ConfirmRequest, username: str = Depends(require_csrf)) -> dict[str, Any]:
+    def confirm_mangle(payload: ConfirmRequest, request: Request, username: str = Depends(require_csrf)) -> dict[str, Any]:
         try:
-            action = confirmations.consume(payload.token, kind="mangle")
+            action = confirmations.consume(payload.token, kind="mangle", owner=str(request.session["session_id"]))
             gateway.set_mangle_disabled(str(action["rule_id"]), bool(action["disabled"]))
         except ConfirmationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PermissionError as exc:
-            audit_record("web.mangle.confirm", "denied", username, "mangle", str(exc))
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            audit_record("web.mangle.confirm", "denied", username, "mangle", type(exc).__name__)
+            raise HTTPException(status_code=403, detail="RouterOS operation denied") from exc
+        except Exception as exc:
+            audit_record("web.mangle.confirm", "error", username, "mangle", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="RouterOS action could not be confirmed") from exc
         target = str(action.get("name", action.get("rule_id", "")))
         audit_record("web.mangle.confirm", "success", username, target, f"disabled={bool(action['disabled'])}")
         return {"ok": True}
 
     @app.post("/api/router/unblock/request")
-    def request_unblock(payload: UnblockRequest, username: str = Depends(require_csrf)) -> dict[str, Any]:
+    def request_unblock(payload: UnblockRequest, request: Request, username: str = Depends(require_csrf)) -> dict[str, Any]:
         if core.monitor_only:
             raise HTTPException(status_code=409, detail="Monitor-only mode is enabled")
         existing = next((row for row in gateway.block_entries(limit=2000) if row["address"] == payload.address), None)
         if existing is None:
             raise HTTPException(status_code=404, detail="Address is not currently blocked")
-        token = confirmations.create("unblock", {"address": existing["address"], "list": core.block_list_name})
+        token = confirmations.create("unblock", {"address": existing["address"], "list": core.block_list_name}, owner=str(request.session["session_id"]))
         audit_record("web.unblock.request", "pending", username, existing["address"])
         return {"token": token, "expires_in": web.confirm_ttl_seconds, "target": existing["address"]}
 
     @app.post("/api/router/unblock/confirm")
-    def confirm_unblock(payload: ConfirmRequest, username: str = Depends(require_csrf)) -> dict[str, Any]:
+    def confirm_unblock(payload: ConfirmRequest, request: Request, username: str = Depends(require_csrf)) -> dict[str, Any]:
         try:
-            action = confirmations.consume(payload.token, kind="unblock")
+            action = confirmations.consume(payload.token, kind="unblock", owner=str(request.session["session_id"]))
             removed = gateway.unblock(str(action["address"]))
         except ConfirmationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PermissionError as exc:
-            audit_record("web.unblock.confirm", "denied", username, "address-list", str(exc))
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            audit_record("web.unblock.confirm", "denied", username, "address-list", type(exc).__name__)
+            raise HTTPException(status_code=403, detail="RouterOS operation denied") from exc
+        except Exception as exc:
+            audit_record("web.unblock.confirm", "error", username, "address-list", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="RouterOS action could not be confirmed") from exc
         address = str(action["address"])
         audit_record("web.unblock.confirm", "success" if removed else "stale", username, address, f"removed={removed}")
         return {"ok": True, "removed": removed}

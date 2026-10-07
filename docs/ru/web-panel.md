@@ -21,11 +21,14 @@ Browser → HTTPS/reverse proxy → Vue 3 SPA → FastAPI → existing Mikro-Cle
 - SameSite=Strict session cookie; Secure cookie включается для HTTPS;
 - CSRF для write actions;
 - short-lived one-time confirmation token;
+- confirmation token привязан к login session; после рестарта Web-процесса ожидающие подтверждения недействительны;
 - повторная проверка managed Mangle rule перед update;
+- Web write-action не повторяется автоматически после RouterOS timeout; итог сообщается как неподтверждённый и фиксируется в audit;
 - `MONITOR_ONLY` блокирует RouterOS writes;
 - mangle ограничен существующими rules, прошедшими comment-prefix/chain/action allowlist;
 - unblock работает только с `MIKROCLEAR_BLOCK_LIST_NAME`;
 - audit write-actions;
+- известные приложению секреты маскируются в Web-ответах logs и audit;
 - UID 10001, read-only root filesystem, drop ALL capabilities, no-new-privileges.
 
 ## Первый запуск
@@ -52,6 +55,7 @@ Compose публикует сервис только на `127.0.0.1` по ум�
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests`
 - `git ls-files '*.py' | xargs .venv/bin/python -m py_compile`
 - установить extra: `pip install '.[web]'` и проверить импорт `mikroclear.web.app`;
+- в `webui/`: `npm ci`, `npm run lint`, `npm run build`;
 - `docker compose -f docker-compose.web.yml config`;
 - `docker compose -f docker-compose.web.yml build`.
 
