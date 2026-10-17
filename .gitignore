@@ -8,5 +8,7 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .env
+docker/web/mikroclear-web.env
+docker-data/
 dist/
 build/

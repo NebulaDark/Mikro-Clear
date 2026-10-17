@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "lint": "eslint src vite.config.js"
+    "lint": "eslint src vite.config.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "vue": "^3.5.0"

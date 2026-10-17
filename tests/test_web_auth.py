@@ -33,6 +33,12 @@ class WebAuthTests(unittest.TestCase):
         self.client = TestClient(self.app)
         self.addCleanup(self.client.close)
 
+    def test_non_ascii_csrf_is_rejected_without_mutation(self):
+        self.client.post('/api/auth/login', json={'username': 'admin', 'password': 'test-only-password'})
+        response = self.client.post('/api/router/unblock/request', json={'address': '192.0.2.4'}, headers=[(b'x-csrf-token', b'\xff')])
+        self.assertEqual(response.status_code, 403)
+        self.gateway.return_value.unblock.assert_not_called()
+
     def test_unauthenticated_api_request_is_rejected(self):
         self.assertEqual(self.client.get("/api/settings").status_code, 401)
         self.assertEqual(self.client.post("/api/router/unblock/request", json={"address": "192.0.2.4"}).status_code, 401)
@@ -88,6 +94,68 @@ class WebAuthTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/router/unblock/request", json={"address": "192.0.2.4"}, headers={"X-CSRF-Token": csrf}).status_code, 409)
         self.assertEqual(self.client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf}).status_code, 200)
         self.assertEqual(self.client.get("/api/auth/me").status_code, 401)
+
+    def test_default_secure_cookie_flags(self):
+        with patch("mikroclear.web.app.BotSettings.from_env", return_value=BotSettings(audit_log=str(Path(self.temp.name) / "secure.jsonl"))):
+            app = create_app(core_settings=Settings(monitor_only=True), web_settings=WebSettings(
+                admin_password="test-only-password", session_secret="test-only-session-secret-32-characters",
+                static_dir=self.temp.name,
+            ))
+        with TestClient(app, base_url="https://testserver") as client:
+            response = client.post("/api/auth/login", json={"username": "admin", "password": "test-only-password"})
+            self.assertEqual(response.status_code, 200)
+            cookie = response.headers["set-cookie"].lower()
+            for flag in ("secure", "httponly", "samesite=strict", "max-age=28800"):
+                self.assertIn(flag, cookie)
+            self.assertEqual(client.get("/api/auth/me").status_code, 200)
+
+    def test_wrong_unicode_credentials_are_unauthorized(self):
+        with TestClient(self.app, raise_server_exceptions=False) as client:
+            for username, password in (("админ", "wrong"), ("admin", "пароль")):
+                response = client.post("/api/auth/login", json={"username": username, "password": password})
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.json(), {"detail": "Invalid credentials"})
+
+    def test_configured_unicode_credentials_work(self):
+        with patch("mikroclear.web.app.BotSettings.from_env", return_value=BotSettings(audit_log=str(Path(self.temp.name) / "unicode.jsonl"))):
+            app = create_app(core_settings=Settings(monitor_only=True), web_settings=WebSettings(
+                admin_username="админ", admin_password="секретный-пароль",
+                session_secret="test-only-session-secret-32-characters", secure_cookie=False,
+                static_dir=self.temp.name,
+            ))
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post("/api/auth/login", json={"username": "админ", "password": "секретный-пароль"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(client.get("/api/auth/me").json()["user"], "админ")
+
+    def test_logout_revokes_saved_cookie_and_preserves_other_session(self):
+        with TestClient(self.app) as other:
+            credentials = {"username": "admin", "password": "test-only-password"}
+            csrf = self.client.post("/api/auth/login", json=credentials).json()["csrf"]
+            cookie = self.client.cookies.get("mikroclear_session")
+            self.assertEqual(other.post("/api/auth/login", json=credentials).status_code, 200)
+            self.assertEqual(self.client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf}).status_code, 200)
+            self.assertEqual(self.client.get("/api/auth/me", headers={"Cookie": f"mikroclear_session={cookie}"}).status_code, 401)
+            self.assertEqual(other.get("/api/auth/me").status_code, 200)
+
+    def test_relogin_revokes_previous_cookie(self):
+        credentials = {"username": "admin", "password": "test-only-password"}
+        self.client.post("/api/auth/login", json=credentials)
+        cookie = self.client.cookies.get("mikroclear_session")
+        self.assertEqual(self.client.post("/api/auth/login", json=credentials).status_code, 200)
+        self.assertEqual(self.client.get("/api/auth/me").status_code, 200)
+        self.assertEqual(self.client.get("/api/auth/me", headers={"Cookie": f"mikroclear_session={cookie}"}).status_code, 401)
+
+    def test_new_app_rejects_previous_app_cookie(self):
+        self.client.post("/api/auth/login", json={"username": "admin", "password": "test-only-password"})
+        cookie = self.client.cookies.get("mikroclear_session")
+        with patch("mikroclear.web.app.BotSettings.from_env", return_value=BotSettings(audit_log=str(Path(self.temp.name) / "restart.jsonl"))):
+            app = create_app(core_settings=Settings(monitor_only=True), web_settings=WebSettings(
+                admin_password="test-only-password", session_secret="test-only-session-secret-32-characters",
+                secure_cookie=False, static_dir=self.temp.name,
+            ))
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/api/auth/me", headers={"Cookie": f"mikroclear_session={cookie}"}).status_code, 401)
 
     def test_expired_session_cookie_is_rejected(self):
         with patch("itsdangerous.timed.time.time", return_value=100):

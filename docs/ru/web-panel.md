@@ -19,6 +19,7 @@ Browser → HTTPS/reverse proxy → Vue 3 SPA → FastAPI → existing Mikro-Cle
 - отдельный Web login;
 - пароль и session secret только через environment;
 - SameSite=Strict session cookie; Secure cookie включается для HTTPS;
+- активные сессии хранятся в памяти одного Web-процесса (MVP: один worker): абсолютный срок 8 часов, максимум 4096 сессий; при заполнении вытесняется самая старая; logout и повторный login отзывают текущую сессию, рестарт завершает все сессии;
 - CSRF для write actions;
 - ограничение частоты: 5 попыток входа в минуту с одного IP и 30 write-запросов в минуту для администратора; лимит хранится в памяти Web-процесса, поэтому reverse proxy также должен ограничивать запросы при публичном доступе;
 - short-lived one-time confirmation token;
@@ -29,6 +30,7 @@ Browser → HTTPS/reverse proxy → Vue 3 SPA → FastAPI → existing Mikro-Cle
 - mangle ограничен существующими rules, прошедшими comment-prefix/chain/action allowlist;
 - unblock работает только с `MIKROCLEAR_BLOCK_LIST_NAME`;
 - audit write-actions;
+- отклонённые авторизованные действия и ошибки проверки confirmation также фиксируются в audit без токенов и текста исключений RouterOS;
 - известные приложению секреты маскируются в Web-ответах logs и audit;
 - UID 10001, read-only root filesystem, drop ALL capabilities, no-new-privileges.
 
@@ -53,11 +55,31 @@ Compose публикует сервис только на `127.0.0.1` по ум�
 
 ## Проверки перед merge
 
+В отдельном dev/test virtualenv установить зависимости до запуска тестов:
+
+```bash
+python -m pip install '.[web]' httpx 'mcp==1.28.1'
+```
+
+`mcp` нужен существующим тестам MCP-сервера; его версия указана в группе
+`mcp-tools` в `pyproject.toml`. Для runtime Web Panel эта test dependency не нужна.
+
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests`
 - `git ls-files '*.py' | xargs .venv/bin/python -m py_compile`
 - установить extra: `pip install '.[web]'` и проверить импорт `mikroclear.web.app`;
-- в `webui/`: `npm ci`, `npm run lint`, `npm run build`;
+- в `webui/`: `npm ci`, `npm test`, `npm run lint`, `npm run build`;
 - `docker compose -f docker-compose.web.yml config`;
 - `docker compose -f docker-compose.web.yml build`.
 
 До этих проверок ветку не считать готовой к deploy.
+
+## Результат проверки MVP — 2026-10-17
+
+Пройдены 589 Python-тестов, 3 frontend-теста, lint/build, сборка Compose и 21
+HTTP-проверка локального контейнера с тестовыми данными. Ошибки загрузки данных
+видны в интерфейсе; при неудачном чтении старый список очищается, а успешное
+повторное чтение убирает ошибку. Недоступность RouterOS возвращает контролируемый
+503. Поддерживаются Unicode credentials; выход отзывает сохранённую cookie.
+
+Подробные результаты и границы проверки:
+[отчёт проверки MVP](../superpowers/reports/2026-10-17-web-panel-mvp-verification.md).

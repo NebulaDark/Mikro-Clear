@@ -23,6 +23,7 @@ from mikroclear.web.config import WebSettings
 from mikroclear.web.rate_limit import SlidingWindowLimiter
 from mikroclear.web.readers import read_jsonl, recent_alerts, text_log
 from mikroclear.web.router_gateway import RouterWebGateway
+from mikroclear.web.sessions import SessionStore
 
 
 class LoginRequest(BaseModel):
@@ -109,6 +110,8 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
     audit = BotAuditLog(Path(bot.audit_log))
     gateway = RouterWebGateway(core)
     confirmations = ConfirmationStore(web.session_secret, ttl_seconds=web.confirm_ttl_seconds)
+    session_max_age = 8 * 3600
+    sessions = SessionStore(ttl_seconds=session_max_age)
     login_limiter = SlidingWindowLimiter(limit=5, window_seconds=60)
     write_limiter = SlidingWindowLimiter(limit=30, window_seconds=60)
     known_secrets = tuple(
@@ -133,7 +136,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         session_cookie="mikroclear_session",
         same_site="strict",
         https_only=web.secure_cookie,
-        max_age=8 * 3600,
+        max_age=session_max_age,
     )
 
     @app.middleware("http")
@@ -152,7 +155,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
 
     def current_user(request: Request) -> str:
         username = str(request.session.get("user", ""))
-        if not username or not request.session.get("session_id"):
+        if not username or not sessions.active(str(request.session.get("session_id", "")), username):
             raise HTTPException(status_code=401, detail="Authentication required")
         return username
 
@@ -160,7 +163,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         username = current_user(request)
         expected = str(request.session.get("csrf", ""))
         supplied = request.headers.get("X-CSRF-Token", "")
-        if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+        if not expected or not supplied or not hmac.compare_digest(expected.encode("utf-8"), supplied.encode("utf-8")):
             raise HTTPException(status_code=403, detail="CSRF validation failed")
         return username
 
@@ -178,6 +181,14 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
             )
         )
 
+    def router_inventory(kind: str, *, limit: int = 500) -> list[dict[str, Any]]:
+        try:
+            if kind == "blocks":
+                return gateway.block_entries(limit=limit)
+            return gateway.managed_mangle()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="RouterOS inventory is unavailable") from exc
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -187,19 +198,21 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
         client_ip = request.client.host if request.client else "unknown"
         if not login_limiter.allow(client_ip):
             raise HTTPException(status_code=429, detail="Login rate limit exceeded", headers={"Retry-After": "60"})
-        valid_user = hmac.compare_digest(payload.username, web.admin_username)
-        valid_password = hmac.compare_digest(payload.password, web.admin_password)
+        valid_user = hmac.compare_digest(payload.username.encode("utf-8"), web.admin_username.encode("utf-8"))
+        valid_password = hmac.compare_digest(payload.password.encode("utf-8"), web.admin_password.encode("utf-8"))
         if not (valid_user and valid_password):
             audit_record("web.login", "denied", payload.username, "session")
             raise HTTPException(status_code=401, detail="Invalid credentials")
         csrf = secrets.token_urlsafe(24)
+        sessions.revoke(str(request.session.get("session_id", "")))
         request.session.clear()
-        request.session.update({"user": web.admin_username, "role": "admin", "csrf": csrf, "session_id": secrets.token_urlsafe(24)})
+        request.session.update({"user": web.admin_username, "role": "admin", "csrf": csrf, "session_id": sessions.create(web.admin_username)})
         audit_record("web.login", "success", web.admin_username, "session")
         return {"user": web.admin_username, "role": "admin", "csrf": csrf}
 
     @app.post("/api/auth/logout")
     def logout(request: Request, username: str = Depends(require_csrf)) -> dict[str, bool]:
+        sessions.revoke(str(request.session.get("session_id", "")))
         audit_record("web.logout", "success", username, "session")
         request.session.clear()
         return {"ok": True}
@@ -252,22 +265,29 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
 
     @app.get("/api/router/blocks")
     def blocks(limit: int = 500, _username: str = Depends(current_user)) -> dict[str, Any]:
-        rows = gateway.block_entries(limit=limit)
+        rows = router_inventory("blocks", limit=limit)
         return {"items": rows, "count": len(rows), "list": core.block_list_name}
 
     @app.get("/api/router/mangle")
     def mangle(_username: str = Depends(current_user)) -> dict[str, Any]:
-        rows = gateway.managed_mangle()
+        rows = router_inventory("mangle")
         return {"items": rows, "count": len(rows), "enabled": core.mangle_control_enable}
 
     @app.post("/api/router/mangle/{rule_id}/request")
     def request_mangle(rule_id: str, payload: MangleRequest, request: Request, username: str = Depends(require_write_csrf)) -> dict[str, Any]:
         if core.monitor_only:
+            audit_record("web.mangle.request", "denied", username, "mangle", "monitor_only")
             raise HTTPException(status_code=409, detail="Monitor-only mode is enabled")
         if not core.mangle_control_enable:
+            audit_record("web.mangle.request", "denied", username, "mangle", "mangle_disabled")
             raise HTTPException(status_code=403, detail="Mangle control is disabled")
-        current = next((row for row in gateway.managed_mangle() if row["id"] == rule_id), None)
+        try:
+            current = next((row for row in router_inventory("mangle") if row["id"] == rule_id), None)
+        except HTTPException:
+            audit_record("web.mangle.request", "error", username, "mangle", "inventory_unavailable")
+            raise
         if current is None:
+            audit_record("web.mangle.request", "denied", username, "mangle", "target_not_found")
             raise HTTPException(status_code=404, detail="Managed mangle rule not found")
         token = confirmations.create("mangle", {"rule_id": rule_id, "disabled": payload.disabled, "name": current["name"]}, owner=str(request.session["session_id"]))
         audit_record("web.mangle.request", "pending", username, current["name"], f"disabled={payload.disabled}")
@@ -279,6 +299,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
             action = confirmations.consume(payload.token, kind="mangle", owner=str(request.session["session_id"]))
             gateway.set_mangle_disabled(str(action["rule_id"]), bool(action["disabled"]))
         except ConfirmationError as exc:
+            audit_record("web.mangle.confirm", "denied", username, "mangle", type(exc).__name__)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PermissionError as exc:
             audit_record("web.mangle.confirm", "denied", username, "mangle", type(exc).__name__)
@@ -293,9 +314,15 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
     @app.post("/api/router/unblock/request")
     def request_unblock(payload: UnblockRequest, request: Request, username: str = Depends(require_write_csrf)) -> dict[str, Any]:
         if core.monitor_only:
+            audit_record("web.unblock.request", "denied", username, "address-list", "monitor_only")
             raise HTTPException(status_code=409, detail="Monitor-only mode is enabled")
-        existing = next((row for row in gateway.block_entries(limit=2000) if row["address"] == payload.address), None)
+        try:
+            existing = next((row for row in router_inventory("blocks", limit=2000) if row["address"] == payload.address), None)
+        except HTTPException:
+            audit_record("web.unblock.request", "error", username, "address-list", "inventory_unavailable")
+            raise
         if existing is None:
+            audit_record("web.unblock.request", "denied", username, "address-list", "target_not_found")
             raise HTTPException(status_code=404, detail="Address is not currently blocked")
         token = confirmations.create("unblock", {"address": existing["address"], "list": core.block_list_name}, owner=str(request.session["session_id"]))
         audit_record("web.unblock.request", "pending", username, existing["address"])
@@ -307,6 +334,7 @@ def create_app(*, core_settings: Settings | None = None, web_settings: WebSettin
             action = confirmations.consume(payload.token, kind="unblock", owner=str(request.session["session_id"]))
             removed = gateway.unblock(str(action["address"]))
         except ConfirmationError as exc:
+            audit_record("web.unblock.confirm", "denied", username, "address-list", type(exc).__name__)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PermissionError as exc:
             audit_record("web.unblock.confirm", "denied", username, "address-list", type(exc).__name__)

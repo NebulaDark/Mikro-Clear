@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
+import { createResourceLoader } from "./resourceLoader.js";
 
 const user = ref(null);
 const csrf = ref("");
@@ -82,19 +83,15 @@ async function refreshAll() {
   await Promise.allSettled([loadOverview(), loadAlerts(), loadBlocks(), loadMangle(), loadLogs(), loadAudit(), loadSettings()]);
 }
 
-async function loadOverview() { overview.value = await api("/api/overview"); }
-async function loadAlerts() {
-  const data = await api("/api/alerts?limit=100&q=" + encodeURIComponent(search.value));
-  alerts.value = data.items || [];
-}
-async function loadBlocks() { const data = await api("/api/router/blocks?limit=500"); blocks.value = data.items || []; }
-async function loadMangle() { const data = await api("/api/router/mangle"); mangle.value = data.items || []; }
-async function loadLogs() {
-  const data = await api("/api/logs?limit=250&q=" + encodeURIComponent(search.value));
-  logs.value = data.items || [];
-}
-async function loadAudit() { const data = await api("/api/audit?limit=250"); audit.value = data.items || []; }
-async function loadSettings() { settings.value = await api("/api/settings"); }
+const readErrors = Object.fromEntries(pages.map(([id]) => [id, ref("")]));
+const readFailures = computed(() => pages.filter(([id]) => readErrors[id].value).map(([id, label]) => label + ": " + readErrors[id].value));
+const loadOverview = createResourceLoader(overview, readErrors.overview, () => api("/api/overview"), () => ({}));
+const loadAlerts = createResourceLoader(alerts, readErrors.alerts, async () => (await api("/api/alerts?limit=100&q=" + encodeURIComponent(search.value))).items || [], () => []);
+const loadBlocks = createResourceLoader(blocks, readErrors.blocks, async () => (await api("/api/router/blocks?limit=500")).items || [], () => []);
+const loadMangle = createResourceLoader(mangle, readErrors.mangle, async () => (await api("/api/router/mangle")).items || [], () => []);
+const loadLogs = createResourceLoader(logs, readErrors.logs, async () => (await api("/api/logs?limit=250&q=" + encodeURIComponent(search.value))).items || [], () => []);
+const loadAudit = createResourceLoader(audit, readErrors.audit, async () => (await api("/api/audit?limit=250")).items || [], () => []);
+const loadSettings = createResourceLoader(settings, readErrors.settings, () => api("/api/settings"), () => ({}));
 
 async function changePage(name) {
   page.value = name;
@@ -217,6 +214,9 @@ onMounted(restoreSession);
           <button class="ghost" @click="refreshAll">Обновить</button>
         </div>
       </header>
+      <div v-if="readFailures.length" role="alert" class="error">
+        <p v-for="failure in readFailures" :key="failure">Данные недоступны — {{ failure }}</p>
+      </div>
 
       <section v-if="page === 'overview'">
         <div class="cards">
@@ -234,7 +234,7 @@ onMounted(restoreSession);
                 <div><strong>{{ item.signature }}</strong><small>{{ item.src_ip }} → {{ item.dest_ip }} · SID {{ item.signature_id }}</small></div>
                 <time>{{ item.timestamp?.slice(11, 19) }}</time>
               </div>
-              <p v-if="!alerts.length" class="empty">Нет доступных alert-событий.</p>
+              <p v-if="!alerts.length && !readErrors.alerts.value" class="empty">Нет доступных alert-событий.</p>
             </div>
           </article>
           <article class="panel">
@@ -280,13 +280,13 @@ onMounted(restoreSession);
             <dl><dt>Chain</dt><dd>{{ rule.chain }}</dd><dt>Action</dt><dd>{{ rule.action }}</dd><dt>Packets</dt><dd>{{ rule.packets }}</dd><dt>Traffic</dt><dd>{{ fmtBytes(rule.bytes) }}</dd></dl>
             <button :class="rule.disabled ? 'primary' : 'danger-outline'" @click="requestMangle(rule)">{{ rule.disabled ? "Enable" : "Disable" }}</button>
           </article>
-          <p v-if="!mangle.length" class="empty">Нет управляемых Mangle-правил или модуль отключён.</p>
+          <p v-if="!mangle.length && !readErrors.mangle.value" class="empty">Нет управляемых Mangle-правил или модуль отключён.</p>
         </div>
       </section>
 
       <section v-else-if="page === 'logs'" class="panel">
         <div class="toolbar"><input v-model="search" placeholder="Фильтр по тексту..." @keyup.enter="loadLogs" /><button @click="loadLogs">Фильтр</button></div>
-        <pre class="log-view"><code v-for="(line, i) in logs" :key="i">{{ line }}\n</code></pre>
+        <pre class="log-view"><code>{{ logs.join("\n") }}</code></pre>
       </section>
 
       <section v-else-if="page === 'audit'" class="panel">
