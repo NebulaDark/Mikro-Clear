@@ -6,6 +6,10 @@ from unittest.mock import Mock
 
 from mikroclear.bot.auth import BotAuth
 from mikroclear.bot.audit import BotAuditLog
+from mikroclear.bot.modules.parental import (
+    build_parental_device_view,
+    build_parental_view,
+)
 from mikroclear.bot.settings import BotSettings
 from mikroclear.parental.models import ParentalDevice, YouTubePolicyState
 from mikroclear.telegram.parental_handler import TelegramParentalHandler
@@ -61,6 +65,91 @@ class TelegramParentalTests(unittest.TestCase):
         self.assertTrue(self.handler.handle_callback(callback=self.callback("parental:v1:youtube:request:0:block"), auth=BotAuth(self.bot), answer_callback=answer, send_message=Mock(), edit_message=edit, telegram_token="", timeout=1, now=100))
         self.policy.block.assert_not_called()
         self.assertTrue(Path(self.temp.name, "telegram-parental-actions.json").exists())
+
+    def test_device_list_shows_selectable_devices_without_actions(self):
+        view = build_parental_view([self.policy.get_state.return_value])
+        buttons = view.reply_markup["inline_keyboard"]
+
+        self.assertIn("📺 Tablet", buttons[0][0]["text"])
+        self.assertEqual(
+            buttons[0][0]["callback_data"],
+            "parental:v1:device:0",
+        )
+        self.assertNotIn(
+            "Заблокировать",
+            " ".join(button["text"] for row in buttons for button in row),
+        )
+        self.assertNotIn(
+            "Разрешить",
+            " ".join(button["text"] for row in buttons for button in row),
+        )
+
+    def test_selected_device_view_exposes_youtube_actions(self):
+        view = build_parental_device_view(self.policy.get_state.return_value, 0)
+        buttons = view.reply_markup["inline_keyboard"]
+
+        self.assertIn("📺 Tablet", view.text)
+        self.assertEqual(
+            buttons[0][0]["callback_data"],
+            "parental:v1:youtube:request:0:block",
+        )
+        self.assertIn("Заблокировать YouTube", buttons[0][0]["text"])
+
+    def test_device_callback_renders_selected_device_without_mutation(self):
+        edit = Mock(return_value=Response())
+        self.assertTrue(
+            self.handler.handle_callback(
+                callback=self.callback("parental:v1:device:0"),
+                auth=BotAuth(self.bot),
+                answer_callback=Mock(),
+                send_message=Mock(),
+                edit_message=edit,
+                telegram_token="",
+                timeout=1,
+                now=100,
+            )
+        )
+        self.assertIn("Tablet", edit.call_args.kwargs["text"])
+        self.policy.block.assert_not_called()
+        self.policy.allow.assert_not_called()
+
+    def test_blocked_device_exposes_allow_action(self):
+        state = YouTubePolicyState(self.device, True, True, True, True)
+        view = build_parental_device_view(state, 1)
+        button = view.reply_markup["inline_keyboard"][0][0]
+        self.assertEqual(button["callback_data"], "parental:v1:youtube:request:1:allow")
+        self.assertIn("Разрешить YouTube", button["text"])
+
+    def test_unavailable_device_selection_does_not_mutate_policy(self):
+        for index in ("-1", "1", "invalid"):
+            with self.subTest(index=index):
+                answer, edit = Mock(), Mock()
+                self.assertTrue(self.handler.handle_callback(
+                    callback=self.callback(f"parental:v1:device:{index}"),
+                    auth=BotAuth(self.bot), answer_callback=answer,
+                    send_message=Mock(), edit_message=edit,
+                    telegram_token="", timeout=1, now=100))
+                answer.assert_called_once_with("cb", "Устройство недоступно", True)
+                edit.assert_not_called()
+        self.policy.block.assert_not_called()
+        self.policy.allow.assert_not_called()
+
+    def test_allow_confirmation_targets_selected_television_and_is_one_shot(self):
+        second = ParentalDevice("192.168.10.51", "TV 2", "")
+        self.policy.list_devices.return_value = [self.device, second]
+        self.policy.get_state.return_value = YouTubePolicyState(second, True, True, True, True)
+        self.handler.handle_callback(
+            callback=self.callback("parental:v1:youtube:request:1:allow"),
+            auth=BotAuth(self.bot), answer_callback=Mock(), send_message=Mock(),
+            edit_message=Mock(return_value=Response()), telegram_token="", timeout=1, now=100)
+        self.policy.allow.assert_not_called()
+        for now in (101, 102):
+            self.handler.handle_callback(
+                callback=self.callback("parental:v1:youtube:confirm:token-1"),
+                auth=BotAuth(self.bot), answer_callback=Mock(), send_message=Mock(),
+                edit_message=Mock(return_value=Response()), telegram_token="", timeout=1, now=now)
+        self.policy.allow.assert_called_once_with(second)
+        self.policy.block.assert_not_called()
 
     def test_confirm_consumes_token_and_mutates_once(self):
         self.handler.handle_callback(callback=self.callback("parental:v1:youtube:request:0:block"), auth=BotAuth(self.bot), answer_callback=Mock(), send_message=Mock(), edit_message=Mock(return_value=Response()), telegram_token="", timeout=1, now=100)

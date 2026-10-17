@@ -8,19 +8,37 @@ from mikroclear.telegram.formatting import escape_html_safe
 
 def build_parental_view(states: list[Any]) -> MenuView:
     rows = []
-    lines = ["👨‍👩‍👧 <b>Родительский контроль</b>", ""]
+    lines = ["📺 <b>Родительский контроль</b>", ""]
     for index, state in enumerate(states):
         device = state.device
         name = device.name or device.ip
         label = "🔴 BLOCKED" if state.blocked else "🟢 ALLOWED"
-        lines.extend([f"📱 {escape_html_safe(name)}", f"IP: <code>{escape_html_safe(device.ip)}</code>", f"YouTube: {label}", ""])
-        rows.append([{"text": f"📱 {name}", "callback_data": f"parental:v1:youtube:request:{index}:noop"}])
-        rows.append([{"text": "🔓 Разрешить YouTube" if state.blocked else "🔒 Заблокировать YouTube", "callback_data": f"parental:v1:youtube:request:{index}:{'allow' if state.blocked else 'block'}"}])
+        lines.extend([f"📺 {escape_html_safe(name)}", f"IP: <code>{escape_html_safe(device.ip)}</code>", f"YouTube: {label}", ""])
+        rows.append([{"text": f"📺 {name}", "callback_data": f"parental:v1:device:{index}"}])
     rows.extend([
         [{"text": "🔄 Обновить", "callback_data": "parental:v1:refresh"}],
         [{"text": "⬅️ Назад", "callback_data": "menu:v1:root"}],
     ])
     return MenuView("\n".join(lines).strip(), {"inline_keyboard": rows})
+
+
+def build_parental_device_view(state: Any, index: int) -> MenuView:
+    device = state.device
+    name = device.name or device.ip
+    label = "🔴 BLOCKED" if state.blocked else "🟢 ALLOWED"
+    action = "allow" if state.blocked else "block"
+    action_text = "🔓 Разрешить YouTube" if state.blocked else "🔒 Заблокировать YouTube"
+    text = (
+        "📺 <b>Устройство</b>\n\n"
+        f"📺 {escape_html_safe(name)}\n"
+        f"IP: <code>{escape_html_safe(device.ip)}</code>\n"
+        f"YouTube: {label}"
+    )
+    return MenuView(text, {"inline_keyboard": [
+        [{"text": action_text, "callback_data": f"parental:v1:youtube:request:{index}:{action}"}],
+        [{"text": "🔄 Обновить", "callback_data": f"parental:v1:device:{index}"}],
+        [{"text": "⬅️ К устройствам", "callback_data": "parental:v1:refresh"}],
+    ]})
 
 
 def build_parental_confirmation(device: Any, action: str, token: str) -> MenuView:
@@ -59,4 +77,9 @@ def build_parental_error_view(*, mutation: bool, device: Any = None, ip: str = "
     ]})
 
 
-__all__ = ["build_parental_confirmation", "build_parental_error_view", "build_parental_view"]
+__all__ = [
+    "build_parental_confirmation",
+    "build_parental_device_view",
+    "build_parental_error_view",
+    "build_parental_view",
+]

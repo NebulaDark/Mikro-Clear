@@ -15,6 +15,7 @@ class PiholeClientRecord:
     id: int | str
     client: str
     groups: tuple[int | str, ...] = ()
+    comment: str | None = None
 
 
 def payload_items(payload: Any, *keys: str) -> list[dict[str, Any]]:

@@ -12,6 +12,7 @@ from mikroclear.bot.audit import BotAuditLog
 from mikroclear.bot.gates import bot_module_enabled
 from mikroclear.bot.modules.parental import (
     build_parental_confirmation,
+    build_parental_device_view,
     build_parental_error_view,
     build_parental_view,
 )
@@ -84,6 +85,20 @@ class TelegramParentalHandler:
         if action == "refresh":
             answer_callback(callback_id, "", False)
             return self._render(self.menu_view(chat_id=chat_id, user_id=user_id, now=now, telegram_token=telegram_token), callback, edit_message, send_message, telegram_token, chat_id, timeout)
+        if action == "device" and len(parts) >= 4:
+            try:
+                index = int(parts[3])
+                devices = self.policy.list_devices()
+                if index < 0 or index >= len(devices):
+                    raise IndexError(index)
+                device = devices[index]
+                state = self.policy.get_state(device)
+            except Exception as exc:
+                answer_callback(callback_id, "Устройство недоступно", True)
+                self.log(f"Parental device view failed: {self._safe_error(exc, telegram_token)}")
+                return True
+            answer_callback(callback_id, "", False)
+            return self._render(build_parental_device_view(state, index), callback, edit_message, send_message, telegram_token, chat_id, timeout)
         if action == "youtube" and len(parts) >= 5 and parts[3] == "request":
             try:
                 index, wanted = int(parts[4]), parts[5]
