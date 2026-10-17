@@ -171,22 +171,36 @@ DoT/DoQ TCP/UDP 853 -> blocked
 
 Потенциальные bypass paths, требующие отдельной политики: DoH TCP/443, DoH3/QUIC UDP/443, VPN, proxy, Tor, embedded resolvers и IPv6. Весь TCP/443 не блокируется.
 
-### Что ещё не выполнено
+### Состояние пилота на 2026-10-17
+
+Пользователь подтвердил работающую блокировку на двух телевизорах, а после
+установки исправления и перезапуска сервиса — разблокировку. Telegram-меню
+показывает список устройств, затем действия для выбранного телевизора.
+
+До исправления в журнале SELKS за 2026-10-17 была ошибка
+`Pi-hole did not confirm the requested YouTube state`. Найден и исправлен дефект адаптера:
+`PUT /api/clients/{client}` должен использовать URI-encoded адрес клиента,
+а не числовой database ID из ответа API. Первое добавление работало благодаря
+fallback на IP при неверном разборе POST-ответа. Исправление также разбирает
+массив `clients` в POST-ответе и сохраняет остальные группы и комментарий при
+замене записи. Регрессия проверяется циклом BLOCK → ALLOW для двух независимых
+клиентов. Перед установкой прошли 553 теста. Результаты установки и подтверждение
+пользователя записаны в [отчёте](../superpowers/deploy/2026-10-17-parental-allow-fix.md).
+
+Контракт API: https://github.com/pi-hole/FTL/blob/master/src/api/docs/content/specs/clients.yaml
 
 ```text
-[ ] hotfix merged into main
-[ ] new Mikro-Clear artifact built
-[ ] new artifact deployed to SELKS
-[ ] MikroClear-YouTube-Blocked created
-[ ] YouTube regex rules assigned
-[ ] Samsung 192.168.10.48 added to MC-Parental
-[ ] parental feature enabled
-[ ] Pi-hole integration enabled
-[ ] Telegram pilot BLOCK tested
-[ ] Telegram pilot ALLOW tested
-[ ] IPv6 bypass validated
-[ ] rollback tested
+[x] new Mikro-Clear artifact built
+[x] new artifact deployed to SELKS
+[x] Telegram pilot BLOCK confirmed by user
+[x] Telegram pilot ALLOW confirmed by user
+[x] DNS/DoT/DoQ/IPv6 bypass and device-isolation follow-up closed by user decision
+[x] restart-persistence and practical-rollback follow-up closed by user decision
 ```
+
+Дополнительные проверки обхода, независимости устройств, сохранения состояния
+и практического отката закрыты по указанию пользователя. Новые production-тесты
+по этим пунктам не выполнялись; это не утверждение о проверке всех bypass paths.
 
 ### Что намеренно не выполнялось во время preflight
 

@@ -114,7 +114,7 @@ def default_menu_registry() -> MenuRegistry:
             ),
             MenuItem(
                 "parental_control",
-                "👨‍👩‍👧 Родительский контроль",
+                "📺 Родительский контроль",
                 40,
                 "admin",
                 "parental_control",
