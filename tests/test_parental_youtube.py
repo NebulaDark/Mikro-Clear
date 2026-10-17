@@ -1,10 +1,13 @@
 import unittest
+from copy import deepcopy
+from types import SimpleNamespace
+from urllib.parse import unquote, urlsplit
 from unittest.mock import Mock
 
 from mikroclear.parental.models import ParentalDevice
 from mikroclear.parental.youtube import YouTubePolicyService, YouTubePolicyError
 from mikroclear.pihole.models import PiholeClientRecord, PiholeGroup
-from mikroclear.pihole.client import PiholeClientError
+from mikroclear.pihole.client import PiholeClient, PiholeClientError
 
 
 class YouTubePolicyTests(unittest.TestCase):
@@ -98,6 +101,55 @@ class YouTubePolicyTests(unittest.TestCase):
         with self.assertRaises(YouTubePolicyError):
             self.service.block(self.device)
         self.pihole.set_group_membership.assert_called_once()
+
+
+class YouTubePiholeRoundTripTests(unittest.TestCase):
+    def test_two_televisions_can_be_blocked_and_allowed_independently(self):
+        devices = [ParentalDevice("192.168.10.50", "TV 1", ""),
+                   ParentalDevice("192.168.10.51", "TV 2", "")]
+        records = {}
+
+        def response(payload, status=200):
+            return SimpleNamespace(status_code=status, json=lambda: deepcopy(payload), text="")
+
+        def get(url, **kwargs):
+            path = urlsplit(url).path
+            if path == "/api/groups":
+                return response({"groups": [{"id": 7, "name": "YouTube"}]})
+            self.assertEqual(path, "/api/clients")
+            return response({"clients": list(records.values())})
+
+        def post(url, *, json, **kwargs):
+            if urlsplit(url).path == "/api/auth":
+                return response({"session": {"sid": "test-session"}})
+            self.assertEqual(urlsplit(url).path, "/api/clients")
+            ip = json["client"]
+            records[ip] = {"id": len(records) + 10, "client": ip, "groups": [0], "comment": None}
+            return response({"clients": [records[ip]]}, 201)
+
+        def put(url, *, json, **kwargs):
+            ip = unquote(urlsplit(url).path.removeprefix("/api/clients/"))
+            if ip not in records:
+                # Pi-hole's batch-style response may report an item error with HTTP 200.
+                return response({"processed": {"success": [], "errors": [{"item": ip}]}})
+            records[ip].update(json)
+            return response({"clients": [records[ip]]})
+
+        inventory = Mock()
+        inventory.is_parental_device.side_effect = lambda ip: ip in {d.ip for d in devices}
+        client = PiholeClient("https://pihole.test", "test-password",
+                              request_get=get, request_post=post, request_put=put)
+        service = YouTubePolicyService(inventory, client, group_name="YouTube")
+        for device in devices:
+            self.assertTrue(service.block(device).blocked)
+        self.assertFalse(service.allow(devices[0]).blocked)
+        self.assertTrue(service.get_state(devices[1]).blocked)
+        self.assertFalse(service.allow(devices[1]).blocked)
+        for device in devices:
+            self.assertEqual(records[device.ip]["groups"], [0])
+            self.assertFalse(service.allow(device).blocked)
+            self.assertTrue(service.block(device).blocked)
+            self.assertFalse(service.allow(device).blocked)
 
 
 if __name__ == "__main__":
