@@ -24,7 +24,7 @@ web = [
 
 [dependency-groups]
 mcp-tools = [
-    "mcp==1.28.1",
+    "mcp==2.2.0",
 ]
 
 [project.scripts]
